@@ -7,6 +7,7 @@ import {
   type ProviderSession,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderItemId,
   RuntimeItemId,
   RuntimeRequestId,
   type ThreadId,
@@ -404,7 +405,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
           threadId: context.threadId,
           turnId,
           itemId,
-          providerRefs: { providerItemId: toolCallId },
+          providerRefs: { providerItemId: ProviderItemId.make(toolCallId) },
           payload: {
             itemType: "dynamic_tool_call",
             status:

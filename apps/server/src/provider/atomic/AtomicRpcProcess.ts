@@ -25,7 +25,6 @@ export type AtomicRpcEvent = typeof AtomicRpcEvent.Type;
 
 const isAtomicRpcResponse = Schema.is(AtomicRpcResponse);
 const isAtomicRpcEvent = Schema.is(AtomicRpcEvent);
-const encodeCommand = Schema.encodeUnknown(Schema.fromJsonString(Schema.Unknown));
 
 export class AtomicRpcError extends Schema.TaggedErrorClass<AtomicRpcError>()("AtomicRpcError", {
   operation: Schema.String,
@@ -40,7 +39,7 @@ export class AtomicRpcError extends Schema.TaggedErrorClass<AtomicRpcError>()("A
 export interface AtomicRpcProcess {
   readonly request: (
     command: Readonly<Record<string, unknown>>,
-    timeout?: Duration.DurationInput,
+    timeout?: Duration.Input,
   ) => Effect.Effect<AtomicRpcResponse, AtomicRpcError>;
   readonly notify: (
     command: Readonly<Record<string, unknown>>,
@@ -54,15 +53,28 @@ export interface AtomicRpcProcessOptions {
   readonly args?: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly environment?: NodeJS.ProcessEnv;
+  /** Budget for the first command, which pays Atomic's startup network cost. */
+  readonly startupTimeout?: Duration.Input;
+  /** Budget for every command after Atomic has answered once. */
+  readonly requestTimeout?: Duration.Input;
 }
 
 const DEFAULT_REQUEST_TIMEOUT = Duration.seconds(15);
+// Atomic performs network work before it answers its first command: it
+// refreshes OAuth credentials and fetches the model catalog, rewriting
+// auth.json and models-store.json. Measured cold start is ~28s against a
+// fast connection and warm start ~0.7s, so the first round trip gets a much
+// larger budget than steady-state commands. Corporate proxies make the cold
+// case slower still.
+const STARTUP_REQUEST_TIMEOUT = Duration.seconds(90);
 
 export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* (
   options: AtomicRpcProcessOptions,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = options.environment ?? process.env;
+  const startupTimeout = options.startupTimeout ?? STARTUP_REQUEST_TIMEOUT;
+  const requestTimeout = options.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT;
   const args = ["--mode", "rpc", ...(options.args ?? [])];
   const spawnCommand = yield* resolveSpawnCommand(options.binaryPath, args, { env: environment });
   const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
@@ -92,14 +104,13 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   const pending = new Map<string, Deferred.Deferred<AtomicRpcResponse, AtomicRpcError>>();
   const writeMutex = yield* Semaphore.make(1);
   let requestSequence = 0;
+  // False until Atomic answers its first command, i.e. until startup network
+  // work has finished. Gates which timeout `request` applies.
+  let settled = false;
 
   const write = (value: Readonly<Record<string, unknown>>) =>
     writeMutex.withPermits(1)(
-      encodeCommand(value).pipe(
-        Effect.map((encoded) => `${encoded}\n`),
-        Effect.flatMap((encoded) =>
-          Stream.run(Stream.encodeText(Stream.make(encoded)), handle.stdin),
-        ),
+      Stream.run(Stream.encodeText(Stream.make(`${JSON.stringify(value)}\n`)), handle.stdin).pipe(
         Effect.mapError(
           (cause) =>
             new AtomicRpcError({
@@ -108,6 +119,7 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
               cause,
             }),
         ),
+        Effect.asVoid,
       ),
     );
 
@@ -115,6 +127,7 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
     Stream.pipeThroughChannel(Ndjson.decode({ ignoreEmptyLines: true })),
     Stream.runForEach((value) => {
       if (isAtomicRpcResponse(value)) {
+        settled = true;
         const deferred = value.id ? pending.get(value.id) : undefined;
         if (!deferred) return Effect.void;
         pending.delete(value.id!);
@@ -150,20 +163,21 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   yield* handle.stderr.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
 
   const notify: AtomicRpcProcess["notify"] = write;
-  const request: AtomicRpcProcess["request"] = (input, timeout = DEFAULT_REQUEST_TIMEOUT) =>
+  const request: AtomicRpcProcess["request"] = (input, timeout) =>
     Effect.gen(function* () {
+      const effectiveTimeout = timeout ?? (settled ? requestTimeout : startupTimeout);
       const id = `t3-${++requestSequence}`;
       const deferred = yield* Deferred.make<AtomicRpcResponse, AtomicRpcError>();
       pending.set(id, deferred);
       yield* write({ ...input, id }).pipe(
         Effect.tapError(() => Effect.sync(() => pending.delete(id))),
       );
-      const response = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeout));
+      const response = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(effectiveTimeout));
       if (Option.isNone(response)) {
         pending.delete(id);
         return yield* new AtomicRpcError({
           operation: typeof input.type === "string" ? input.type : "request",
-          detail: `Timed out after ${Duration.toMillis(Duration.decode(timeout))}ms.`,
+          detail: `Timed out after ${Duration.toMillis(effectiveTimeout)}ms.`,
         });
       }
       return response.value;

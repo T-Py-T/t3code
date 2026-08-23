@@ -53,7 +53,6 @@ const decodeState = Schema.decodeUnknownOption(AtomicStateData);
 const decodeCommands = Schema.decodeUnknownOption(AtomicCommandsData);
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const RPC_PROBE_TIMEOUT = Duration.seconds(15);
 
 const PRESENTATION = {
   displayName: "Atomic",
@@ -260,9 +259,11 @@ export const checkAtomicProviderStatus = Effect.fn("checkAtomicProviderStatus")(
     });
     const [stateResponse, modelsResponse, commandsResponse] = yield* Effect.all(
       [
-        rpc.request({ type: "get_state" }, RPC_PROBE_TIMEOUT),
-        rpc.request({ type: "get_available_models" }, RPC_PROBE_TIMEOUT),
-        rpc.request({ type: "get_commands" }, RPC_PROBE_TIMEOUT),
+        // No explicit timeout: these are the first commands on a freshly
+        // spawned process, so they inherit the RPC startup budget.
+        rpc.request({ type: "get_state" }),
+        rpc.request({ type: "get_available_models" }),
+        rpc.request({ type: "get_commands" }),
       ],
       { concurrency: "unbounded" },
     );
@@ -271,8 +272,10 @@ export const checkAtomicProviderStatus = Effect.fn("checkAtomicProviderStatus")(
     const commandData = Option.getOrUndefined(decodeCommands(commandsResponse.data));
     const models = modelsFromRpc({
       models: modelData?.models ?? [],
-      defaultModel: state?.model,
-      thinkingLevel: state?.thinkingLevel,
+      defaultModel: state?.model ?? null,
+      // exactOptionalPropertyTypes: an absent thinking level must be omitted
+      // rather than passed as undefined.
+      ...(state?.thinkingLevel === undefined ? {} : { thinkingLevel: state.thinkingLevel }),
     });
     return { models, ...commandsFromRpc(commandData?.commands ?? []) };
   }).pipe(Effect.scoped, Effect.result);

@@ -1830,10 +1830,11 @@ function LegacyFeaturesSection() {
             />
             <SettingsRow
               {...searchableSetting("legacy-sidebar")}
-              description="Brings back the original sidebar with per-project thread trees. The default sidebar shows one flat list: active work as rich cards, settled threads as compact rows."
+              description="Brings back the original flat project tree when Environment project tree is off. The card sidebar shows active work as rich cards and settled threads as compact rows."
               control={
                 <Switch
                   checked={settings.legacySidebarEnabled}
+                  disabled={settings.sidebarEnvironmentProjectTreeEnabled}
                   onCheckedChange={(checked) =>
                     updateSettings({ legacySidebarEnabled: Boolean(checked) })
                   }
@@ -1905,8 +1906,22 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection title="General">
         <SettingsRow
+          {...searchableSetting("environment-project-tree")}
+          description="Use the compact sidebar shown on the T3 Code website, grouped as environment, project, then thread."
+          control={
+            <Switch
+              checked={settings.sidebarEnvironmentProjectTreeEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarEnvironmentProjectTreeEnabled: Boolean(checked) })
+              }
+              aria-label="Environment project tree"
+            />
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("project-grouping")}
-          description="Combine matching repositories across environments."
+          description="Combine matching repositories. In the environment project tree, grouping stays within each environment."
           resetAction={
             settings.sidebarProjectGroupingMode !==
             DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode ? (

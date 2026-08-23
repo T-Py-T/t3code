@@ -31,6 +31,23 @@ export interface SidebarProjectPickerEntry {
   isPreferred: boolean;
 }
 
+export interface SidebarEnvironmentProjectSection {
+  environmentId: EnvironmentId;
+  label: string;
+  isPrimary: boolean;
+  isDesktopLocal: boolean;
+  projects: readonly SidebarProjectSnapshot[];
+}
+
+export interface SidebarEnvironmentProjectHierarchy {
+  sections: readonly SidebarEnvironmentProjectSection[];
+  physicalToLogicalProjectKey: ReadonlyMap<string, string>;
+}
+
+function environmentScopedProjectKey(environmentId: EnvironmentId, projectKey: string): string {
+  return `environment:${encodeURIComponent(environmentId)}:project:${encodeURIComponent(projectKey)}`;
+}
+
 export function buildPhysicalToLogicalProjectKeyMap(input: {
   projects: ReadonlyArray<Project>;
   settings: ProjectGroupingSettings;
@@ -112,6 +129,89 @@ export function buildSidebarProjectSnapshots(input: {
       remoteEnvironmentLabels,
     };
   });
+}
+
+/**
+ * Builds the environment → project seam used by the fork's compact sidebar.
+ * Project grouping runs independently inside each environment so two machines
+ * never collapse into one row, while worktrees on one machine retain the
+ * configured repository grouping behavior.
+ */
+export function buildSidebarEnvironmentProjectHierarchy(input: {
+  projects: ReadonlyArray<Project>;
+  settings: ProjectGroupingSettings;
+  primaryEnvironmentId: EnvironmentId | null;
+  resolveEnvironmentLabel: (environmentId: EnvironmentId) => string | null;
+  isDesktopLocalEnvironment?: (environmentId: EnvironmentId) => boolean;
+}): SidebarEnvironmentProjectHierarchy {
+  const projectsByEnvironment = new Map<EnvironmentId, Project[]>();
+  for (const project of input.projects) {
+    const environmentProjects = projectsByEnvironment.get(project.environmentId);
+    if (environmentProjects) {
+      environmentProjects.push(project);
+    } else {
+      projectsByEnvironment.set(project.environmentId, [project]);
+    }
+  }
+
+  const physicalToLogicalProjectKey = new Map<string, string>();
+  const sections = [...projectsByEnvironment.entries()].map(
+    ([environmentId, projects]): SidebarEnvironmentProjectSection => {
+      const unscopedSnapshots = buildSidebarProjectSnapshots({
+        projects,
+        settings: input.settings,
+        // Every member is local to this section. This also prevents redundant
+        // remote badges on project rows beneath a remote environment heading.
+        primaryEnvironmentId: environmentId,
+        resolveEnvironmentLabel: input.resolveEnvironmentLabel,
+        ...(input.isDesktopLocalEnvironment
+          ? { isDesktopLocalEnvironment: input.isDesktopLocalEnvironment }
+          : {}),
+      });
+      const scopedLogicalKeyByLogicalKey = new Map(
+        unscopedSnapshots.map(
+          (project) =>
+            [
+              project.projectKey,
+              environmentScopedProjectKey(environmentId, project.projectKey),
+            ] as const,
+        ),
+      );
+      const snapshots = unscopedSnapshots.map((project) => ({
+        ...project,
+        projectKey: environmentScopedProjectKey(environmentId, project.projectKey),
+      }));
+      const environmentMapping = buildPhysicalToLogicalProjectKeyMap({
+        projects,
+        settings: input.settings,
+        primaryEnvironmentId: environmentId,
+      });
+      for (const [physicalKey, logicalKey] of environmentMapping) {
+        physicalToLogicalProjectKey.set(
+          physicalKey,
+          scopedLogicalKeyByLogicalKey.get(logicalKey) ??
+            environmentScopedProjectKey(environmentId, logicalKey),
+        );
+      }
+
+      return {
+        environmentId,
+        label: input.resolveEnvironmentLabel(environmentId) ?? environmentId,
+        isPrimary: environmentId === input.primaryEnvironmentId,
+        isDesktopLocal: input.isDesktopLocalEnvironment?.(environmentId) ?? false,
+        projects: snapshots,
+      };
+    },
+  );
+
+  sections.sort(
+    (left, right) =>
+      Number(right.isPrimary) - Number(left.isPrimary) ||
+      left.label.localeCompare(right.label) ||
+      left.environmentId.localeCompare(right.environmentId),
+  );
+
+  return { sections, physicalToLogicalProjectKey };
 }
 
 export function buildSidebarProjectPickerEntries(input: {

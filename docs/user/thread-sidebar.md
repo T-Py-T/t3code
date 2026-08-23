@@ -12,6 +12,16 @@ If reordering is unavailable for one environment, update the T3 Code server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+## Environment project tree
+
+Web and desktop use a compact tree organized as environment, project, then thread. Projects from
+the same repository can group together inside one environment, but projects on different machines
+always remain in separate environment sections. Manual project reordering also stays within an
+environment.
+
+Turn **Environment project tree** off in **Settings** → **General** to use one of the upstream
+sidebar layouts instead.
+
 ## Environment artwork
 
 Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in

@@ -289,6 +289,21 @@ export function useLegacySidebarEnabled(): boolean {
   return settingsHydrated && legacySidebarEnabled;
 }
 
+export type SidebarNavigationMode = "cards" | "legacy-tree" | "environment-project-tree";
+
+/**
+ * Selects the sidebar without remounting it during client-settings hydration.
+ * The fork's environment hierarchy takes precedence over the upstream legacy
+ * opt-in because it is the more specific project-tree mode.
+ */
+export function useSidebarNavigationMode(): SidebarNavigationMode {
+  const settingsHydrated = useClientSettingsHydrated();
+  const settings = useClientSettingsValue();
+  if (!settingsHydrated) return "cards";
+  if (settings.sidebarEnvironmentProjectTreeEnabled) return "environment-project-tree";
+  return settings.legacySidebarEnabled ? "legacy-tree" : "cards";
+}
+
 /** Read current settings for one environment, merged with client-local preferences. */
 export function useEnvironmentSettings<T = UnifiedSettings>(
   environmentId: EnvironmentId,

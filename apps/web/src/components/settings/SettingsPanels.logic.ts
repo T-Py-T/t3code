@@ -31,6 +31,20 @@ export function projectGroupingModeFromToggle(
   return lastEnabledMode === "repository_path" ? "repository_path" : "repository";
 }
 
+type SidebarTreeSettings = Pick<UnifiedSettings, "sidebarEnvironmentProjectTreeEnabled">;
+
+export const DEFAULT_SIDEBAR_TREE_SETTINGS: SidebarTreeSettings = {
+  sidebarEnvironmentProjectTreeEnabled:
+    DEFAULT_UNIFIED_SETTINGS.sidebarEnvironmentProjectTreeEnabled,
+};
+
+export function getChangedSidebarTreeSettingLabels(settings: SidebarTreeSettings): string[] {
+  return settings.sidebarEnvironmentProjectTreeEnabled ===
+    DEFAULT_SIDEBAR_TREE_SETTINGS.sidebarEnvironmentProjectTreeEnabled
+    ? []
+    : ["Environment project tree"];
+}
+
 const LAST_ENABLED_PROJECT_GROUPING_MODE_KEY = "t3code:last-enabled-project-grouping-mode";
 
 export function readLastEnabledProjectGroupingMode(): SidebarProjectGroupingMode {

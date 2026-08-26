@@ -77,6 +77,8 @@ export interface RuntimeSubagent {
   readonly phaseTitle: string | null;
   readonly attempt: number | null;
   readonly workflowName: string | null;
+  readonly workflowStageId?: string | null;
+  readonly dependsOnTaskIds?: ReadonlyArray<string>;
   readonly phases: ReadonlyArray<SubagentWorkflowPhase>;
   readonly runHandles: SubagentRunHandles | null;
   readonly recentActivity: ReadonlyArray<SubagentActivityEntry>;
@@ -144,6 +146,14 @@ function asString(value: unknown): string | undefined {
 
 function asCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function asStringArray(value: unknown): ReadonlyArray<string> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((entry) => {
+    const parsed = asString(entry);
+    return parsed ? [parsed] : [];
+  });
 }
 
 function asUsage(value: unknown): SubagentUsage | undefined {
@@ -246,6 +256,8 @@ interface MutableAgent {
   phaseTitle: string | null;
   attempt: number | null;
   workflowName: string | null;
+  workflowStageId: string | null;
+  dependsOnTaskIds: ReadonlyArray<string>;
   phases: ReadonlyArray<SubagentWorkflowPhase>;
   runHandles: SubagentRunHandles | null;
   recentActivity: ReadonlyArray<SubagentActivityEntry>;
@@ -300,6 +312,8 @@ function getOrCreate(
     phaseTitle: asString(payload.phaseTitle) ?? null,
     attempt: asCount(payload.attempt) ?? null,
     workflowName: asString(payload.workflowName) ?? null,
+    workflowStageId: asString(payload.workflowStageId) ?? null,
+    dependsOnTaskIds: asStringArray(payload.dependsOnTaskIds) ?? [],
     phases: [],
     runHandles: null,
     recentActivity: [],
@@ -329,6 +343,10 @@ function fillMetadata(agent: MutableAgent, payload: Record<string, unknown>): vo
   }
   const workflowName = asString(payload.workflowName);
   if (workflowName) agent.workflowName = workflowName;
+  const workflowStageId = asString(payload.workflowStageId);
+  if (workflowStageId) agent.workflowStageId = workflowStageId;
+  const dependsOnTaskIds = asStringArray(payload.dependsOnTaskIds);
+  if (dependsOnTaskIds) agent.dependsOnTaskIds = dependsOnTaskIds;
   if (asString(payload.taskType) === "local_workflow") agent.kind = "workflow";
   const agentIndex = asCount(payload.agentIndex);
   if (agentIndex !== undefined) agent.agentIndex = agentIndex;

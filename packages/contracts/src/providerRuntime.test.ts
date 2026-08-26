@@ -181,6 +181,30 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
   });
+
+  it("preserves workflow stage identity and dependency edges", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "task.started",
+      eventId: "event-workflow-stage-1",
+      provider: "atomic",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-1",
+      payload: {
+        taskId: "run-1:wf:synthesize",
+        taskType: "local_agent",
+        parentAgentId: "run-1",
+        workflowStageId: "synthesize",
+        dependsOnTaskIds: ["run-1:wf:classify", "run-1:wf:inspect"],
+      },
+    });
+
+    expect(parsed.type).toBe("task.started");
+    if (parsed.type !== "task.started") {
+      throw new Error("expected task.started");
+    }
+    expect(parsed.payload.workflowStageId).toBe("synthesize");
+    expect(parsed.payload.dependsOnTaskIds).toEqual(["run-1:wf:classify", "run-1:wf:inspect"]);
+  });
 });
 
 describe("classifyTaskAgentKind", () => {

@@ -54,16 +54,28 @@ yay -S t3code-nightly-bin
 T3 Code drives provider CLIs; it does not ship them. Install the CLI for each provider you want
 to use, then authenticate it.
 
-| Provider   | CLI                                                   | Default binary | Log in with           |
-| ---------- | ----------------------------------------------------- | -------------- | --------------------- |
-| Codex      | [Codex CLI](https://developers.openai.com/codex/cli)  | `codex`        | `codex login`         |
-| Claude     | [Claude Code](https://claude.com/product/claude-code) | `claude`       | `claude auth login`   |
-| Cursor     | [Cursor CLI](https://cursor.com/cli)                  | `cursor-agent` | `agent login`         |
-| Grok Build | [Grok Build CLI](https://x.ai/cli)                    | `grok`         | `grok login`          |
-| OpenCode   | [OpenCode](https://opencode.ai)                       | `opencode`     | `opencode auth login` |
+| Provider   | CLI                                                     | Default binary | Log in with                |
+| ---------- | ------------------------------------------------------- | -------------- | -------------------------- |
+| Atomic     | [Atomic](https://github.com/bastani-inc/atomic)         | `atomic`       | Model provider credentials |
+| Pi         | [Pi coding agent](https://github.com/earendil-works/pi) | `pi`           | Model provider credentials |
+| Codex      | [Codex CLI](https://developers.openai.com/codex/cli)    | `codex`        | `codex login`              |
+| Claude     | [Claude Code](https://claude.com/product/claude-code)   | `claude`       | `claude auth login`        |
+| Cursor     | [Cursor CLI](https://cursor.com/cli)                    | `cursor-agent` | `agent login`              |
+| Grok Build | [Grok Build CLI](https://x.ai/cli)                      | `grok`         | `grok login`               |
+| OpenCode   | [OpenCode](https://opencode.ai)                         | `opencode`     | `opencode auth login`      |
 
-Codex and Claude are on by default. Cursor, Grok Build, and OpenCode are off by default; turn
-them on in **Settings** → the provider's card when you want to use them.
+Codex and Claude are on by default. Atomic, Pi, Cursor, Grok Build, and OpenCode are off by default;
+turn them on in **Settings** → the provider's card when you want to use them.
+
+Install the Pi-compatible providers with npm when you want either of them:
+
+```bash
+npm install --global @earendil-works/pi-coding-agent
+npm install --global @bastani/atomic
+```
+
+Pi 0.84.3 or newer is recommended. Atomic and Pi discover the models and credentials configured in
+their own agent directories. T3 Code does not copy or manage those credentials.
 
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.

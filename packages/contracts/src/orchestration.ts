@@ -1668,11 +1668,11 @@ export const OrchestrationGetWorkflowScriptResult = Schema.Struct({
 export type OrchestrationGetWorkflowScriptResult = typeof OrchestrationGetWorkflowScriptResult.Type;
 
 const WORKFLOW_SCRIPT_ERROR_MESSAGES = {
-  "invalid-path": "Workflow scripts must be absolute .js paths.",
+  "invalid-path": "Workflow scripts must be absolute .js or .ts paths.",
   "root-unavailable": "Script root unavailable.",
   "not-found": "Script not found.",
   "outside-root": "Script path is outside the workflow scripts root.",
-  "not-js": "Resolved script is not a .js file.",
+  "not-js": "Resolved workflow file type is unsupported.",
   "not-regular-file": "Script is not a regular file.",
   "changed-during-read": "Script changed between resolution and open.",
   "read-failed": "Script read failed.",

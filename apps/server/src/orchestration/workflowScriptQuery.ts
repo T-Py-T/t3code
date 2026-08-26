@@ -4,10 +4,9 @@
  * "{} script" affordance.
  *
  * Containment rules (lifted from the reviewed #3650 inspection service):
- * - the resolved realpath must live under ~/.claude/projects (where the
- *   Claude harness persists workflow scripts) — realpath re-containment
- *   defeats symlink escapes, including a symlinked leaf file;
- * - only .js leaf files are served;
+ * - the resolved realpath must live under ~/.claude/projects (Claude) or the
+ *   current thread workspace's .atomic/workflows directory;
+ * - only .js files are served from Claude and .js/.ts from Atomic;
  * - reads are size-capped rather than failed, with a truncation marker.
  *
  * The client-supplied path is a hint from the workflow's runHandles; it is
@@ -22,23 +21,50 @@ import * as Effect from "effect/Effect";
 
 const SCRIPT_BYTE_CAP = 256 * 1024;
 
-function scriptsRoot(): string {
+function claudeScriptsRoot(): string {
   return NodePath.join(NodeOS.homedir(), ".claude", "projects");
 }
 
 export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(function* (input: {
   readonly scriptPath: string;
+  readonly workspaceRoot?: string;
 }) {
   const requested = input.scriptPath;
+  const requestedExtension = NodePath.extname(requested);
 
-  if (!NodePath.isAbsolute(requested) || NodePath.extname(requested) !== ".js") {
+  if (
+    !NodePath.isAbsolute(requested) ||
+    (requestedExtension !== ".js" && requestedExtension !== ".ts")
+  ) {
     return yield* Effect.fail(
       new OrchestrationGetWorkflowScriptError({ reason: "invalid-path", scriptPath: requested }),
     );
   }
 
-  const root = yield* Effect.tryPromise({
-    try: () => NodeFSP.realpath(scriptsRoot()),
+  const configuredRoots = [
+    { path: claudeScriptsRoot(), extensions: new Set([".js"]) },
+    ...(input.workspaceRoot
+      ? [
+          {
+            path: NodePath.resolve(input.workspaceRoot, ".atomic", "workflows"),
+            extensions: new Set([".js", ".ts"]),
+          },
+        ]
+      : []),
+  ];
+  const roots = yield* Effect.tryPromise({
+    try: async () => {
+      const resolved = await Promise.all(
+        configuredRoots.map(async (root) => {
+          try {
+            return { ...root, path: await NodeFSP.realpath(root.path) };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return resolved.filter((root): root is NonNullable<typeof root> => root !== null);
+    },
     catch: (cause) =>
       new OrchestrationGetWorkflowScriptError({
         reason: "root-unavailable",
@@ -46,6 +72,12 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
         cause,
       }),
   });
+  if (roots.length === 0) {
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "root-unavailable",
+      scriptPath: requested,
+    });
+  }
 
   // Realpath the FILE itself (not just its directory): a symlink named
   // like a script inside a contained directory must not escape.
@@ -59,12 +91,15 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
       }),
   });
 
-  if (resolved !== root && !resolved.startsWith(`${root}${NodePath.sep}`)) {
+  const containingRoot = roots.find(
+    (root) => resolved === root.path || resolved.startsWith(`${root.path}${NodePath.sep}`),
+  );
+  if (!containingRoot) {
     return yield* Effect.fail(
       new OrchestrationGetWorkflowScriptError({ reason: "outside-root", scriptPath: resolved }),
     );
   }
-  if (NodePath.extname(resolved) !== ".js") {
+  if (!containingRoot.extensions.has(NodePath.extname(resolved))) {
     return yield* Effect.fail(
       new OrchestrationGetWorkflowScriptError({ reason: "not-js", scriptPath: resolved }),
     );

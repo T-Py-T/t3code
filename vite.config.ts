@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodePath from "node:path";

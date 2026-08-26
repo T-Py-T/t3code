@@ -568,7 +568,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       if (workflowRun.scriptPath === undefined && /^[a-zA-Z0-9._-]+$/u.test(workflowName)) {
         for (const extension of ["ts", "js"] as const) {
           const candidate = path.resolve(
-            context.session.cwd,
+            context.session.cwd!,
             ".atomic",
             "workflows",
             `${workflowName}.${extension}`,

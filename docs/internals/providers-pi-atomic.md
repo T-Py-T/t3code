@@ -69,8 +69,8 @@ process and exposes request, notification, event-stream, and kill operations.
 - Standard input remains open for the lifetime of the session. Closing it after the first command
   terminates interactive RPC operation.
 - Responses are correlated by generated request IDs. Unsolicited events are published separately.
-- The first request has a 90-second budget because Atomic can refresh credentials and fetch model
-  metadata before replying. Later requests use a 15-second budget.
+- Requests issued before the first response have a 90-second budget because Atomic can refresh
+  credentials and fetch model metadata before replying. Later requests use a 15-second budget.
 - A clean output EOF fails pending requests immediately rather than making them wait for a timeout.
 
 Each response carries an out-of-band `precedingEventSequence`. The adapter waits until all earlier
@@ -142,7 +142,7 @@ when all of these checks pass:
 1. The requested path is absolute.
 2. The file resolves under the current thread workspace's `.atomic/workflows` directory.
 3. The resolved leaf is a regular `.js` or `.ts` file, including after symlink resolution.
-4. The read stays within the size cap and the file does not change during inspection.
+4. The read stays within the size cap, and the opened inode still matches the resolved leaf.
 
 Claude's existing contained `.js` workflow source behavior remains unchanged. Atomic source is
 displayed in the existing Agents-panel script viewer through the same orchestration query.

@@ -436,6 +436,45 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("attaches additional app-server configuration to the session runtime", () => {
+    const runtimeFactory = makeRuntimeFactory();
+    const computerUseArgs = [
+      "-c",
+      'mcp_servers.computer-use.command="/Applications/Codex Computer Use"',
+      "-c",
+      "mcp_servers.computer-use.enabled=true",
+    ];
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({});
+        return yield* makeCodexAdapter(codexConfig, {
+          additionalAppServerArgs: computerUseArgs,
+          makeRuntime: runtimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-computer-use"),
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.deepStrictEqual(
+        runtimeFactory.lastRuntime?.options.appServerArgs,
+        computerUseArgs,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for the session runtime", () => {
     const runtimeFactory = makeRuntimeFactory();
     const layer = Layer.effect(

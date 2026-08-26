@@ -77,6 +77,7 @@ const PROVIDER = ProviderDriverKind.make("codex");
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly additionalAppServerArgs?: ReadonlyArray<string>;
   readonly makeRuntime?: (
     options: CodexSessionRuntimeOptions,
   ) => Effect.Effect<
@@ -1678,6 +1679,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const appServerArgs = [
+          ...(options?.additionalAppServerArgs ?? []),
+          ...(mcpSession
+            ? [
+                "-c",
+                `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
+                "-c",
+                'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+              ]
+            : []),
+        ];
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -1700,14 +1712,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   ...(options?.environment ?? process.env),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
-                appServerArgs: [
-                  "-c",
-                  `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
-                  "-c",
-                  'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
-                ],
               }
             : {}),
+          ...(appServerArgs.length > 0 ? { appServerArgs } : {}),
         };
         const sessionScope = yield* Scope.make("sequential");
         let sessionScopeTransferred = false;

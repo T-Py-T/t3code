@@ -19,6 +19,7 @@ import {
   buildTurnStartParams,
   describeMcpElicitation,
   hasConfiguredMcpServer,
+  hasConfiguredT3McpServer,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
@@ -539,12 +540,26 @@ describe("T3 browser developer instructions", () => {
   });
 });
 
-describe("hasConfiguredMcpServer", () => {
+describe("Codex MCP configuration detection", () => {
   it("detects inline Codex MCP configuration arguments", () => {
     NodeAssert.equal(hasConfiguredMcpServer(undefined), false);
     NodeAssert.equal(hasConfiguredMcpServer(["--model", "gpt-5.4"]), false);
     NodeAssert.equal(
       hasConfiguredMcpServer(["-c", 'mcp_servers.t3-code.url="http://127.0.0.1/mcp"']),
+      true,
+    );
+  });
+
+  it("does not mistake Computer Use for T3's collaborative browser", () => {
+    NodeAssert.equal(
+      hasConfiguredT3McpServer([
+        "-c",
+        'mcp_servers.computer-use.command="/Applications/Computer Use"',
+      ]),
+      false,
+    );
+    NodeAssert.equal(
+      hasConfiguredT3McpServer(["-c", 'mcp_servers.t3-code.url="http://127.0.0.1/mcp"']),
       true,
     );
   });

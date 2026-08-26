@@ -40,6 +40,28 @@ When a Codex tool needs access to an app such as Safari, T3 Code shows the app n
 approval. You can approve, decline, or cancel the request from the desktop app, web app, or mobile
 app. Some tools also offer approval for the current session or permanent approval.
 
+## Use apps on the T3 host Mac
+
+T3 Code can attach the Codex Computer Use client to a Codex provider on macOS. This lets that Codex
+provider inspect and operate apps on the Mac running the selected T3 environment, including when
+you are directing the thread from the web or mobile app.
+
+Install and finish the Computer Use setup in the Codex or ChatGPT desktop app first. Then open the
+Codex provider in **Settings**, turn on **T3-managed Computer Use**, save, and start a new provider
+session. Existing sessions keep the tools they started with.
+
+Computer Use asks before accessing a new app. The request appears in the T3 thread with the app
+name and the approval choices offered by the Computer Use client. Stopping the provider session
+also stops that session's Computer Use connection.
+
+The client is discovered from the provider's shared `CODEX_HOME`. A provider that uses a shadow
+home still uses the Computer Use installation from its shared home. If the client is missing, the
+provider stays usable for normal chat and shows a warning in Settings.
+
+This switch manages the Codex Computer Use client attached by T3. It does not rewrite
+`config.toml` or remove MCP servers that you configured separately. Pi and Atomic do not expose a
+verified Computer Use MCP transport in this integration yet.
+
 ## I Want Work And Personal Codex Accounts
 
 Use one real Codex home and one shadow home.

@@ -355,6 +355,15 @@ export const CodexSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    enableComputerUse: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "T3-managed Computer Use",
+        description:
+          "Attach the Codex Computer Use client installed in CODEX_HOME to this provider's sessions on macOS.",
+        providerSettingsForm: { control: "switch", clearWhenEmpty: "omit" },
+      }),
+    ),
     launchArgs: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
@@ -368,7 +377,7 @@ export const CodexSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "shadowHomePath", "enableComputerUse", "launchArgs"],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;
@@ -885,6 +894,7 @@ const CodexSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
+  enableComputerUse: Schema.optionalKey(Schema.Boolean),
   launchArgs: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });

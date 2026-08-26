@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -195,6 +196,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
 
       assert.equal(defaultsByCommand.get("thread.previous"), "mod+shift+[");
       assert.equal(defaultsByCommand.get("thread.next"), "mod+shift+]");
+      assert.equal(defaultsByCommand.get("thread.settle"), "mod+shift+s");
       assert.equal(defaultsByCommand.get("thread.jump.1"), "mod+1");
       assert.equal(defaultsByCommand.get("thread.jump.9"), "mod+9");
       assert.equal(defaultsByCommand.get("modelPicker.toggle"), "mod+shift+m");
@@ -510,28 +512,45 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
   it.effect("fails when config directory is not writable", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
-      const { dirname } = yield* Path.Path;
-      yield* writeKeybindingsConfig(keybindingsConfigPath, [
-        { key: "mod+j", command: "terminal.toggle" },
-      ]);
-      yield* fs.chmod(dirname(keybindingsConfigPath), 0o500);
+      let failAtomicWrite = false;
+      const writeCause = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "writeFileString",
+        pathOrDescriptor: "keybindings atomic write",
+      });
+      const failingFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        writeFileString: (filePath, contents, options) =>
+          failAtomicWrite && String(filePath).endsWith("contents.tmp")
+            ? Effect.fail(writeCause)
+            : fs.writeFileString(filePath, contents, options),
+      });
 
-      const result = yield* Effect.gen(function* () {
-        const keybindings = yield* Keybindings.Keybindings;
-        return yield* keybindings.upsertKeybindingRule({
-          key: "mod+shift+r",
-          command: "script.run-tests.run",
-        });
-      }).pipe(toDetailResult);
-      assertFailure(result, "failed to write keybindings config");
+      return yield* Effect.gen(function* () {
+        const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+        yield* writeKeybindingsConfig(keybindingsConfigPath, [
+          { key: "mod+j", command: "terminal.toggle" },
+        ]);
+        failAtomicWrite = true;
 
-      yield* fs.chmod(dirname(keybindingsConfigPath), 0o700);
+        const result = yield* Effect.gen(function* () {
+          const keybindings = yield* Keybindings.Keybindings;
+          return yield* keybindings.upsertKeybindingRule({
+            key: "mod+shift+r",
+            command: "script.run-tests.run",
+          });
+        }).pipe(toDetailResult);
+        assertFailure(result, "failed to write keybindings config");
 
-      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
-      const persistedView = persisted.map(({ key, command }) => ({ key, command }));
-      assert.deepEqual(persistedView, [{ key: "mod+j", command: "terminal.toggle" }]);
-    }).pipe(Effect.provide(makeKeybindingsLayer())),
+        const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+        const persistedView = persisted.map(({ key, command }) => ({ key, command }));
+        assert.deepEqual(persistedView, [{ key: "mod+j", command: "terminal.toggle" }]);
+      }).pipe(
+        Effect.provide(makeKeybindingsLayer()),
+        Effect.provideService(FileSystem.FileSystem, failingFileSystem),
+      );
+    }),
   );
 
   it.effect("caches loaded resolved config across repeated reads", () =>

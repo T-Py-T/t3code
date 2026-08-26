@@ -14,6 +14,22 @@ NodeFS.writeFileSync(scriptPath, "export const meta = {};\n");
 const outside = NodePath.join(NodeOS.tmpdir(), "wf-outside.js");
 NodeFS.writeFileSync(outside, "evil\n");
 const link = NodePath.join(root, "sneaky.js");
+const atomicWorkspace = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "atomic-workflow-view-"));
+const atomicRoot = NodePath.join(atomicWorkspace, ".atomic", "workflows");
+const atomicScriptPath = NodePath.join(atomicRoot, "generated-workflow.ts");
+NodeFS.mkdirSync(atomicRoot, { recursive: true });
+NodeFS.writeFileSync(atomicScriptPath, "export default { name: 'generated-workflow' };\n");
+const escapedAtomicWorkspace = NodeFS.mkdtempSync(
+  NodePath.join(NodeOS.tmpdir(), "atomic-workflow-escaped-view-"),
+);
+const escapedAtomicTarget = NodeFS.mkdtempSync(
+  NodePath.join(NodeOS.tmpdir(), "atomic-workflow-escaped-target-"),
+);
+const escapedAtomicRoot = NodePath.join(escapedAtomicWorkspace, ".atomic", "workflows");
+const escapedAtomicScript = NodePath.join(escapedAtomicTarget, "escaped-workflow.ts");
+NodeFS.mkdirSync(NodePath.dirname(escapedAtomicRoot), { recursive: true });
+NodeFS.writeFileSync(escapedAtomicScript, "export default { escaped: true };\n");
+NodeFS.symlinkSync(escapedAtomicTarget, escapedAtomicRoot, "dir");
 try {
   NodeFS.symlinkSync(outside, link);
 } catch (error) {
@@ -31,6 +47,9 @@ if (!NodeFS.lstatSync(link).isSymbolicLink()) {
 afterAll(() => {
   NodeFS.rmSync(root, { recursive: true, force: true });
   NodeFS.rmSync(outside, { force: true });
+  NodeFS.rmSync(atomicWorkspace, { recursive: true, force: true });
+  NodeFS.rmSync(escapedAtomicWorkspace, { recursive: true, force: true });
+  NodeFS.rmSync(escapedAtomicTarget, { recursive: true, force: true });
 });
 
 describe("readWorkflowScript containment", () => {
@@ -42,12 +61,23 @@ describe("readWorkflowScript containment", () => {
     }),
   );
 
+  effectIt.effect("serves a TypeScript workflow from the thread's Atomic directory", () =>
+    Effect.gen(function* () {
+      const result = yield* readWorkflowScript({
+        scriptPath: atomicScriptPath,
+        workspaceRoot: atomicWorkspace,
+      });
+      assert.include(result.contents, "generated-workflow");
+      assert.equal(result.truncated, false);
+    }),
+  );
+
   effectIt.effect("rejects relative and non-js paths", () =>
     Effect.gen(function* () {
       const relative = yield* Effect.exit(readWorkflowScript({ scriptPath: "run.js" }));
       assert.equal(relative._tag, "Failure");
       const nonJs = yield* Effect.exit(
-        readWorkflowScript({ scriptPath: scriptPath.replace(".js", ".ts") }),
+        readWorkflowScript({ scriptPath: scriptPath.replace(".js", ".txt") }),
       );
       assert.equal(nonJs._tag, "Failure");
     }),
@@ -70,6 +100,19 @@ describe("readWorkflowScript containment", () => {
       if (sneaky._tag === "Success") {
         assert.equal(sneaky.value, "outside-root");
       }
+    }),
+  );
+
+  effectIt.effect("rejects an Atomic workflow root symlinked outside its workspace", () =>
+    Effect.gen(function* () {
+      const escaped = yield* readWorkflowScript({
+        scriptPath: escapedAtomicScript,
+        workspaceRoot: escapedAtomicWorkspace,
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.reason),
+      );
+      assert.equal(escaped, "outside-root");
     }),
   );
 });

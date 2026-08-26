@@ -300,6 +300,23 @@ describe("foldSubagentActivities", () => {
     expect(member?.parentAgentId).toBe("wf-1");
   });
 
+  it("preserves provider workflow stage identity and dependency edges", () => {
+    const [member] = fold([
+      activity("task.started", {
+        taskId: "run-1:wf:synthesize",
+        taskType: "local_agent",
+        parentAgentId: "run-1",
+        workflowStageId: "synthesize",
+        dependsOnTaskIds: ["run-1:wf:classify", "run-1:wf:inspect"],
+        phaseIndex: 1,
+        phaseTitle: "Stage 2",
+      }),
+    ]);
+
+    expect(member?.workflowStageId).toBe("synthesize");
+    expect(member?.dependsOnTaskIds).toEqual(["run-1:wf:classify", "run-1:wf:inspect"]);
+  });
+
   it("a workflow member retry (attempt bump) is a reactivation of the same slot", () => {
     const agents = fold([
       activity("task.progress", {

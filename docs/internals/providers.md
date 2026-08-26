@@ -7,10 +7,12 @@ orchestration layer does not know which one is behind a thread.
 
 ## Built-in drivers
 
-[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with five entries:
+[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with seven entries:
 
 | Driver kind   | Driver source                           |
 | ------------- | --------------------------------------- |
+| `atomic`      | [`Drivers/AtomicDriver.ts`][atomic]     |
+| `pi`          | [`Drivers/PiDriver.ts`][pi]             |
 | `codex`       | [`Drivers/CodexDriver.ts`][codex]       |
 | `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]     |
 | `cursor`      | [`Drivers/CursorDriver.ts`][cursor]     |
@@ -36,8 +38,25 @@ Two registries separate configuration from live processes:
 [`ProviderService`][service] sits on top. It combines the adapter registry with the provider session
 directory to route session and turn operations for a thread, so callers name a thread, not an agent.
 
-Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
-orchestration, contract, or client change is required for the common case.
+Adding a built-in driver also requires its settings schema and default-instance hydration plus its
+client presentation metadata. The orchestration model remains provider-agnostic; change its
+contracts only when the provider introduces a capability that must cross the wire.
+
+Pi and Atomic share a Pi-RPC lifecycle adapter, while Atomic adds workflow lifecycle projection and
+workflow source inspection. See [Pi and Atomic providers](./providers-pi-atomic.md) for the protocol
+contract, event mappings, extension UI behavior, and known boundaries.
+
+## Model manifest
+
+The model picker's legacy section is driven by `apps/server/src/provider/model-manifest.json`, which
+lists the current (non-legacy) model slugs per driver kind. The `ModelManifest` service
+(`apps/server/src/provider/ModelManifest.ts`) refreshes that data from the same file on `main` via
+raw.githubusercontent.com, so moving a model in or out of the legacy section is a commit, not a
+release. Preference order is remote fetch, then the on-disk copy of the last successful fetch (in
+the state directory), then the bundled copy. Fetches are TTL-gated, run concurrently with provider
+probes, respect the `enableProviderUpdateChecks` setting, and never fail a provider check. The
+Codex and Claude drivers apply the classification to every snapshot with `applyModelManifest`;
+driver kinds absent from the manifest have no legacy concept.
 
 ## How provider work is requested
 
@@ -76,6 +95,8 @@ when a request opens (approval) or user input is requested, via
 `flushBufferedAssistantMessagesForTurn`.
 
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
+[atomic]: ../../apps/server/src/provider/Drivers/AtomicDriver.ts
+[pi]: ../../apps/server/src/provider/Drivers/PiDriver.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
 [cursor]: ../../apps/server/src/provider/Drivers/CursorDriver.ts

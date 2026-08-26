@@ -41,6 +41,46 @@ const multiSelectQuestion = {
 } as const;
 
 describe("resolvePendingUserInputAnswer", () => {
+  it("uses a provider editor's default value until the user changes it", () => {
+    const question = {
+      ...singleSelectQuestion,
+      id: "editor",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+    };
+
+    expect(resolvePendingUserInputAnswer(question, undefined)).toBe("ORIGINAL_WORKFLOW_VALUE");
+    expect(derivePendingUserInputProgress([question], {}, 0).customAnswer).toBe(
+      "ORIGINAL_WORKFLOW_VALUE",
+    );
+  });
+
+  it("prefers an explicit option over a provider editor default", () => {
+    const question = {
+      ...singleSelectQuestion,
+      id: "editor-with-options",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+    };
+    const draft = togglePendingUserInputOptionSelection(question, undefined, "Orchestration-first");
+
+    expect(resolvePendingUserInputAnswer(question, draft)).toBe("Orchestration-first");
+    expect(derivePendingUserInputProgress([question], { [question.id]: draft }, 0)).toMatchObject({
+      customAnswer: "",
+      selectedOptionLabels: ["Orchestration-first"],
+      usingCustomAnswer: false,
+      resolvedAnswer: "Orchestration-first",
+    });
+  });
+
+  it("does not restore a provider default after the user clears it", () => {
+    const question = {
+      ...singleSelectQuestion,
+      id: "cleared-editor",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+    };
+
+    expect(resolvePendingUserInputAnswer(question, { customAnswer: "" })).toBeNull();
+  });
+
   it("prefers a custom answer over selected options", () => {
     expect(
       resolvePendingUserInputAnswer(singleSelectQuestion, {

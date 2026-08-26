@@ -15,7 +15,10 @@ import {
 import {
   buildPendingUserInputAnswers,
   buildThreadFeed,
+  derivePendingApprovals,
+  derivePendingUserInputs,
   deriveThreadFeedPresentation,
+  getPendingUserInputCustomAnswer,
   isPendingUserInputOptionSelected,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -139,6 +142,123 @@ describe("pending user input answers", () => {
         "  Orders  ",
       ),
     ).toBe(false);
+  });
+
+  it("preserves provider defaults for display and unchanged submission", () => {
+    const requested = makeActivity({
+      id: EventId.make("user-input-default"),
+      kind: "user-input.requested",
+      summary: "User input requested",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      payload: {
+        requestId: "request-default",
+        questions: [
+          {
+            id: "editor",
+            header: "Editor",
+            question: "Review this value",
+            defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+            options: [{ label: "Custom", description: "Enter a custom value" }],
+            multiSelect: false,
+          },
+        ],
+      },
+    });
+
+    const pending = derivePendingUserInputs([requested]);
+    const question = pending[0]?.questions[0];
+    expect(question?.defaultValue).toBe("ORIGINAL_WORKFLOW_VALUE");
+    expect(question && getPendingUserInputCustomAnswer(question, undefined)).toBe(
+      "ORIGINAL_WORKFLOW_VALUE",
+    );
+    expect(question && buildPendingUserInputAnswers([question], {})).toEqual({
+      editor: "ORIGINAL_WORKFLOW_VALUE",
+    });
+  });
+
+  it("submits a selected option instead of an editor default", () => {
+    const question = {
+      id: "editor-with-options",
+      header: "Editor",
+      question: "Review this value",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+      options: [{ label: "Use workflow", description: "Use the workflow value" }],
+      multiSelect: false,
+    };
+    const draft = togglePendingUserInputOptionSelection(question, undefined, "Use workflow");
+
+    expect(getPendingUserInputCustomAnswer(question, draft)).toBe("");
+    expect(buildPendingUserInputAnswers([question], { [question.id]: draft })).toEqual({
+      [question.id]: "Use workflow",
+    });
+  });
+
+  it("does not restore a provider default after the user clears it", () => {
+    const question = {
+      id: "cleared-editor",
+      header: "Editor",
+      question: "Review this value",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+      options: [{ label: "Custom", description: "Enter a custom value" }],
+      multiSelect: false,
+    };
+
+    expect(buildPendingUserInputAnswers([question], { [question.id]: { customAnswer: "" } })).toBe(
+      null,
+    );
+  });
+});
+
+describe("pending approvals", () => {
+  it("keeps app access approvals and persistence choices from remote environments", () => {
+    const options = [
+      { decision: "decline", label: "Decline" },
+      { decision: "acceptAlways", label: "Always allow Safari" },
+      { decision: "accept", label: "Approve" },
+    ];
+    const activity = makeActivity({
+      id: EventId.make("approval-safari"),
+      kind: "approval.requested",
+      summary: "App access approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-safari",
+        requestType: "mcp_elicitation_approval",
+        detail: "Allow ChatGPT to use Safari?",
+        appName: "Safari",
+        options,
+      },
+    });
+
+    expect(derivePendingApprovals([activity])).toEqual([
+      {
+        requestId: "req-safari",
+        requestKind: "mcp-elicitation",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        detail: "Allow ChatGPT to use Safari?",
+        appName: "Safari",
+        options,
+      },
+    ]);
+  });
+
+  it("removes an app access approval after a remote client rejects it", () => {
+    const requested = makeActivity({
+      id: EventId.make("approval-safari-open"),
+      kind: "approval.requested",
+      summary: "App access approval requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: { requestId: "req-safari", requestKind: "mcp-elicitation" },
+    });
+    const resolved = makeActivity({
+      id: EventId.make("approval-safari-resolved"),
+      kind: "approval.resolved",
+      summary: "Approval resolved",
+      createdAt: "2026-08-24T00:00:01.000Z",
+      payload: { requestId: "req-safari", decision: "decline" },
+    });
+
+    expect(derivePendingApprovals([requested, resolved])).toEqual([]);
   });
 });
 

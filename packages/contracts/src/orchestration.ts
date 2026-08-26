@@ -22,7 +22,7 @@ import {
   TrimmedString,
   TurnId,
 } from "./baseSchemas.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -117,28 +117,57 @@ export const ModelSelection = ModelSelectionSource.pipe(
 );
 export type ModelSelection = typeof ModelSelection.Type;
 
-export const RuntimeMode = Schema.Literals([
+export const RUNTIME_MODES = [
   "approval-required",
   "auto-accept-edits",
   "auto",
   "full-access",
-]);
+] as const;
+export const RuntimeMode = Schema.Literals(RUNTIME_MODES);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+const FULL_ACCESS_ONLY_RUNTIME_MODES: ReadonlyArray<RuntimeMode> = ["full-access"];
+const FULL_ACCESS_ONLY_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
+  ProviderDriverKind.make("atomic"),
+  ProviderDriverKind.make("pi"),
+]);
+
+/** Runtime modes a provider can safely honor in its session protocol. */
+export function providerRuntimeModes(provider: ProviderDriverKind): ReadonlyArray<RuntimeMode> {
+  return FULL_ACCESS_ONLY_PROVIDERS.has(provider) ? FULL_ACCESS_ONLY_RUNTIME_MODES : RUNTIME_MODES;
+}
+
+export function providerSupportsRuntimeMode(
+  provider: ProviderDriverKind,
+  mode: RuntimeMode,
+): boolean {
+  return providerRuntimeModes(provider).includes(mode);
+}
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
-export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
+export const ProviderRequestKind = Schema.Literals([
+  "command",
+  "file-read",
+  "file-change",
+  "mcp-elicitation",
+]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
 export type AssistantDeliveryMode = typeof AssistantDeliveryMode.Type;
 export const ProviderApprovalDecision = Schema.Literals([
   "accept",
   "acceptForSession",
+  "acceptAlways",
   "decline",
   "cancel",
 ]);
 export type ProviderApprovalDecision = typeof ProviderApprovalDecision.Type;
+export const ProviderApprovalOption = Schema.Struct({
+  decision: ProviderApprovalDecision,
+  label: TrimmedNonEmptyString,
+});
+export type ProviderApprovalOption = typeof ProviderApprovalOption.Type;
 export const ProviderUserInputAnswers = Schema.Record(Schema.String, Schema.Unknown);
 export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 
@@ -376,6 +405,14 @@ export const ThreadTitleRegeneration = Schema.Struct({
 });
 export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
+export const ThreadLinkedPullRequest = Schema.Struct({
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  url: TrimmedNonEmptyString,
+});
+export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -387,6 +424,7 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -395,6 +433,11 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   settledAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  // When the thread last re-entered the active list (any thread.unsettled).
+  // Anchors the active-list sort so an unsettled thread surfaces at the top
+  // instead of sinking back to its creation-order slot. Cleared on settle.
+  // Optional so payloads from pre-stamp servers still decode.
+  unsettledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Snooze is an overlay on the active lifecycle, not a fourth destination:
   // a snoozed thread stays "active" in the model and is only suppressed from
   // the inbox until snoozedUntil passes (or the thread raises its hand).
@@ -457,6 +500,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -465,6 +509,8 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   settledAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  // See OrchestrationThread.unsettledAt: last re-entry into the active list.
+  unsettledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
@@ -773,6 +819,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -852,7 +899,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String,
-    attachments: Schema.Array(UploadChatAttachment),
+    attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -1216,6 +1263,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   updatedAt: IsoDateTime,
 });
 
@@ -1645,11 +1693,11 @@ export const OrchestrationGetWorkflowScriptResult = Schema.Struct({
 export type OrchestrationGetWorkflowScriptResult = typeof OrchestrationGetWorkflowScriptResult.Type;
 
 const WORKFLOW_SCRIPT_ERROR_MESSAGES = {
-  "invalid-path": "Workflow scripts must be absolute .js paths.",
+  "invalid-path": "Workflow scripts must be absolute .js or .ts paths.",
   "root-unavailable": "Script root unavailable.",
   "not-found": "Script not found.",
   "outside-root": "Script path is outside the workflow scripts root.",
-  "not-js": "Resolved script is not a .js file.",
+  "not-js": "Resolved workflow file type is unsupported.",
   "not-regular-file": "Script is not a regular file.",
   "changed-during-read": "Script changed between resolution and open.",
   "read-failed": "Script read failed.",

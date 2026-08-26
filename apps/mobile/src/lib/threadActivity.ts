@@ -1,4 +1,9 @@
-import { ApprovalRequestId, isToolLifecycleItemType } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  isToolLifecycleItemType,
+  ProviderApprovalOption,
+  ProviderRequestKind,
+} from "@t3tools/contracts";
 import type {
   OrchestrationLatestTurn,
   OrchestrationThread,
@@ -11,13 +16,19 @@ import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
+import * as Schema from "effect/Schema";
 
 export interface PendingApproval {
   readonly requestId: ApprovalRequestId;
-  readonly requestKind: "command" | "file-read" | "file-change";
+  readonly requestKind: ProviderRequestKind;
   readonly createdAt: string;
   readonly detail?: string;
+  readonly appName?: string;
+  readonly options?: ReadonlyArray<ProviderApprovalOption>;
 }
+
+const isProviderRequestKind = Schema.is(ProviderRequestKind);
+const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
 
 export interface PendingUserInput {
   readonly requestId: ApprovalRequestId;
@@ -147,6 +158,8 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
     case "file_change_approval":
     case "apply_patch_approval":
       return "file-change";
+    case "mcp_elicitation_approval":
+      return "mcp-elicitation";
     default:
       return null;
   }
@@ -210,6 +223,9 @@ function parseUserInputQuestions(
         id: question.id,
         header: question.header,
         question: question.question,
+        ...(typeof question.defaultValue === "string"
+          ? { defaultValue: question.defaultValue }
+          : {}),
         options,
         multiSelect: question.multiSelect === true,
       };
@@ -250,9 +266,16 @@ function resolvePendingUserInputAnswer(
 
   const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
   if (question.multiSelect) {
-    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+    return selectedOptionLabels.length > 0
+      ? selectedOptionLabels
+      : draft === undefined
+        ? normalizeDraftAnswer(question.defaultValue)
+        : null;
   }
-  return selectedOptionLabels[0] ?? null;
+  return (
+    selectedOptionLabels[0] ??
+    (draft === undefined ? normalizeDraftAnswer(question.defaultValue) : null)
+  );
 }
 
 /** Codex children settle via task.updated (idle/failed/interrupted), never
@@ -1375,13 +1398,14 @@ export function derivePendingApprovals(
         ? (activity.payload as Record<string, unknown>)
         : null;
     const requestId = parseApprovalRequestId(payload?.requestId);
-    const requestKind =
-      payload?.requestKind === "command" ||
-      payload?.requestKind === "file-read" ||
-      payload?.requestKind === "file-change"
-        ? payload.requestKind
-        : requestKindFromRequestType(payload?.requestType);
+    const requestKind = isProviderRequestKind(payload?.requestKind)
+      ? payload.requestKind
+      : requestKindFromRequestType(payload?.requestType);
     const detail = typeof payload?.detail === "string" ? payload.detail : undefined;
+    const appName = typeof payload?.appName === "string" ? payload.appName : undefined;
+    const options = Array.isArray(payload?.options)
+      ? payload.options.filter(isProviderApprovalOption)
+      : undefined;
 
     if (activity.kind === "approval.requested" && requestId && requestKind) {
       openByRequestId.set(requestId, {
@@ -1389,6 +1413,8 @@ export function derivePendingApprovals(
         requestKind,
         createdAt: activity.createdAt,
         ...(detail ? { detail } : {}),
+        ...(appName ? { appName } : {}),
+        ...(options && options.length > 0 ? { options } : {}),
       });
       continue;
     }
@@ -1451,6 +1477,13 @@ export function derivePendingUserInputs(
   }
 
   return Arr.sortWith(openByRequestId.values(), (s) => new Date(s.createdAt), Order.Date);
+}
+
+export function getPendingUserInputCustomAnswer(
+  question: UserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+): string {
+  return draft === undefined ? (question.defaultValue ?? "") : (draft.customAnswer ?? "");
 }
 
 export function setPendingUserInputCustomAnswer(

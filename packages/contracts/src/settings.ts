@@ -225,6 +225,7 @@ export const ClientSettingsSchema = Schema.Struct({
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
   planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Legacy sidebar (the original per-project tree). Deliberately a fresh key
   // (was `sidebarV2Enabled` + `sidebarV2ConfiguredByUser`): decoding drops the
   // old keys, so everyone, including prior beta opt-outs, resets to the new
@@ -372,6 +373,11 @@ export const CodexSettings = makeProviderSettingsSchema(
 );
 export type CodexSettings = typeof CodexSettings.Type;
 
+// Empty, or an integer from 100,000 to 1,000,000. Shared by the full
+// Claude settings schema and its patch so an out-of-range value fails at
+// the update that introduced it.
+const CLAUDE_AUTO_COMPACT_WINDOW_PATTERN = /^(?:|[1-9]\d{5}|1000000)$/;
+
 export const ClaudeSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -409,18 +415,32 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    autoCompactWindow: TrimmedString.check(
+      Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN),
+    ).pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Auto-compact after",
+        description:
+          "Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude's default.",
+        providerSettingsForm: {
+          placeholder: "e.g. 300000",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
   },
   {
-    order: ["binaryPath", "homePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "autoCompactWindow", "launchArgs"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
 export const CursorSettings = makeProviderSettingsSchema(
   {
-    // Enabled by default alongside Codex and Claude Agent.
+    // Off by default like Grok and OpenCode. Users opt in from Settings.
     enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: makeBinaryPathSetting("cursor-agent").pipe(
@@ -529,6 +549,102 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
   },
 );
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
+
+export const AtomicSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("atomic").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Atomic CLI binary used by this instance.",
+        providerSettingsForm: { placeholder: "atomic", clearWhenEmpty: "omit" },
+      }),
+    ),
+    agentDir: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Atomic agent directory",
+        description: "Optional ATOMIC_CODING_AGENT_DIR for isolated Atomic configuration.",
+        providerSettingsForm: { placeholder: "~/.atomic/agent", clearWhenEmpty: "omit" },
+      }),
+    ),
+    trustProjectResources: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Trust project resources",
+        description:
+          "Load project-local Atomic workflows, skills, extensions, prompts, and settings for this instance.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    launchArgs: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description:
+          "Additional CLI arguments passed to Atomic RPC sessions. An explicit --approve or --no-approve overrides the project trust switch.",
+        providerSettingsForm: { placeholder: "e.g. --offline", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["binaryPath", "agentDir", "trustProjectResources", "launchArgs"] },
+);
+export type AtomicSettings = typeof AtomicSettings.Type;
+
+export const PiSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("pi").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Pi coding agent CLI used by this instance.",
+        providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
+      }),
+    ),
+    agentDir: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Pi agent directory",
+        description: "Optional PI_CODING_AGENT_DIR for isolated Pi configuration.",
+        providerSettingsForm: { placeholder: "~/.pi/agent", clearWhenEmpty: "omit" },
+      }),
+    ),
+    trustProjectResources: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Trust project resources",
+        description:
+          "Load project-local Pi skills, extensions, prompts, packages, and settings for this instance.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    launchArgs: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description:
+          "Additional CLI arguments passed to Pi RPC sessions. An explicit --approve or --no-approve overrides the project trust switch.",
+        providerSettingsForm: { placeholder: "e.g. --offline", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["binaryPath", "agentDir", "trustProjectResources", "launchArgs"] },
+);
+export type PiSettings = typeof PiSettings.Type;
 
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -667,6 +783,8 @@ export const ServerSettings = Schema.Struct({
   // owns its config in its own package, this struct shrinks to nothing and
   // is removed entirely.
   providers: Schema.Struct({
+    atomic: AtomicSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     codex: CodexSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -735,6 +853,7 @@ export const ServerSettingsOperation = Schema.Literals([
   "normalize",
   "check-exists",
   "read-file",
+  "read-provider-history",
   "read-secret",
   "remove-secret",
   "remove-stale-secret",
@@ -796,6 +915,11 @@ const ClaudeSettingsPatch = Schema.Struct({
   homePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(TrimmedString),
+  // Validated at the patch boundary so a typo fails the one update with a
+  // schema error instead of a generic whole-settings failure.
+  autoCompactWindow: Schema.optionalKey(
+    TrimmedString.check(Schema.isPattern(CLAUDE_AUTO_COMPACT_WINDOW_PATTERN)),
+  ),
 });
 
 const CursorSettingsPatch = Schema.Struct({
@@ -816,6 +940,24 @@ const OpenCodeSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   serverUrl: Schema.optionalKey(TrimmedString),
   serverPassword: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const AtomicSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  agentDir: Schema.optionalKey(TrimmedString),
+  trustProjectResources: Schema.optionalKey(Schema.Boolean),
+  launchArgs: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const PiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  agentDir: Schema.optionalKey(TrimmedString),
+  trustProjectResources: Schema.optionalKey(Schema.Boolean),
+  launchArgs: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
@@ -855,6 +997,8 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   providers: Schema.optionalKey(
     Schema.Struct({
+      atomic: Schema.optionalKey(AtomicSettingsPatch),
+      pi: Schema.optionalKey(PiSettingsPatch),
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
@@ -913,6 +1057,7 @@ export const ClientSettingsPatch = Schema.Struct({
     ),
   ),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
+  showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),

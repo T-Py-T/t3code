@@ -56,10 +56,17 @@ export function resolvePendingUserInputAnswer(
 
   const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
   if (question.multiSelect) {
-    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+    return selectedOptionLabels.length > 0
+      ? selectedOptionLabels
+      : draft === undefined
+        ? normalizeDraftAnswer(question.defaultValue)
+        : null;
   }
 
-  return selectedOptionLabels[0] ?? null;
+  return (
+    selectedOptionLabels[0] ??
+    (draft === undefined ? normalizeDraftAnswer(question.defaultValue) : null)
+  );
 }
 
 export function setPendingUserInputCustomAnswer(
@@ -151,7 +158,10 @@ export function derivePendingUserInputProgress(
   const resolvedAnswer = activeQuestion
     ? resolvePendingUserInputAnswer(activeQuestion, activeDraft)
     : null;
-  const customAnswer = activeDraft?.customAnswer ?? "";
+  const customAnswer =
+    activeDraft === undefined
+      ? (activeQuestion?.defaultValue ?? "")
+      : (activeDraft.customAnswer ?? "");
   const answeredQuestionCount = countAnsweredPendingUserInputQuestions(questions, draftAnswers);
   const isLastQuestion =
     questions.length === 0 ? true : normalizedQuestionIndex >= questions.length - 1;

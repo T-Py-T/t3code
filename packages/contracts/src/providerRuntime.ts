@@ -14,6 +14,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
+import { ProviderApprovalOption } from "./orchestration.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -26,6 +27,8 @@ const RuntimeEventRawSource = Schema.Union([
   Schema.Literal("claude.sdk.permission"),
   Schema.Literal("codex.sdk.thread-event"),
   Schema.Literal("opencode.sdk.event"),
+  Schema.Literal("atomic.rpc"),
+  Schema.Literal("pi.rpc"),
   Schema.Literal("acp.jsonrpc"),
   Schema.TemplateLiteral(["acp.", Schema.String, ".extension"]),
 ]);
@@ -138,6 +141,7 @@ export const CanonicalRequestType = Schema.Literals([
   "file_change_approval",
   "apply_patch_approval",
   "exec_command_approval",
+  "mcp_elicitation_approval",
   "tool_user_input",
   "dynamic_tool_call",
   "auth_tokens_refresh",
@@ -322,6 +326,7 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   toolUses: Schema.optional(NonNegativeInt),
   durationMs: Schema.optional(NonNegativeInt),
   compactsAutomatically: Schema.optional(Schema.Boolean),
+  autoCompactThreshold: Schema.optional(PositiveInt),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 
@@ -430,6 +435,8 @@ export type ContentDeltaPayload = typeof ContentDeltaPayload.Type;
 const RequestOpenedPayload = Schema.Struct({
   requestType: CanonicalRequestType,
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  appName: Schema.optional(TrimmedNonEmptyStringSchema),
+  options: Schema.optional(Schema.Array(ProviderApprovalOption)),
   args: Schema.optional(Schema.Unknown),
 });
 export type RequestOpenedPayload = typeof RequestOpenedPayload.Type;
@@ -451,6 +458,8 @@ export const UserInputQuestion = Schema.Struct({
   id: TrimmedNonEmptyStringSchema,
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
+  /** Initial editor/input value supplied by a provider extension. */
+  defaultValue: Schema.optional(Schema.String),
   options: Schema.Array(UserInputQuestionOption),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(Effect.succeed(false)),
@@ -567,6 +576,10 @@ const taskAgentLinkageFields = {
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
   parentAgentId: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Provider-stable workflow stage identity (distinct from the T3 task id). */
+  workflowStageId: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Canonical task ids that must settle before this task can run. */
+  dependsOnTaskIds: Schema.optional(Schema.Array(RuntimeTaskId)),
   agentIndex: Schema.optional(NonNegativeInt),
   phaseIndex: Schema.optional(NonNegativeInt),
   phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),

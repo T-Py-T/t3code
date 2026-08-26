@@ -4,6 +4,8 @@ import {
   resolveProviderInstanceEnabled,
   type ModelSelection,
   type ProviderDriverKind,
+  ProviderDriverKind as ProviderDriverKindSchema,
+  providerSupportsTextGeneration,
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
@@ -51,7 +53,16 @@ export function resolveSourceControlWriterModelSelection(
   providers?: ReadonlyArray<ServerProvider>,
 ): ModelSelection {
   const selection = settings.sourceControlWriterModelSelection;
-  if (!selection || !isModelSelectionProviderEnabled(settings, selection)) {
+  const driver = selection
+    ? (settings.providerInstances[selection.instanceId]?.driver ??
+      ProviderDriverKindSchema.make(selection.instanceId))
+    : undefined;
+  if (
+    !selection ||
+    !driver ||
+    !providerSupportsTextGeneration(driver) ||
+    !isModelSelectionProviderEnabled(settings, selection)
+  ) {
     return settings.textGenerationModelSelection;
   }
   if (providers === undefined) {

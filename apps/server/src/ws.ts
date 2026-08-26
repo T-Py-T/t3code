@@ -19,6 +19,8 @@ import {
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
+  type EditorId,
+  type FileManagerRevealKind,
   type OrchestrationClientOrigin,
   type OrchestrationCommand,
   type GitActionProgressEvent,
@@ -32,6 +34,7 @@ import {
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
+  OrchestrationGetWorkflowScriptError,
   ORCHESTRATION_WS_METHODS,
   type ProjectId,
   type ProjectEntriesFailure,
@@ -73,7 +76,10 @@ import {
   projectActivityEvent,
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
-import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import {
+  cleanupFailedUploadedAttachments,
+  normalizeDispatchCommand,
+} from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -92,6 +98,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -132,15 +139,24 @@ import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
+const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
+
+const resolveDiscoveryForConfig = <A, E, R>(
+  discovery: Effect.Effect<A, E, R>,
+  onTimeout: () => A,
+) =>
+  discovery.pipe(
+    Effect.timeoutOption(CONFIG_DISCOVERY_TIMEOUT),
+    Effect.map(Option.getOrElse(onTimeout)),
+  );
 
 export const resolveAvailableEditorsForConfig = <A, E, R>(
   discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
-) =>
-  discovery.pipe(
-    Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
-    Effect.map(Option.getOrElse(() => [])),
-  );
+) => resolveDiscoveryForConfig(discovery, () => []);
+
+export const resolveFileManagerRevealKindForConfig = <E, R>(
+  discovery: Effect.Effect<FileManagerRevealKind | undefined, E, R>,
+) => resolveDiscoveryForConfig(discovery, () => undefined);
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -356,6 +372,7 @@ function toAuthAccessStreamEvent(
 
 const isClientSurface = Schema.is(ClientSurface);
 const MAX_CLIENT_APP_VERSION_LENGTH = 64;
+const MAX_CLIENT_DEVICE_MODEL_LENGTH = 80;
 
 // Optional client identity announced on the /ws upgrade URL next to wsTicket.
 // Lenient by design: absent or malformed values degrade to {} so a connection
@@ -381,6 +398,28 @@ const clientOriginAnalyticsProps = (origin: OrchestrationClientOrigin) => ({
   ...(origin.surface !== undefined ? { surface: origin.surface } : {}),
   ...(origin.appVersion !== undefined ? { appVersion: origin.appVersion } : {}),
 });
+
+function readMobileDeviceAnalyticsProps(request: HttpServerRequest.HttpServerRequest) {
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url) || url.value.searchParams.get("clientSurface") !== "mobile") {
+    return {};
+  }
+
+  const os = url.value.searchParams.get("clientOs");
+  const rawOsMajorVersion = url.value.searchParams.get("clientOsMajorVersion") ?? "";
+  const osMajorVersion = Number(rawOsMajorVersion);
+  const deviceModel = url.value.searchParams.get("clientDeviceModel")?.trim() ?? "";
+
+  return {
+    ...(os === "iOS" || os === "Android" ? { os } : {}),
+    ...(rawOsMajorVersion !== "" && Number.isInteger(osMajorVersion) && osMajorVersion > 0
+      ? { osMajorVersion }
+      : {}),
+    ...(deviceModel !== "" && deviceModel.length <= MAX_CLIENT_DEVICE_MODEL_LENGTH
+      ? { deviceModel }
+      : {}),
+  };
+}
 
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
@@ -1082,6 +1121,14 @@ const makeWsRpcLayer = (
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
+        const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
+          externalLauncher.resolveAvailableEditors(),
+        );
+        const fileManagerRevealKind = availableEditors.includes("file-manager")
+          ? yield* resolveFileManagerRevealKindForConfig(
+              externalLauncher.resolveFileManagerRevealKind(),
+            )
+          : undefined;
 
         return {
           environment,
@@ -1091,9 +1138,7 @@ const makeWsRpcLayer = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          availableEditors: yield* resolveAvailableEditorsForConfig(
-            externalLauncher.resolveAvailableEditors(),
-          ),
+          availableEditors,
           // Same discovery-with-timeout treatment as editors: a slow probe
           // must not stall server.getConfig, so it degrades to no targets.
           remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
@@ -1111,6 +1156,12 @@ const makeWsRpcLayer = (
           },
           settings,
           shellResumeCompletionMarker: true,
+          ...(fileManagerRevealKind === undefined
+            ? {}
+            : {
+                shellRevealInFileManager: true,
+                shellRevealInFileManagerKind: fileManagerRevealKind,
+              }),
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
         };
@@ -1159,7 +1210,9 @@ const makeWsRpcLayer = (
                     ),
                   )
                 : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              const result = yield* dispatchNormalizedCommand(normalizedCommand).pipe(
+                Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)),
+              );
               yield* recordClientCommandAnalytics(normalizedCommand);
               if (parkingCommand) {
                 const parkingKind = parkingCommand.type === "thread.archive" ? "archive" : "settle";
@@ -1222,7 +1275,36 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getWorkflowScript,
-            readWorkflowScript({ scriptPath: input.scriptPath }),
+            Effect.gen(function* () {
+              const projectionFailure = (cause: unknown) =>
+                new OrchestrationGetWorkflowScriptError({
+                  reason: "root-unavailable",
+                  scriptPath: input.scriptPath,
+                  cause,
+                });
+              const thread = yield* projectionSnapshotQuery
+                .getThreadShellById(input.threadId)
+                .pipe(Effect.mapError(projectionFailure));
+              if (Option.isNone(thread)) {
+                return yield* new OrchestrationGetWorkflowScriptError({
+                  reason: "not-found",
+                  scriptPath: input.scriptPath,
+                });
+              }
+              const project = yield* projectionSnapshotQuery
+                .getProjectShellById(thread.value.projectId)
+                .pipe(Effect.mapError(projectionFailure));
+              if (Option.isNone(project)) {
+                return yield* new OrchestrationGetWorkflowScriptError({
+                  reason: "root-unavailable",
+                  scriptPath: input.scriptPath,
+                });
+              }
+              return yield* readWorkflowScript({
+                scriptPath: input.scriptPath,
+                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+              });
+            }),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
@@ -1951,6 +2033,16 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.attachmentsCreateUploadUrl]: (input) =>
+          observeRpcEffect(WS_METHODS.attachmentsCreateUploadUrl, issueAttachmentUploadUrl(input), {
+            "rpc.aggregate": "workspace",
+          }),
+        [WS_METHODS.attachmentsDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.attachmentsDelete,
+            deletePendingAttachment(input.attachmentId),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.assetsCreateUrl]: (input) =>
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,
@@ -2418,7 +2510,10 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         );
         const clientOrigin = readClientConnectionOrigin(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
-        yield* analytics.record("client.connected", clientOriginAnalyticsProps(clientOrigin));
+        yield* analytics.record("client.connected", {
+          ...clientOriginAnalyticsProps(clientOrigin),
+          ...readMobileDeviceAnalyticsProps(request),
+        });
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(

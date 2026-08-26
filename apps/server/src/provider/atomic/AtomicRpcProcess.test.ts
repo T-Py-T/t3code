@@ -116,7 +116,10 @@ describe("AtomicRpcProcess", () => {
       });
       const result = yield* rpc
         .request({ type: "get_state" })
-        .pipe(Effect.timeout(Duration.millis(500)), Effect.result);
+        // The budget includes spawning the mock Node process. Under the normal
+        // parallel suite load, process startup alone can exceed 500ms. Two
+        // seconds still proves EOF beats the 10-second RPC request timeout.
+        .pipe(Effect.timeout(Duration.seconds(2)), Effect.result);
       assert.strictEqual(result._tag, "Failure");
       if (result._tag === "Failure") {
         assert.strictEqual(result.failure._tag, "AtomicRpcError");

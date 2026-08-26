@@ -36,9 +36,10 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
     !NodePath.isAbsolute(requested) ||
     (requestedExtension !== ".js" && requestedExtension !== ".ts")
   ) {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "invalid-path", scriptPath: requested }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "invalid-path",
+      scriptPath: requested,
+    });
   }
 
   const configuredRoots = [
@@ -47,6 +48,7 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
       ? [
           {
             path: NodePath.resolve(input.workspaceRoot, ".atomic", "workflows"),
+            workspaceRoot: NodePath.resolve(input.workspaceRoot),
             extensions: new Set([".js", ".ts"]),
           },
         ]
@@ -57,7 +59,17 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
       const resolved = await Promise.all(
         configuredRoots.map(async (root) => {
           try {
-            return { ...root, path: await NodeFSP.realpath(root.path) };
+            const resolvedRoot = await NodeFSP.realpath(root.path);
+            if ("workspaceRoot" in root) {
+              const resolvedWorkspace = await NodeFSP.realpath(root.workspaceRoot);
+              if (
+                resolvedRoot !== resolvedWorkspace &&
+                !resolvedRoot.startsWith(`${resolvedWorkspace}${NodePath.sep}`)
+              ) {
+                return null;
+              }
+            }
+            return { ...root, path: resolvedRoot };
           } catch {
             return null;
           }
@@ -95,14 +107,16 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
     (root) => resolved === root.path || resolved.startsWith(`${root.path}${NodePath.sep}`),
   );
   if (!containingRoot) {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "outside-root", scriptPath: resolved }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "outside-root",
+      scriptPath: resolved,
+    });
   }
   if (!containingRoot.extensions.has(NodePath.extname(resolved))) {
-    return yield* Effect.fail(
-      new OrchestrationGetWorkflowScriptError({ reason: "not-js", scriptPath: resolved }),
-    );
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "not-js",
+      scriptPath: resolved,
+    });
   }
 
   // TOCTOU-safe read (review finding): open FIRST, then verify what was

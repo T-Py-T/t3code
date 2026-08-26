@@ -65,14 +65,14 @@ export interface AtomicRpcProcessOptions {
   readonly args?: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly environment?: NodeJS.ProcessEnv;
-  /** Budget for the first command, which pays Atomic's startup network cost. */
+  /** Budget for commands issued before the first response, which pay the startup network cost. */
   readonly startupTimeout?: Duration.Input;
-  /** Budget for every command after Atomic has answered once. */
+  /** Budget for every command after the runtime has answered once. */
   readonly requestTimeout?: Duration.Input;
 }
 
 const DEFAULT_REQUEST_TIMEOUT = Duration.seconds(15);
-// Atomic performs network work before it answers its first command: it
+// Atomic performs network work before it sends its first response: it
 // refreshes OAuth credentials and fetches the model catalog, rewriting
 // auth.json and models-store.json. Measured cold start is ~28s against a
 // fast connection and warm start ~0.7s, so the first round trip gets a much
@@ -118,7 +118,7 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   const writeMutex = yield* Semaphore.make(1);
   let requestSequence = 0;
   let eventSequence = 0;
-  // False until Atomic answers its first command, i.e. until startup network
+  // False until Atomic sends its first response, i.e. until startup network
   // work has finished. Gates which timeout `request` applies.
   let settled = false;
 

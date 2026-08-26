@@ -77,6 +77,16 @@ npm install --global @bastani/atomic
 Pi 0.84.3 or newer is recommended. Atomic and Pi discover the models and credentials configured in
 their own agent directories. T3 Code does not copy or manage those credentials.
 
+### Atomic Workflow Visibility
+
+In the web and desktop clients, Atomic workflow runs appear in the **Agents** panel with live stage
+status, dependency order, summaries, and an **Awaiting input** state. When the workflow has a `.js`
+or `.ts` script in the current workspace's `.atomic/workflows` directory, **{} script** opens its
+contained, read-only source.
+
+Atomic's parent RPC stream does not include private child-stage reasoning or tool transcripts, so
+T3 Code reports only the workflow lifecycle and summary details Atomic publishes.
+
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.
 
@@ -94,8 +104,8 @@ started T3 Code.
 
 Provider auth is required before you start a session with that provider, not before you start
 T3 Code. You can install T3 Code, open it, and add providers afterwards. A provider that is not
-authenticated shows its status in **Settings** and fails at session start with the login command
-to run.
+authenticated shows its status in **Settings** and reports its authentication or configuration
+guidance if a session cannot start.
 
 For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./providers-claude.md).
 

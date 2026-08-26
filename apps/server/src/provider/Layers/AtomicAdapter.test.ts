@@ -243,6 +243,33 @@ describe("AtomicAdapter", () => {
           awaitingInput?.type === "task.progress" ? awaitingInput.payload.summary : undefined,
           "Approve the synthesized result?",
         );
+        assert.isDefined(
+          events.find(
+            (event) =>
+              event.type === "task.progress" &&
+              event.payload.taskId === "workflow-run-1" &&
+              event.payload.status === "waiting" &&
+              event.payload.summary === "Provide workflow inputs.",
+          ),
+        );
+        const resumedStage = events.find(
+          (event) =>
+            event.type === "task.updated" &&
+            event.payload.taskId === "workflow-run-1:wf:approve" &&
+            event.payload.status === "running",
+        );
+        assert.equal(
+          resumedStage?.type === "task.updated" ? resumedStage.payload.role : undefined,
+          "workflow stage",
+        );
+        const completedStage = events.find(
+          (event) =>
+            event.type === "task.completed" && event.payload.taskId === "workflow-run-1:wf:approve",
+        );
+        assert.equal(
+          completedStage?.type === "task.completed" ? completedStage.payload.role : undefined,
+          "workflow stage",
+        );
         const completed = events.find(
           (event) => event.type === "task.completed" && event.payload.taskId === "workflow-run-1",
         );
@@ -364,6 +391,9 @@ describe("AtomicAdapter", () => {
         "Edit this value before the workflow continues.",
       );
       assert.equal(requested.payload.questions[0]?.defaultValue, "ORIGINAL_WORKFLOW_VALUE");
+      if (requested.requestId === undefined) {
+        return assert.fail("Expected the Atomic user-input request to have an id.");
+      }
 
       // Deliberately cross the ordinary command deadline before the user answers.
       yield* Effect.sleep(Duration.millis(80));
@@ -373,6 +403,126 @@ describe("AtomicAdapter", () => {
       yield* Fiber.join(sendFiber);
       const completed = yield* Fiber.join(completedFiber).pipe(Effect.map(Option.getOrThrow));
       assert.equal(completed.type, "turn.completed");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("stops a session while its prompt request is awaiting user input", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-stop-awaiting-input");
+      const requestedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "user-input.requested"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "/t3-ui-wait", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Fiber.join(requestedFiber).pipe(Effect.map(Option.getOrThrow));
+
+      yield* adapter.stopSession(threadId);
+
+      const sendResult = yield* Fiber.join(sendFiber).pipe(Effect.result);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(sendResult._tag, "Failure");
+      assert.isFalse(yield* adapter.hasSession(threadId));
+      assert.isDefined(
+        events.find(
+          (event) => event.type === "turn.completed" && event.payload.state === "interrupted",
+        ),
+      );
+      assert.isDefined(events.find((event) => event.type === "user-input.resolved"));
+      assert.equal(events.at(-1)?.type, "session.exited");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("fails and retires a session when the prompt request is rejected", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-prompt-rejected");
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const result = yield* adapter
+        .sendTurn({ threadId, input: "/t3-prompt-rejected", attachments: [] })
+        .pipe(Effect.result);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(result._tag, "Failure");
+      assert.isFalse(yield* adapter.hasSession(threadId));
+      assert.isDefined(
+        events.find((event) => event.type === "turn.completed" && event.payload.state === "failed"),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("drains acknowledged tool events before completing an interruption", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-abort-drain");
+      const toolStartedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "item.started" &&
+            event.payload.itemType === "dynamic_tool_call" &&
+            event.itemId === "abort-tool-1",
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId, input: "/t3-abort-drain", attachments: [] });
+      yield* Fiber.join(toolStartedFiber).pipe(Effect.map(Option.getOrThrow));
+      yield* adapter.interruptTurn(threadId);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const toolCompletedIndex = events.findIndex(
+        (event) =>
+          event.type === "item.completed" &&
+          event.payload.itemType === "dynamic_tool_call" &&
+          event.itemId === "abort-tool-1",
+      );
+      const turnCompletedIndex = events.findIndex((event) => event.type === "turn.completed");
+      assert.isAtLeast(toolCompletedIndex, 0);
+      assert.isTrue(toolCompletedIndex < turnCompletedIndex);
+      assert.equal(
+        events[turnCompletedIndex]?.type === "turn.completed"
+          ? events[turnCompletedIndex].payload.state
+          : undefined,
+        "interrupted",
+      );
     }).pipe(Effect.scoped),
   );
 });

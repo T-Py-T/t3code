@@ -568,7 +568,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       if (workflowRun.scriptPath === undefined && /^[a-zA-Z0-9._-]+$/u.test(workflowName)) {
         for (const extension of ["ts", "js"] as const) {
           const candidate = path.resolve(
-            context.session.cwd,
+            context.session.cwd!,
             ".atomic",
             "workflows",
             `${workflowName}.${extension}`,
@@ -602,6 +602,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             stage.awaitingInput = true;
           }
         }
+      }
+      if (stage && (entryType === "workflow.stage.resumed" || entryType === "workflow.stage.end")) {
+        stage.awaitingInput = false;
       }
       const stageName = stage?.name;
       const source = raw(event, field(event, "type") ?? "workflow_lifecycle");
@@ -699,8 +702,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         });
         return true;
       }
-      if (entryType === "workflow.stage.waiting" && stage) {
-        const prompt = field(data, "promptMessage") ?? `Awaiting input for ${stage.name}`;
+      if (entryType === "workflow.stage.waiting" || entryType === "workflow.run.waiting") {
+        const prompt =
+          field(data, "promptMessage") ?? `Awaiting input for ${stage?.name ?? workflowName}`;
         yield* publish({
           type: "task.progress",
           ...(yield* eventStamp()),
@@ -1138,9 +1142,12 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       if (context.stopped) return;
       context.stopped = true;
       yield* context.rpc.kill;
+      yield* resolveAbandonedUiRequests(context);
+      yield* completeActiveTurn(context, "interrupted", "Session stopped.");
       yield* Effect.ignore(Scope.close(context.scope, Exit.void));
-      sessions.delete(context.threadId);
-      if (emitExit) {
+      const ownsSession = sessions.get(context.threadId) === context;
+      if (ownsSession) sessions.delete(context.threadId);
+      if (emitExit && ownsSession) {
         yield* publish({
           type: "session.exited",
           ...(yield* eventStamp()),
@@ -1484,6 +1491,14 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
                   cause,
                 }),
             ),
+            Effect.tapError((cause) =>
+              context.stopped
+                ? Effect.void
+                : Effect.gen(function* () {
+                    yield* completeActiveTurn(context, "failed", cause.message);
+                    yield* stopSessionInternal(context, false);
+                  }),
+            ),
           );
         // Atomic writes custom/workflow events before the prompt response, but
         // the transport and adapter consume on separate fibers. Drain those
@@ -1511,7 +1526,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           // the extension-only fallback, or a genuine terminal error can be
           // overwritten by a synthetic successful completion.
           yield* awaitMappedEvents(context, stateResponse.precedingEventSequence);
-          if (context.activeTurnId !== turnId) return;
+          if (context.activeTurnId !== turnId) {
+            return { threadId: input.threadId, turnId, resumeCursor: context.session.resumeCursor };
+          }
           const state = Option.getOrUndefined(decodeState(stateResponse.data));
           // Extension commands such as `/workflow list` can emit custom chat
           // messages without ever starting a Pi agent run. Their prompt
@@ -1529,7 +1546,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
   const interruptTurn: ProviderAdapterShape<ProviderAdapterError>["interruptTurn"] = (threadId) =>
     Effect.gen(function* () {
       const context = yield* requireSession(threadId);
-      yield* context.rpc.request({ type: "abort" }).pipe(
+      const response = yield* context.rpc.request({ type: "abort" }).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderAdapterRequestError({
@@ -1540,6 +1557,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             }),
         ),
       );
+      yield* awaitMappedEvents(context, response.precedingEventSequence);
       yield* resolveAbandonedUiRequests(context);
       yield* completeActiveTurn(context, "interrupted");
     });
@@ -1621,10 +1639,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
     respondToRequest,
     respondToUserInput,
     stopSession: (threadId) =>
-      withThreadLock(
-        threadId,
-        Effect.flatMap(requireSession(threadId), (context) => stopSessionInternal(context, true)),
-      ),
+      Effect.flatMap(requireSession(threadId), (context) => stopSessionInternal(context, true)),
     listSessions: () => Effect.sync(() => Array.from(sessions.values(), ({ session }) => session)),
     hasSession: (threadId) =>
       Effect.sync(() => {

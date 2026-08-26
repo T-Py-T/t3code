@@ -223,6 +223,9 @@ function parseUserInputQuestions(
         id: question.id,
         header: question.header,
         question: question.question,
+        ...(typeof question.defaultValue === "string"
+          ? { defaultValue: question.defaultValue }
+          : {}),
         options,
         multiSelect: question.multiSelect === true,
       };
@@ -256,7 +259,7 @@ function resolvePendingUserInputAnswer(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): string | ReadonlyArray<string> | null {
-  const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
+  const customAnswer = normalizeDraftAnswer(getPendingUserInputCustomAnswer(question, draft));
   if (customAnswer) {
     return customAnswer;
   }
@@ -1467,6 +1470,13 @@ export function derivePendingUserInputs(
   }
 
   return Arr.sortWith(openByRequestId.values(), (s) => new Date(s.createdAt), Order.Date);
+}
+
+export function getPendingUserInputCustomAnswer(
+  question: UserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+): string {
+  return draft?.customAnswer ?? question.defaultValue ?? "";
 }
 
 export function setPendingUserInputCustomAnswer(

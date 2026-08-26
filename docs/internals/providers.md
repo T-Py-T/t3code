@@ -38,8 +38,9 @@ Two registries separate configuration from live processes:
 [`ProviderService`][service] sits on top. It combines the adapter registry with the provider session
 directory to route session and turn operations for a thread, so callers name a thread, not an agent.
 
-Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
-orchestration, contract, or client change is required for the common case.
+Adding a built-in driver also requires its settings schema and default-instance hydration plus its
+client presentation metadata. The orchestration model remains provider-agnostic; change its
+contracts only when the provider introduces a capability that must cross the wire.
 
 Pi and Atomic share a Pi-RPC lifecycle adapter, while Atomic adds workflow lifecycle projection and
 workflow source inspection. See [Pi and Atomic providers](./providers-pi-atomic.md) for the protocol

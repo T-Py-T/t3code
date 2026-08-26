@@ -1,8 +1,10 @@
-import type {
-  ModelSelection,
-  ProviderOptionDescriptor,
-  ProviderOptionSelection,
-  RuntimeMode,
+import {
+  ProviderDriverKind,
+  providerRuntimeModes,
+  type ModelSelection,
+  type ProviderOptionDescriptor,
+  type ProviderOptionSelection,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import type { LegendListRenderItemProps } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
@@ -334,6 +336,7 @@ export function useExistingThreadSettingsRoutePresentation() {
 type ThreadSettingsSessionValue = {
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly runtimeMode: RuntimeMode;
+  readonly runtimeModeChoices: typeof RUNTIME_MODE_CHOICES;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly providerExpansionOverrides: ReadonlySet<string>;
@@ -366,6 +369,32 @@ function ThreadSettingsSessionProvider(
     () => new Set(),
   );
   const [pendingModel, setPendingModel] = useState<ModelOption | null>(null);
+
+  const selectedProviderDriver = useMemo(
+    () =>
+      props.providerGroups
+        .flatMap((group) => group.models)
+        .find(
+          (model) =>
+            model.selection.instanceId === props.selectedModel?.instanceId &&
+            model.selection.model === props.selectedModel.model,
+        )?.providerDriver,
+    [props.providerGroups, props.selectedModel],
+  );
+  const supportedRuntimeModes = useMemo(
+    () => providerRuntimeModes(ProviderDriverKind.make(selectedProviderDriver ?? "")),
+    [selectedProviderDriver],
+  );
+  const runtimeModeChoices = useMemo(
+    () => RUNTIME_MODE_CHOICES.filter((choice) => supportedRuntimeModes.includes(choice.mode)),
+    [supportedRuntimeModes],
+  );
+
+  useEffect(() => {
+    if (!supportedRuntimeModes.includes(props.runtimeMode)) {
+      props.onUpdateRuntimeMode("full-access");
+    }
+  }, [props.onUpdateRuntimeMode, props.runtimeMode, supportedRuntimeModes]);
 
   const isApplied = useCallback(
     (option: ModelOption) =>
@@ -403,8 +432,15 @@ function ThreadSettingsSessionProvider(
     if (pendingModel) {
       void Haptics.selectionAsync();
       props.onSelectModel(pendingModel);
+      if (
+        !providerRuntimeModes(ProviderDriverKind.make(pendingModel.providerDriver)).includes(
+          props.runtimeMode,
+        )
+      ) {
+        props.onUpdateRuntimeMode("full-access");
+      }
     }
-  }, [pendingModel, props.onSelectModel]);
+  }, [pendingModel, props.onSelectModel, props.onUpdateRuntimeMode, props.runtimeMode]);
 
   const applyOptionChange = useCallback(
     (id: string, value: string | boolean) => {
@@ -452,6 +488,7 @@ function ThreadSettingsSessionProvider(
     () => ({
       providerGroups: props.providerGroups,
       runtimeMode: props.runtimeMode,
+      runtimeModeChoices,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
       displayedDescriptors,
       providerExpansionOverrides,
@@ -484,6 +521,7 @@ function ThreadSettingsSessionProvider(
       props.onUpdateRuntimeMode,
       props.providerGroups,
       props.runtimeMode,
+      runtimeModeChoices,
       searchQuery,
       showLegacyToggle,
       toggleProvider,
@@ -708,7 +746,8 @@ function ThreadSettingsOptionsItem(props: {
             isLast
             label="Runtime"
             value={
-              RUNTIME_MODE_CHOICES.find((choice) => choice.mode === session.runtimeMode)?.label
+              session.runtimeModeChoices.find((choice) => choice.mode === session.runtimeMode)
+                ?.label
             }
             onPress={() => props.onOpenSubmenu({ kind: "runtime" })}
           />
@@ -858,7 +897,7 @@ function ThreadSettingsChoiceContent(props: {
   const submenuContent =
     props.submenu.kind === "runtime"
       ? {
-          rows: RUNTIME_MODE_CHOICES.map((choice) => ({
+          rows: session.runtimeModeChoices.map((choice) => ({
             id: choice.mode,
             label: choice.label,
             description: choice.description,

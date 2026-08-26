@@ -556,6 +556,102 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
 );
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
 
+export const AtomicSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("atomic").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Atomic CLI binary used by this instance.",
+        providerSettingsForm: { placeholder: "atomic", clearWhenEmpty: "omit" },
+      }),
+    ),
+    agentDir: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Atomic agent directory",
+        description: "Optional ATOMIC_CODING_AGENT_DIR for isolated Atomic configuration.",
+        providerSettingsForm: { placeholder: "~/.atomic/agent", clearWhenEmpty: "omit" },
+      }),
+    ),
+    trustProjectResources: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Trust project resources",
+        description:
+          "Load project-local Atomic workflows, skills, extensions, prompts, and settings for this instance.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    launchArgs: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description:
+          "Additional CLI arguments passed to Atomic RPC sessions. An explicit --approve or --no-approve overrides the project trust switch.",
+        providerSettingsForm: { placeholder: "e.g. --offline", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["binaryPath", "agentDir", "trustProjectResources", "launchArgs"] },
+);
+export type AtomicSettings = typeof AtomicSettings.Type;
+
+export const PiSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("pi").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Pi coding agent CLI used by this instance.",
+        providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
+      }),
+    ),
+    agentDir: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Pi agent directory",
+        description: "Optional PI_CODING_AGENT_DIR for isolated Pi configuration.",
+        providerSettingsForm: { placeholder: "~/.pi/agent", clearWhenEmpty: "omit" },
+      }),
+    ),
+    trustProjectResources: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Trust project resources",
+        description:
+          "Load project-local Pi skills, extensions, prompts, packages, and settings for this instance.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    launchArgs: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description:
+          "Additional CLI arguments passed to Pi RPC sessions. An explicit --approve or --no-approve overrides the project trust switch.",
+        providerSettingsForm: { placeholder: "e.g. --offline", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["binaryPath", "agentDir", "trustProjectResources", "launchArgs"] },
+);
+export type PiSettings = typeof PiSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -693,6 +789,8 @@ export const ServerSettings = Schema.Struct({
   // owns its config in its own package, this struct shrinks to nothing and
   // is removed entirely.
   providers: Schema.Struct({
+    atomic: AtomicSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     codex: CodexSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -851,6 +949,24 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const AtomicSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  agentDir: Schema.optionalKey(TrimmedString),
+  trustProjectResources: Schema.optionalKey(Schema.Boolean),
+  launchArgs: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const PiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  agentDir: Schema.optionalKey(TrimmedString),
+  trustProjectResources: Schema.optionalKey(Schema.Boolean),
+  launchArgs: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
@@ -887,6 +1003,8 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   providers: Schema.optionalKey(
     Schema.Struct({
+      atomic: Schema.optionalKey(AtomicSettingsPatch),
+      pi: Schema.optionalKey(PiSettingsPatch),
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),

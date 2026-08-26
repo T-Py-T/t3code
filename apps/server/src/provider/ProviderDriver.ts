@@ -71,6 +71,8 @@ export interface ProviderInstance {
   readonly snapshot: ServerProviderShape;
   readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
   readonly textGeneration: TextGeneration.TextGeneration["Service"];
+  /** False for session-only runtimes that cannot generate auxiliary text. */
+  readonly supportsTextGeneration?: boolean;
 }
 
 export interface ProviderContinuationIdentity {

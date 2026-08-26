@@ -666,6 +666,16 @@ export const OpenCodeIcon: Icon = (props) => (
   </svg>
 );
 
+export const AtomicIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="32" height="32" rx="7" fill="#1E1E2E" />
+    <path d="M9 9h14v5h-9v9H9V9Z" fill="#45475A" opacity=".72" />
+    <path d="M14 9h9v14h-5v-9h-4V9Z" fill="#89B4FA" />
+    <rect x="10" y="10" width="3" height="3" rx=".5" fill="#B4BEFE" />
+    <rect x="19" y="19" width="3" height="3" rx=".5" fill="#74C7EC" />
+  </svg>
+);
+
 export const GithubCopilotIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}

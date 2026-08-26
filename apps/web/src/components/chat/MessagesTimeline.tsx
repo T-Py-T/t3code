@@ -2555,19 +2555,31 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
   const workflowName =
     workflowGroup?.workflow.workflowName ?? workflowGroup?.workflow.title ?? null;
 
-  // One steady in-flight presentation (monitoring-pill rule): waiting and
-  // stalled agents read as working; only settled states differentiate.
-  const working = running + waiting;
-  const dotClass = live ? "bg-info" : failed > 0 ? "bg-destructive" : "bg-success";
-  const lead = live
-    ? `Kicked off ${agentCount} subagent${agentCount === 1 ? "" : "s"}`
-    : `Ran ${agentCount} subagent${agentCount === 1 ? "" : "s"}`;
+  const waitingForInput = live && waiting > 0 && running === 0;
+  const dotClass = waitingForInput
+    ? "bg-warning"
+    : live
+      ? "bg-info"
+      : failed > 0
+        ? "bg-destructive"
+        : "bg-success";
+  const lead = spawn.workflowId
+    ? live
+      ? waitingForInput
+        ? "Workflow awaiting input"
+        : "Workflow running"
+      : "Workflow finished"
+    : live
+      ? `Kicked off ${agentCount} subagent${agentCount === 1 ? "" : "s"}`
+      : `Ran ${agentCount} subagent${agentCount === 1 ? "" : "s"}`;
   const status = live
-    ? livePhase
-      ? `${livePhase.title} · ${livePhase.activeCount} working`
-      : working > 0
-        ? `${working} working`
-        : "working"
+    ? waitingForInput
+      ? `${waiting} awaiting input`
+      : livePhase
+        ? `${livePhase.title} · ${livePhase.activeCount} working`
+        : running > 0
+          ? `${running} working`
+          : "working"
     : failed > 0
       ? `${failed} failed`
       : "✓ completed";
@@ -2589,7 +2601,15 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
         {totalTokens > 0 ? (
           <span className="tabular-nums">Σ {formatSubagentTokenCount(totalTokens)}</span>
         ) : null}
-        <span className="text-info-foreground">{live ? "Open Agents ▸" : "View ▸"}</span>
+        <span className="text-info-foreground">
+          {spawn.workflowId
+            ? live
+              ? "Open stages ▸"
+              : "View stages ▸"
+            : live
+              ? "Open Agents ▸"
+              : "View ▸"}
+        </span>
       </span>
     </button>
   );

@@ -16,7 +16,9 @@ import {
   buildPendingUserInputAnswers,
   buildThreadFeed,
   derivePendingApprovals,
+  derivePendingUserInputs,
   deriveThreadFeedPresentation,
+  getPendingUserInputCustomAnswer,
   isPendingUserInputOptionSelected,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -140,6 +142,70 @@ describe("pending user input answers", () => {
         "  Orders  ",
       ),
     ).toBe(false);
+  });
+
+  it("preserves provider defaults for display and unchanged submission", () => {
+    const requested = makeActivity({
+      id: EventId.make("user-input-default"),
+      kind: "user-input.requested",
+      summary: "User input requested",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      payload: {
+        requestId: "request-default",
+        questions: [
+          {
+            id: "editor",
+            header: "Editor",
+            question: "Review this value",
+            defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+            options: [{ label: "Custom", description: "Enter a custom value" }],
+            multiSelect: false,
+          },
+        ],
+      },
+    });
+
+    const pending = derivePendingUserInputs([requested]);
+    const question = pending[0]?.questions[0];
+    expect(question?.defaultValue).toBe("ORIGINAL_WORKFLOW_VALUE");
+    expect(question && getPendingUserInputCustomAnswer(question, undefined)).toBe(
+      "ORIGINAL_WORKFLOW_VALUE",
+    );
+    expect(question && buildPendingUserInputAnswers([question], {})).toEqual({
+      editor: "ORIGINAL_WORKFLOW_VALUE",
+    });
+  });
+
+  it("submits a selected option instead of an editor default", () => {
+    const question = {
+      id: "editor-with-options",
+      header: "Editor",
+      question: "Review this value",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+      options: [{ label: "Use workflow", description: "Use the workflow value" }],
+      multiSelect: false,
+    };
+    const draft = togglePendingUserInputOptionSelection(question, undefined, "Use workflow");
+
+    expect(getPendingUserInputCustomAnswer(question, draft)).toBe("");
+    expect(buildPendingUserInputAnswers([question], { [question.id]: draft })).toEqual({
+      [question.id]: "Use workflow",
+    });
+  });
+
+  it("does not restore a provider default after the user clears it", () => {
+    const question = {
+      id: "cleared-editor",
+      header: "Editor",
+      question: "Review this value",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+      options: [{ label: "Custom", description: "Enter a custom value" }],
+      multiSelect: false,
+    };
+
+    expect(buildPendingUserInputAnswers([question], { [question.id]: { customAnswer: "" } })).toBe(
+      null,
+    );
   });
 });
 

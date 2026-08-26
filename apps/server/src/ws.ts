@@ -34,6 +34,7 @@ import {
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
+  OrchestrationGetWorkflowScriptError,
   ORCHESTRATION_WS_METHODS,
   type ProjectId,
   type ProjectEntriesFailure,
@@ -1274,7 +1275,36 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getWorkflowScript,
-            readWorkflowScript({ scriptPath: input.scriptPath }),
+            Effect.gen(function* () {
+              const projectionFailure = (cause: unknown) =>
+                new OrchestrationGetWorkflowScriptError({
+                  reason: "root-unavailable",
+                  scriptPath: input.scriptPath,
+                  cause,
+                });
+              const thread = yield* projectionSnapshotQuery
+                .getThreadShellById(input.threadId)
+                .pipe(Effect.mapError(projectionFailure));
+              if (Option.isNone(thread)) {
+                return yield* new OrchestrationGetWorkflowScriptError({
+                  reason: "not-found",
+                  scriptPath: input.scriptPath,
+                });
+              }
+              const project = yield* projectionSnapshotQuery
+                .getProjectShellById(thread.value.projectId)
+                .pipe(Effect.mapError(projectionFailure));
+              if (Option.isNone(project)) {
+                return yield* new OrchestrationGetWorkflowScriptError({
+                  reason: "root-unavailable",
+                  scriptPath: input.scriptPath,
+                });
+              }
+              return yield* readWorkflowScript({
+                scriptPath: input.scriptPath,
+                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+              });
+            }),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>

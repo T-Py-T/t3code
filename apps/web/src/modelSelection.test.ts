@@ -323,6 +323,33 @@ describe("instance-scoped model selection", () => {
       model: "openai/gpt-5.5",
     });
   });
+
+  it("excludes session-only providers from auxiliary text generation selection", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("atomic"),
+        instanceId: "atomic",
+        models: ["openai-codex/gpt-5.4"],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        models: ["claude-sonnet-4-6"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      textGenerationModelSelection: {
+        instanceId: ProviderInstanceId.make("atomic"),
+        model: "openai-codex/gpt-5.4",
+      },
+    };
+
+    expect(resolveAppModelSelectionState(settings, providers)).toEqual({
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-4-6",
+    });
+  });
 });
 
 describe("withoutPlanAgentSelection", () => {

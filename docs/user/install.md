@@ -54,16 +54,45 @@ yay -S t3code-nightly-bin
 T3 Code drives provider CLIs; it does not ship them. Install the CLI for each provider you want
 to use, then authenticate it.
 
-| Provider   | CLI                                                   | Default binary | Log in with           |
-| ---------- | ----------------------------------------------------- | -------------- | --------------------- |
-| Codex      | [Codex CLI](https://developers.openai.com/codex/cli)  | `codex`        | `codex login`         |
-| Claude     | [Claude Code](https://claude.com/product/claude-code) | `claude`       | `claude auth login`   |
-| Cursor     | [Cursor CLI](https://cursor.com/cli)                  | `cursor-agent` | `agent login`         |
-| Grok Build | [Grok Build CLI](https://x.ai/cli)                    | `grok`         | `grok login`          |
-| OpenCode   | [OpenCode](https://opencode.ai)                       | `opencode`     | `opencode auth login` |
+| Provider   | CLI                                                     | Default binary | Log in with                |
+| ---------- | ------------------------------------------------------- | -------------- | -------------------------- |
+| Atomic     | [Atomic](https://github.com/bastani-inc/atomic)         | `atomic`       | Model provider credentials |
+| Pi         | [Pi coding agent](https://github.com/earendil-works/pi) | `pi`           | Model provider credentials |
+| Codex      | [Codex CLI](https://developers.openai.com/codex/cli)    | `codex`        | `codex login`              |
+| Claude     | [Claude Code](https://claude.com/product/claude-code)   | `claude`       | `claude auth login`        |
+| Cursor     | [Cursor CLI](https://cursor.com/cli)                    | `cursor-agent` | `agent login`              |
+| Grok Build | [Grok Build CLI](https://x.ai/cli)                      | `grok`         | `grok login`               |
+| OpenCode   | [OpenCode](https://opencode.ai)                         | `opencode`     | `opencode auth login`      |
 
-Codex and Claude are on by default. Cursor, Grok Build, and OpenCode are off by default; turn
-them on in **Settings** → the provider's card when you want to use them.
+Codex and Claude are on by default. Atomic, Pi, Cursor, Grok Build, and OpenCode are off by default;
+turn them on in **Settings** → the provider's card when you want to use them.
+
+Install the Pi-compatible providers with npm when you want either of them:
+
+```bash
+npm install --global @earendil-works/pi-coding-agent
+npm install --global @bastani/atomic
+```
+
+Pi 0.84.3 or newer is recommended. Atomic and Pi discover the models and credentials configured in
+their own agent directories. T3 Code does not copy or manage those credentials.
+
+### Atomic Workflow Visibility
+
+In the web and desktop clients, Atomic workflow runs appear in the **Agents** panel with live stage
+status, dependency order, summaries, and an **Awaiting input** state. When the workflow has a `.js`
+or `.ts` script in the current workspace's `.atomic/workflows` directory, **{} script** opens its
+contained, read-only source.
+
+To load workflows from the current workspace, enable **Settings** → **Atomic** → **Trust project
+resources** for that Atomic instance. It is off by default. Enabling it also allows Atomic to load
+other project-local skills, extensions, prompts, packages, and settings. Only enable it for a
+workspace you trust: extensions and workflow tools run with the permissions of the T3 Code server.
+You can still inspect workflow source through T3's contained, read-only viewer after Atomic reports
+the run.
+
+Atomic's parent RPC stream does not include private child-stage reasoning or tool transcripts, so
+T3 Code reports only the workflow lifecycle and summary details Atomic publishes.
 
 Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
 T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.
@@ -82,8 +111,8 @@ started T3 Code.
 
 Provider auth is required before you start a session with that provider, not before you start
 T3 Code. You can install T3 Code, open it, and add providers afterwards. A provider that is not
-authenticated shows its status in **Settings** and fails at session start with the login command
-to run.
+authenticated shows its status in **Settings** and reports its authentication or configuration
+guidance if a session cannot start.
 
 For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./providers-claude.md).
 

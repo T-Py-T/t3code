@@ -223,6 +223,9 @@ function parseUserInputQuestions(
         id: question.id,
         header: question.header,
         question: question.question,
+        ...(typeof question.defaultValue === "string"
+          ? { defaultValue: question.defaultValue }
+          : {}),
         options,
         multiSelect: question.multiSelect === true,
       };
@@ -263,9 +266,16 @@ function resolvePendingUserInputAnswer(
 
   const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
   if (question.multiSelect) {
-    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+    return selectedOptionLabels.length > 0
+      ? selectedOptionLabels
+      : draft === undefined
+        ? normalizeDraftAnswer(question.defaultValue)
+        : null;
   }
-  return selectedOptionLabels[0] ?? null;
+  return (
+    selectedOptionLabels[0] ??
+    (draft === undefined ? normalizeDraftAnswer(question.defaultValue) : null)
+  );
 }
 
 /** Codex children settle via task.updated (idle/failed/interrupted), never
@@ -1467,6 +1477,13 @@ export function derivePendingUserInputs(
   }
 
   return Arr.sortWith(openByRequestId.values(), (s) => new Date(s.createdAt), Order.Date);
+}
+
+export function getPendingUserInputCustomAnswer(
+  question: UserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+): string {
+  return draft === undefined ? (question.defaultValue ?? "") : (draft.customAnswer ?? "");
 }
 
 export function setPendingUserInputCustomAnswer(

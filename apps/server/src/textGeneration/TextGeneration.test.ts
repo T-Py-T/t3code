@@ -118,4 +118,29 @@ describe("makeTextGenerationFromRegistry", () => {
       }
     }),
   );
+
+  it.effect("rejects a registered session-only provider before invoking its service", () =>
+    Effect.gen(function* () {
+      const atomicId = ProviderInstanceId.make("atomic");
+      const atomic = {
+        ...makeStubInstance(atomicId, makeStubTextGeneration({})),
+        supportsTextGeneration: false,
+      } satisfies ProviderInstance;
+      const tg = TextGeneration.makeTextGenerationFromRegistry(makeStubRegistry([atomic]));
+
+      const result = yield* tg
+        .generateBranchName({
+          cwd: process.cwd(),
+          message: "anything",
+          modelSelection: createModelSelection(atomicId, "openai-codex/gpt-5.4"),
+        })
+        .pipe(Effect.result);
+
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure._tag).toBe("TextGenerationError");
+        expect(result.failure.detail).toContain("does not support auxiliary text generation");
+      }
+    }),
+  );
 });

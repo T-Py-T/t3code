@@ -203,8 +203,10 @@ const multiTerminalHistoryLogPath = (
   );
 
 interface CreateManagerOptions {
+  baseDir?: string;
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
+  fileSystem?: FileSystem.FileSystem;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
     readonly hasRunningSubprocess: boolean;
     readonly childCommand: string | null;
@@ -235,7 +237,8 @@ const createManager = (
   Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-terminal-" });
+      const baseDir =
+        options.baseDir ?? (yield* fs.makeTempDirectoryScoped({ prefix: "t3code-terminal-" }));
       const logsDir = join(baseDir, "userdata", "logs", "terminals");
       const ptyAdapter = options.ptyAdapter ?? new FakePtyAdapter();
 
@@ -255,7 +258,7 @@ const createManager = (
         ...(options.maxRetainedInactiveSessions !== undefined
           ? { maxRetainedInactiveSessions: options.maxRetainedInactiveSessions }
           : {}),
-      });
+      }).pipe(Effect.provideService(FileSystem.FileSystem, options.fileSystem ?? fs));
       const eventsRef = yield* Ref.make<ReadonlyArray<TerminalEvent>>([]);
       const unsubscribe = yield* manager.subscribe((event) =>
         Ref.update(eventsRef, (events) => [...events, event]),
@@ -430,9 +433,6 @@ it.layer(
       fs.makeDirectory(filePath, { recursive: true }),
     );
 
-  const chmod = (filePath: string, mode: number) =>
-    Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) => fs.chmod(filePath, mode));
-
   const pathExists = (filePath: string) =>
     Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) => fs.exists(filePath));
 
@@ -479,27 +479,34 @@ it.layer(
 
   it.effect("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
-      if ((yield* HostProcessPlatform) === "win32") return;
-
+      const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-
-      const { manager, baseDir } = yield* createManager();
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-terminal-" });
       const blockedRoot = path.join(baseDir, "blocked-root");
       const blockedCwd = path.join(blockedRoot, "cwd");
       yield* makeDirectory(blockedCwd);
-      yield* chmod(blockedRoot, 0o000);
+      const statCause = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "stat",
+        pathOrDescriptor: blockedCwd,
+      });
+      const failingFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        stat: (filePath) => (filePath === blockedCwd ? Effect.fail(statCause) : fs.stat(filePath)),
+      });
+      const { manager } = yield* createManager(5, {
+        baseDir,
+        fileSystem: failingFileSystem,
+      });
 
-      const error = yield* Effect.flip(manager.open(openInput({ cwd: blockedCwd }))).pipe(
-        Effect.ensuring(chmod(blockedRoot, 0o755).pipe(Effect.ignore)),
-      );
+      const error = yield* Effect.flip(manager.open(openInput({ cwd: blockedCwd })));
 
       expect(error).toMatchObject({
         _tag: "TerminalCwdStatError",
         cwd: blockedCwd,
-        cause: {
-          _tag: "PlatformError",
-        },
       });
+      expect(error.cause).toBe(statCause);
     }),
   );
 

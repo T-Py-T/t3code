@@ -20,6 +20,7 @@ import { ControlPill } from "../../components/ControlPill";
 import { cn } from "../../lib/cn";
 import { useThemeColor } from "../../lib/useThemeColor";
 import {
+  getPendingUserInputCustomAnswer,
   isPendingUserInputOptionSelected,
   type PendingUserInput,
   type PendingUserInputDraftAnswer,
@@ -301,7 +302,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                 })}
               </View>
               <TextInput
-                value={draft?.customAnswer ?? ""}
+                value={getPendingUserInputCustomAnswer(question, draft)}
                 onChangeText={(value) =>
                   props.onChangeCustomAnswer(props.pendingUserInput.requestId, question.id, value)
                 }

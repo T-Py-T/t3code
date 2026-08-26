@@ -1,6 +1,9 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useRef } from "react";
-import type { SourceControlWritingStyleMode } from "@t3tools/contracts";
+import {
+  providerSupportsTextGeneration,
+  type SourceControlWritingStyleMode,
+} from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
@@ -61,7 +64,9 @@ export function SourceControlWritingSettingsSection() {
       ? defaultModelSelection
       : resolvedSourceControlWriterSelection;
   const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings).filter(
+      (entry) => providerSupportsTextGeneration(entry.driverKind),
+    ),
   );
   const modelOptionsByInstance = getCustomModelOptionsByInstance(
     settings,

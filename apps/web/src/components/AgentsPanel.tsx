@@ -31,15 +31,14 @@ import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
 
 /**
- * In-flight states all present as Working (one steady state, per the
- * monitoring-pill design: detail belongs in the activity sub-line, and a
- * stalled/waiting/queued subagent is still the fleet doing its job, not a
- * user problem). Only settled states differentiate.
+ * Waiting is deliberately distinct: Atomic workflow HIL can pause indefinitely
+ * until a person answers, so presenting that state as generic work hides the
+ * one thing the user needs to act on.
  */
 const STATUS_VISUALS: Record<RuntimeSubagent["status"], { dotClass: string; label: string }> = {
   pending: { dotClass: "bg-info", label: "Working" },
   running: { dotClass: "bg-info", label: "Working" },
-  waiting: { dotClass: "bg-info", label: "Working" },
+  waiting: { dotClass: "bg-warning", label: "Awaiting input" },
   // Idle reads as settled (muted, not sky): a resting Codex child looks done
   // unless resumed — live-test: sky idle dots read as stuck in-progress.
   idle: { dotClass: "bg-muted-foreground/50", label: "Idle · resumable" },
@@ -205,52 +204,73 @@ function workflowMembers(group: AgentPanelWorkflowGroup): ReadonlyArray<RuntimeS
 }
 
 /**
- * Phase rail: the run's shape at a glance. One segment per phase in order,
- * separated by chevrons; each segment shows title + one dot per member.
- * The whole arc (done → live → pending) is visible without scrolling the
- * member list.
+ * Workflow topology: one row per dependency layer and one node per stage.
+ * Atomic supplies stable stage IDs and parent IDs, so parallel roots share a
+ * row and dependent stages identify the exact nodes they follow.
  */
-function PhaseRail({ group }: { group: AgentPanelWorkflowGroup }) {
+function WorkflowGraph({ group }: { group: AgentPanelWorkflowGroup }) {
   if (group.phases.length === 0) {
     return null;
   }
+  const members = workflowMembers(group);
+  const membersById = new Map(members.map((member) => [member.id, member]));
   return (
-    <div className="flex flex-wrap items-center gap-x-1 gap-y-1 px-1.5 pb-1 pt-1.5">
+    <div className="mx-1.5 mt-1.5 rounded-md border border-border/50 bg-background/35 px-2 py-2">
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[.6rem] uppercase tracking-wider text-muted-foreground/70">
+        <Braces aria-hidden className="size-3" />
+        {workflowIsLive(group) ? "Live workflow graph" : "Workflow graph"}
+      </div>
       {group.phases.map((phase, index) => (
-        <div key={phase.index} className="flex items-center gap-1">
-          {index > 0 ? (
-            <ChevronRight aria-hidden className="size-3 text-muted-foreground/40" />
-          ) : null}
-          <div
-            className={cn(
-              "flex items-center gap-1 rounded-sm border px-1.5 py-0.5",
-              phase.state === "running"
-                ? "border-info/40"
-                : phase.state === "done"
-                  ? "border-success/30"
-                  : "border-border/50",
-            )}
-          >
-            <span
-              className={cn(
-                "font-mono text-[.65rem]",
-                phase.state === "running"
-                  ? "text-info-foreground"
-                  : phase.state === "done"
-                    ? "text-success-foreground"
-                    : "text-muted-foreground/70",
-              )}
-            >
-              {phase.state === "done" ? "✓ " : ""}
+        <div key={phase.index}>
+          {index > 0 ? <div className="ml-[1.55rem] h-3 w-px bg-border/70" aria-hidden /> : null}
+          <div className="grid min-w-0 grid-cols-[3.1rem_minmax(0,1fr)] items-start gap-1.5">
+            <span className="pt-1.5 font-mono text-[.6rem] uppercase text-muted-foreground/60">
               {phase.title}
             </span>
-            <span className="flex items-center gap-0.5">
+            <div className="flex min-w-0 flex-wrap gap-1.5">
               {phase.members.length === 0 ? (
-                <span className="font-mono text-[.6rem] text-muted-foreground/50">–</span>
+                <span className="rounded border border-dashed border-border/60 px-2 py-1 font-mono text-[.65rem] text-muted-foreground/60">
+                  Pending
+                </span>
               ) : (
-                phase.members.map((member) => <StatusDot key={member.id} status={member.status} />)
+                phase.members.map((member) => {
+                  const dependencies = (member.dependsOnTaskIds ?? []).map(
+                    (taskId) =>
+                      membersById.get(taskId)?.title ?? taskId.split(":wf:").at(-1) ?? taskId,
+                  );
+                  return (
+                    <div
+                      key={member.id}
+                      className={cn(
+                        "min-w-28 max-w-full rounded border px-2 py-1",
+                        member.status === "waiting"
+                          ? "border-warning/45 bg-warning/5"
+                          : member.status === "failed"
+                            ? "border-destructive/45 bg-destructive/5"
+                            : member.status === "running" || member.status === "pending"
+                              ? "border-info/40 bg-info/5"
+                              : member.status === "completed"
+                                ? "border-success/30 bg-success/5"
+                                : "border-border/60",
+                      )}
+                    >
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <StatusDot status={member.status} />
+                        <span className="truncate text-xs font-medium">{member.title}</span>
+                        <span className="ml-auto shrink-0 font-mono text-[.58rem] text-muted-foreground/70">
+                          {STATUS_VISUALS[member.status].label}
+                        </span>
+                      </div>
+                      {dependencies.length > 0 ? (
+                        <div className="mt-0.5 truncate font-mono text-[.58rem] text-muted-foreground/65">
+                          after {dependencies.join(" + ")}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
               )}
-            </span>
+            </div>
           </div>
         </div>
       ))}
@@ -373,7 +393,7 @@ function PhaseSection({
   );
 }
 
-/** Expanded workflow: phase rail + full phase tree. */
+/** Expanded workflow: live topology + full stage tree. */
 function ExpandedWorkflowSection({
   group,
   environmentId,
@@ -428,7 +448,7 @@ function ExpandedWorkflowSection({
           <ChevronDown aria-hidden className="size-3" />
         </Button>
       </div>
-      <PhaseRail group={group} />
+      <WorkflowGraph group={group} />
       {scriptOpen && canShowScript ? (
         <WorkflowScriptView
           environmentId={environmentId}
@@ -568,10 +588,11 @@ export function AgentsPanel({
       </ScrollArea>
       <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-[.7rem] text-muted-foreground">
         <span className="flex items-center gap-2">
-          {model.runningCount + model.waitingCount > 0 ? (
-            <span className="text-info-foreground">
-              ● {model.runningCount + model.waitingCount} working
-            </span>
+          {model.runningCount > 0 ? (
+            <span className="text-info-foreground">● {model.runningCount} working</span>
+          ) : null}
+          {model.waitingCount > 0 ? (
+            <span className="text-warning">● {model.waitingCount} awaiting input</span>
           ) : null}
           {model.idleCount > 0 ? <span>{model.idleCount} idle</span> : null}
           {model.settledCount > 0 ? <span>{model.settledCount} settled</span> : null}

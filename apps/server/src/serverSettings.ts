@@ -20,6 +20,7 @@ import {
   type ProviderInstanceEnvironmentVariable,
   ProviderDriverKind,
   ProviderInstanceId,
+  providerSupportsTextGeneration,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -293,13 +294,25 @@ function restoreUsedProviders(
 }
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection)
+  const selection = settings.textGenerationModelSelection;
+  const instanceDriver = settings.providerInstances[selection.instanceId]?.driver;
+  const driver = instanceDriver ?? ProviderDriverKind.make(selection.instanceId);
+  return isModelSelectionProviderEnabled(settings, selection) &&
+    providerSupportsTextGeneration(driver)
     ? settings
     : fallbackTextGenerationProvider(settings);
 }
 
 function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  const fallbackEntry = Object.entries(settings.providers).find(([, provider]) => provider.enabled);
+  const fallbackEntry = Object.entries(settings.providers).find(([driver, provider]) => {
+    const providerKind = ProviderDriverKind.make(driver);
+    return (
+      provider.enabled &&
+      providerSupportsTextGeneration(providerKind) &&
+      (DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[providerKind] ??
+        DEFAULT_MODEL_BY_PROVIDER[providerKind]) !== undefined
+    );
+  });
   const fallback = fallbackEntry ? ProviderDriverKind.make(fallbackEntry[0]) : undefined;
   if (!fallback) {
     return settings;

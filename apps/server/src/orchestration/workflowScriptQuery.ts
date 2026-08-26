@@ -47,6 +47,7 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
       ? [
           {
             path: NodePath.resolve(input.workspaceRoot, ".atomic", "workflows"),
+            workspaceRoot: NodePath.resolve(input.workspaceRoot),
             extensions: new Set([".js", ".ts"]),
           },
         ]
@@ -57,7 +58,17 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
       const resolved = await Promise.all(
         configuredRoots.map(async (root) => {
           try {
-            return { ...root, path: await NodeFSP.realpath(root.path) };
+            const resolvedRoot = await NodeFSP.realpath(root.path);
+            if ("workspaceRoot" in root) {
+              const resolvedWorkspace = await NodeFSP.realpath(root.workspaceRoot);
+              if (
+                resolvedRoot !== resolvedWorkspace &&
+                !resolvedRoot.startsWith(`${resolvedWorkspace}${NodePath.sep}`)
+              ) {
+                return null;
+              }
+            }
+            return { ...root, path: resolvedRoot };
           } catch {
             return null;
           }

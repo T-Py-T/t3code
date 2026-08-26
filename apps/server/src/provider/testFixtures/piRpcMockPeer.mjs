@@ -1,6 +1,7 @@
 let buffer = "";
 let isStreaming = false;
 let pendingUiPrompt;
+let abortableTurnActive = false;
 
 const write = (value) => {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -13,6 +14,16 @@ const response = (command, data) => {
     command: command.type,
     success: true,
     ...(data === undefined ? {} : { data }),
+  });
+};
+
+const failureResponse = (command, error) => {
+  write({
+    id: command.id,
+    type: "response",
+    command: command.type,
+    success: false,
+    error,
   });
 };
 
@@ -138,6 +149,21 @@ const runWorkflowCommand = (command) => {
       details: { kind: "dispatch", workflowName: "classify-and-act", runId },
     },
   });
+  write({
+    type: "message_end",
+    message: {
+      role: "custom",
+      customType: "workflows:lifecycle-notice",
+      display: false,
+      details: {
+        kind: "awaiting_input",
+        scope: "run",
+        runId,
+        workflowName: "classify-and-act",
+        promptMessage: "Provide workflow inputs.",
+      },
+    },
+  });
   response(command);
   setTimeout(() => {
     write({
@@ -245,6 +271,22 @@ const runWorkflowCommand = (command) => {
           promptId: "prompt-approve-1",
           promptKind: "confirm",
           promptMessage: "Approve the synthesized result?",
+        },
+      },
+    });
+    write({
+      type: "message_end",
+      message: {
+        role: "custom",
+        customType: "workflows:lifecycle-notice",
+        display: false,
+        details: {
+          kind: "resumed",
+          scope: "stage",
+          runId,
+          workflowName: "classify-and-act",
+          stageId: "approve",
+          stageName: "Approve",
         },
       },
     });
@@ -368,6 +410,19 @@ const requestLongLivedUi = (command) => {
   });
 };
 
+const runAbortableTurn = (command) => {
+  isStreaming = true;
+  abortableTurnActive = true;
+  response(command);
+  write({ type: "agent_start" });
+  write({
+    type: "tool_execution_start",
+    toolCallId: "abort-tool-1",
+    toolName: "read",
+    args: { path: "README.md" },
+  });
+};
+
 const handle = (command) => {
   switch (command.type) {
     case "get_state":
@@ -404,6 +459,10 @@ const handle = (command) => {
         runRecoverableExtensionErrorTurn(command);
       } else if (command.message === "/t3-terminal-assistant-error") {
         runTerminalAssistantErrorTurn(command);
+      } else if (command.message === "/t3-prompt-rejected") {
+        failureResponse(command, "The prompt transport rejected the request.");
+      } else if (command.message === "/t3-abort-drain") {
+        runAbortableTurn(command);
       } else if (command.message === "/t3-ui-wait") {
         requestLongLivedUi(command);
       } else if (String(command.message).startsWith("/workflow")) {
@@ -411,6 +470,29 @@ const handle = (command) => {
       } else {
         runChatTurn(command);
       }
+      return;
+    case "abort":
+      if (abortableTurnActive) {
+        write({
+          type: "entry_appended",
+          entry: {
+            type: "custom",
+            customType: "workflow.run.start",
+            data: { runId: "abort-drain-workflow", name: "abort-drain-workflow" },
+          },
+        });
+        write({
+          type: "tool_execution_end",
+          toolCallId: "abort-tool-1",
+          toolName: "read",
+          args: { path: "README.md" },
+          result: { content: [{ type: "text", text: "abort tool output" }] },
+          isError: false,
+        });
+        abortableTurnActive = false;
+        isStreaming = false;
+      }
+      response(command);
       return;
     case "extension_ui_response":
       if (pendingUiPrompt && command.id === "ui-editor-1") {

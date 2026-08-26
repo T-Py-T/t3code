@@ -249,6 +249,29 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("skips session-only providers when healing text generation selection", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const next = yield* serverSettings.updateSettings({
+        providers: {
+          atomic: { enabled: true },
+          pi: { enabled: true },
+          codex: { enabled: false },
+          claudeAgent: { enabled: true },
+        },
+        textGenerationModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
+        },
+      });
+
+      assert.deepEqual(next.textGenerationModelSelection, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-haiku-4-5",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("buffers changes after a subscription is acquired but before it is consumed", () =>
     Effect.scoped(
       Effect.gen(function* () {

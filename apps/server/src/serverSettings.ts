@@ -299,7 +299,14 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
 }
 
 function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  const fallbackEntry = Object.entries(settings.providers).find(([, provider]) => provider.enabled);
+  const fallbackEntry = Object.entries(settings.providers).find(([driver, provider]) => {
+    const providerKind = ProviderDriverKind.make(driver);
+    return (
+      provider.enabled &&
+      (DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[providerKind] ??
+        DEFAULT_MODEL_BY_PROVIDER[providerKind]) !== undefined
+    );
+  });
   const fallback = fallbackEntry ? ProviderDriverKind.make(fallbackEntry[0]) : undefined;
   if (!fallback) {
     return settings;

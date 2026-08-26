@@ -19,6 +19,17 @@ const atomicRoot = NodePath.join(atomicWorkspace, ".atomic", "workflows");
 const atomicScriptPath = NodePath.join(atomicRoot, "generated-workflow.ts");
 NodeFS.mkdirSync(atomicRoot, { recursive: true });
 NodeFS.writeFileSync(atomicScriptPath, "export default { name: 'generated-workflow' };\n");
+const escapedAtomicWorkspace = NodeFS.mkdtempSync(
+  NodePath.join(NodeOS.tmpdir(), "atomic-workflow-escaped-view-"),
+);
+const escapedAtomicTarget = NodeFS.mkdtempSync(
+  NodePath.join(NodeOS.tmpdir(), "atomic-workflow-escaped-target-"),
+);
+const escapedAtomicRoot = NodePath.join(escapedAtomicWorkspace, ".atomic", "workflows");
+const escapedAtomicScript = NodePath.join(escapedAtomicTarget, "escaped-workflow.ts");
+NodeFS.mkdirSync(NodePath.dirname(escapedAtomicRoot), { recursive: true });
+NodeFS.writeFileSync(escapedAtomicScript, "export default { escaped: true };\n");
+NodeFS.symlinkSync(escapedAtomicTarget, escapedAtomicRoot, "dir");
 try {
   NodeFS.symlinkSync(outside, link);
 } catch (error) {
@@ -37,6 +48,8 @@ afterAll(() => {
   NodeFS.rmSync(root, { recursive: true, force: true });
   NodeFS.rmSync(outside, { force: true });
   NodeFS.rmSync(atomicWorkspace, { recursive: true, force: true });
+  NodeFS.rmSync(escapedAtomicWorkspace, { recursive: true, force: true });
+  NodeFS.rmSync(escapedAtomicTarget, { recursive: true, force: true });
 });
 
 describe("readWorkflowScript containment", () => {
@@ -87,6 +100,19 @@ describe("readWorkflowScript containment", () => {
       if (sneaky._tag === "Success") {
         assert.equal(sneaky.value, "outside-root");
       }
+    }),
+  );
+
+  effectIt.effect("rejects an Atomic workflow root symlinked outside its workspace", () =>
+    Effect.gen(function* () {
+      const escaped = yield* readWorkflowScript({
+        scriptPath: escapedAtomicScript,
+        workspaceRoot: escapedAtomicWorkspace,
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.reason),
+      );
+      assert.equal(escaped, "outside-root");
     }),
   );
 });

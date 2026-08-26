@@ -1,6 +1,86 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
+import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+
+const repositoryRoot = NodeURL.fileURLToPath(new URL(".", import.meta.url));
+const stagedCheckExtensions = new Set([
+  ".astro",
+  ".cjs",
+  ".css",
+  ".html",
+  ".js",
+  ".json",
+  ".jsonc",
+  ".jsx",
+  ".md",
+  ".mdx",
+  ".mjs",
+  ".scss",
+  ".ts",
+  ".tsx",
+  ".yaml",
+  ".yml",
+]);
+const stagedIgnoredSegments = new Set([
+  ".alchemy",
+  ".reference",
+  ".repos",
+  "dist",
+  "dist-electron",
+  "node_modules",
+]);
+const mobileNativeConfigPaths = new Set([
+  ".github/workflows/ci.yml",
+  "apps/mobile/.editorconfig",
+  "apps/mobile/.swiftlint.yml",
+  "apps/mobile/Brewfile",
+  "apps/mobile/detekt.yml",
+  "package.json",
+  "scripts/mobile-native-static-check.ts",
+]);
+
+function stagedPath(file: string): string {
+  return (NodePath.isAbsolute(file) ? NodePath.relative(repositoryRoot, file) : file).replaceAll(
+    NodePath.sep,
+    "/",
+  );
+}
+
+function isIgnoredStagedPath(file: string): boolean {
+  const segments = file.split("/");
+  return (
+    segments.some((segment) => stagedIgnoredSegments.has(segment) || segment.endsWith(".icon")) ||
+    file === "pnpm-lock.yaml" ||
+    file.endsWith(".tsbuildinfo") ||
+    file.endsWith("/routeTree.gen.ts") ||
+    file === "routeTree.gen.ts" ||
+    file.startsWith("apps/mobile/android/") ||
+    file.startsWith("apps/mobile/ios/") ||
+    file === "apps/web/public/mockServiceWorker.js" ||
+    file === "apps/web/src/lib/vendor/qrcodegen.ts" ||
+    file === "apps/mobile/uniwind-types.d.ts"
+  );
+}
+
+function shellQuote(file: string): string {
+  return `'${file.replaceAll("'", `'"'"'`)}'`;
+}
+
+function isResourceMonitorPath(file: string): boolean {
+  return (
+    file === "native/resource-monitor/Cargo.toml" ||
+    file === "native/resource-monitor/Cargo.lock" ||
+    (file.startsWith("native/resource-monitor/src/") && file.endsWith(".rs"))
+  );
+}
+
+function isMobileNativePath(file: string): boolean {
+  return (
+    mobileNativeConfigPaths.has(file) ||
+    (file.startsWith("apps/mobile/") && [".swift", ".kt", ".kts"].includes(NodePath.extname(file)))
+  );
+}
 
 export default defineConfig({
   resolve: {
@@ -20,9 +100,23 @@ export default defineConfig({
     hookTimeout: 60_000,
     testTimeout: 60_000,
   },
-  staged: {
-    // Formatter only for now — no lint or typecheck on commit.
-    "*": "vp fmt",
+  staged: (files) => {
+    const paths = files.map(stagedPath);
+    const checkedPaths = paths.filter(
+      (file) => stagedCheckExtensions.has(NodePath.extname(file)) && !isIgnoredStagedPath(file),
+    );
+    const commands: string[] = [];
+    if (checkedPaths.length > 0) {
+      commands.push(`vp check --fix ${checkedPaths.map(shellQuote).join(" ")}`);
+    }
+    if (paths.some(isResourceMonitorPath)) {
+      commands.push("cargo fmt --manifest-path native/resource-monitor/Cargo.toml -- --check");
+      commands.push("vp run test:resource-monitor");
+    }
+    if (paths.some(isMobileNativePath)) {
+      commands.push("vp run lint:mobile");
+    }
+    return commands;
   },
   fmt: {
     ignorePatterns: [

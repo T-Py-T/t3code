@@ -54,19 +54,37 @@ const decodeCommands = Schema.decodeUnknownOption(AtomicCommandsData);
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-const PRESENTATION = {
-  displayName: "Atomic",
-  badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
-  requiresNewThreadForModelChange: false,
-} as const;
+export interface PiCompatibleProviderSettings {
+  readonly enabled: boolean;
+  readonly binaryPath: string;
+  readonly agentDir: string;
+  readonly customModels: ReadonlyArray<string>;
+}
 
-function atomicEnvironment(
-  settings: AtomicSettings,
+export interface PiCompatibleProviderDefinition {
+  readonly displayName: string;
+  readonly agentDirEnvironmentVariable: "ATOMIC_CODING_AGENT_DIR" | "PI_CODING_AGENT_DIR";
+  readonly versionStatus?: (
+    version: string | null,
+  ) => { readonly status: "ready" | "warning" | "error"; readonly message: string } | undefined;
+}
+
+function presentation(definition: PiCompatibleProviderDefinition) {
+  return {
+    displayName: definition.displayName,
+    badgeLabel: "Early Access",
+    showInteractionModeToggle: false,
+    requiresNewThreadForModelChange: false,
+  } as const;
+}
+
+function piCompatibleEnvironment(
+  settings: PiCompatibleProviderSettings,
+  definition: PiCompatibleProviderDefinition,
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   return settings.agentDir
-    ? { ...environment, ATOMIC_CODING_AGENT_DIR: settings.agentDir }
+    ? { ...environment, [definition.agentDirEnvironmentVariable]: settings.agentDir }
     : environment;
 }
 
@@ -157,12 +175,13 @@ function commandsFromRpc(commands: ReadonlyArray<typeof AtomicCommand.Type>): {
   return { slashCommands, skills };
 }
 
-export function buildInitialAtomicProviderSnapshot(
-  settings: AtomicSettings,
+export function buildInitialPiCompatibleProviderSnapshot(
+  settings: PiCompatibleProviderSettings,
+  definition: PiCompatibleProviderDefinition,
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.map(DateTime.now, (now) =>
     buildServerProvider({
-      presentation: PRESENTATION,
+      presentation: presentation(definition),
       enabled: settings.enabled,
       checkedAt: DateTime.formatIso(now),
       models: providerModelsFromSettings([], settings.customModels, EMPTY_CAPABILITIES),
@@ -172,151 +191,178 @@ export function buildInitialAtomicProviderSnapshot(
         status: "warning",
         auth: { status: "unknown" },
         message: settings.enabled
-          ? "Checking Atomic CLI availability..."
-          : "Atomic is disabled in T3 Code settings.",
+          ? `Checking ${definition.displayName} CLI availability...`
+          : `${definition.displayName} is disabled in T3 Code settings.`,
       },
     }),
   );
 }
 
-export const checkAtomicProviderStatus = Effect.fn("checkAtomicProviderStatus")(function* (
+export const checkPiCompatibleProviderStatus = Effect.fn("checkPiCompatibleProviderStatus")(
+  function* (
+    settings: PiCompatibleProviderSettings,
+    definition: PiCompatibleProviderDefinition,
+    cwd: string,
+    environment: NodeJS.ProcessEnv = process.env,
+  ) {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    const fallbackModels = providerModelsFromSettings(
+      [],
+      settings.customModels,
+      EMPTY_CAPABILITIES,
+    );
+    if (!settings.enabled) {
+      return yield* buildInitialPiCompatibleProviderSnapshot(settings, definition);
+    }
+
+    const env = piCompatibleEnvironment(settings, definition, environment);
+    const spawnCommand = yield* resolveSpawnCommand(settings.binaryPath, ["--version"], { env });
+    const versionResult = yield* spawnAndCollect(
+      settings.binaryPath,
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        env,
+        shell: spawnCommand.shell,
+      }),
+    ).pipe(Effect.timeoutOption(Duration.seconds(4)), Effect.result);
+
+    if (Result.isFailure(versionResult)) {
+      return buildServerProvider({
+        presentation: presentation(definition),
+        enabled: true,
+        checkedAt,
+        models: fallbackModels,
+        probe: {
+          installed: !isCommandMissingCause(versionResult.failure),
+          version: null,
+          status: "error",
+          auth: { status: "unknown" },
+          message: isCommandMissingCause(versionResult.failure)
+            ? `${definition.displayName} CLI (${settings.binaryPath}) is not installed or not on PATH.`
+            : `Failed to execute the ${definition.displayName} CLI health check.`,
+        },
+      });
+    }
+    if (Option.isNone(versionResult.success)) {
+      return buildServerProvider({
+        presentation: presentation(definition),
+        enabled: true,
+        checkedAt,
+        models: fallbackModels,
+        probe: {
+          installed: true,
+          version: null,
+          status: "error",
+          auth: { status: "unknown" },
+          message: `${definition.displayName} CLI timed out while running --version.`,
+        },
+      });
+    }
+    const versionOutput = versionResult.success.value;
+    const version = parseGenericCliVersion(`${versionOutput.stdout}\n${versionOutput.stderr}`);
+    if (versionOutput.code !== 0) {
+      return buildServerProvider({
+        presentation: presentation(definition),
+        enabled: true,
+        checkedAt,
+        models: fallbackModels,
+        probe: {
+          installed: true,
+          version,
+          status: "error",
+          auth: { status: "unknown" },
+          message: `${definition.displayName} CLI is installed but failed to run.`,
+        },
+      });
+    }
+
+    const discovery = yield* Effect.gen(function* () {
+      const rpc = yield* makeAtomicRpcProcess({
+        binaryPath: settings.binaryPath,
+        runtimeName: definition.displayName,
+        args: ["--no-session", "--no-approve"],
+        cwd,
+        environment: env,
+      });
+      const [stateResponse, modelsResponse, commandsResponse] = yield* Effect.all(
+        [
+          // No explicit timeout: these are the first commands on a freshly
+          // spawned process, so they inherit the RPC startup budget.
+          rpc.request({ type: "get_state" }),
+          rpc.request({ type: "get_available_models" }),
+          rpc.request({ type: "get_commands" }),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const state = Option.getOrUndefined(decodeState(stateResponse.data));
+      const modelData = Option.getOrUndefined(decodeModels(modelsResponse.data));
+      const commandData = Option.getOrUndefined(decodeCommands(commandsResponse.data));
+      const models = modelsFromRpc({
+        models: modelData?.models ?? [],
+        defaultModel: state?.model ?? null,
+        // exactOptionalPropertyTypes: an absent thinking level must be omitted
+        // rather than passed as undefined.
+        ...(state?.thinkingLevel === undefined ? {} : { thinkingLevel: state.thinkingLevel }),
+      });
+      return { models, ...commandsFromRpc(commandData?.commands ?? []) };
+    }).pipe(Effect.scoped, Effect.result);
+
+    if (Result.isFailure(discovery)) {
+      return buildServerProvider({
+        presentation: presentation(definition),
+        enabled: true,
+        checkedAt,
+        models: fallbackModels,
+        probe: {
+          installed: true,
+          version,
+          status: "error",
+          auth: { status: "unknown" },
+          message: `${definition.displayName} RPC model discovery failed. Check ${definition.displayName} configuration and credentials.`,
+        },
+      });
+    }
+    const discovered = discovery.success;
+    const models = providerModelsFromSettings(
+      discovered.models,
+      settings.customModels,
+      EMPTY_CAPABILITIES,
+    );
+    const versionStatus = definition.versionStatus?.(version);
+    return buildServerProvider({
+      presentation: presentation(definition),
+      enabled: true,
+      checkedAt,
+      models,
+      slashCommands: discovered.slashCommands,
+      skills: discovered.skills,
+      probe: {
+        installed: true,
+        version,
+        status: versionStatus?.status ?? (models.length > 0 ? "ready" : "warning"),
+        auth: { status: models.length > 0 ? "authenticated" : "unknown" },
+        message:
+          versionStatus?.message ??
+          (models.length > 0
+            ? `${definition.displayName} RPC is ready.`
+            : `${definition.displayName} is installed, but it reported no configured models.`),
+      },
+    });
+  },
+);
+
+const ATOMIC_PROVIDER_DEFINITION: PiCompatibleProviderDefinition = {
+  displayName: "Atomic",
+  agentDirEnvironmentVariable: "ATOMIC_CODING_AGENT_DIR",
+};
+
+export function buildInitialAtomicProviderSnapshot(settings: AtomicSettings) {
+  return buildInitialPiCompatibleProviderSnapshot(settings, ATOMIC_PROVIDER_DEFINITION);
+}
+
+export function checkAtomicProviderStatus(
   settings: AtomicSettings,
   cwd: string,
   environment: NodeJS.ProcessEnv = process.env,
 ) {
-  const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const fallbackModels = providerModelsFromSettings([], settings.customModels, EMPTY_CAPABILITIES);
-  if (!settings.enabled) {
-    return yield* buildInitialAtomicProviderSnapshot(settings);
-  }
-
-  const env = atomicEnvironment(settings, environment);
-  const spawnCommand = yield* resolveSpawnCommand(settings.binaryPath, ["--version"], { env });
-  const versionResult = yield* spawnAndCollect(
-    settings.binaryPath,
-    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-      env,
-      shell: spawnCommand.shell,
-    }),
-  ).pipe(Effect.timeoutOption(Duration.seconds(4)), Effect.result);
-
-  if (Result.isFailure(versionResult)) {
-    return buildServerProvider({
-      presentation: PRESENTATION,
-      enabled: true,
-      checkedAt,
-      models: fallbackModels,
-      probe: {
-        installed: !isCommandMissingCause(versionResult.failure),
-        version: null,
-        status: "error",
-        auth: { status: "unknown" },
-        message: isCommandMissingCause(versionResult.failure)
-          ? "Atomic CLI (`atomic`) is not installed or not on PATH."
-          : "Failed to execute the Atomic CLI health check.",
-      },
-    });
-  }
-  if (Option.isNone(versionResult.success)) {
-    return buildServerProvider({
-      presentation: PRESENTATION,
-      enabled: true,
-      checkedAt,
-      models: fallbackModels,
-      probe: {
-        installed: true,
-        version: null,
-        status: "error",
-        auth: { status: "unknown" },
-        message: "Atomic CLI timed out while running `atomic --version`.",
-      },
-    });
-  }
-  const versionOutput = versionResult.success.value;
-  const version = parseGenericCliVersion(`${versionOutput.stdout}\n${versionOutput.stderr}`);
-  if (versionOutput.code !== 0) {
-    return buildServerProvider({
-      presentation: PRESENTATION,
-      enabled: true,
-      checkedAt,
-      models: fallbackModels,
-      probe: {
-        installed: true,
-        version,
-        status: "error",
-        auth: { status: "unknown" },
-        message: "Atomic CLI is installed but failed to run.",
-      },
-    });
-  }
-
-  const discovery = yield* Effect.gen(function* () {
-    const rpc = yield* makeAtomicRpcProcess({
-      binaryPath: settings.binaryPath,
-      args: ["--no-session", "--no-approve"],
-      cwd,
-      environment: env,
-    });
-    const [stateResponse, modelsResponse, commandsResponse] = yield* Effect.all(
-      [
-        // No explicit timeout: these are the first commands on a freshly
-        // spawned process, so they inherit the RPC startup budget.
-        rpc.request({ type: "get_state" }),
-        rpc.request({ type: "get_available_models" }),
-        rpc.request({ type: "get_commands" }),
-      ],
-      { concurrency: "unbounded" },
-    );
-    const state = Option.getOrUndefined(decodeState(stateResponse.data));
-    const modelData = Option.getOrUndefined(decodeModels(modelsResponse.data));
-    const commandData = Option.getOrUndefined(decodeCommands(commandsResponse.data));
-    const models = modelsFromRpc({
-      models: modelData?.models ?? [],
-      defaultModel: state?.model ?? null,
-      // exactOptionalPropertyTypes: an absent thinking level must be omitted
-      // rather than passed as undefined.
-      ...(state?.thinkingLevel === undefined ? {} : { thinkingLevel: state.thinkingLevel }),
-    });
-    return { models, ...commandsFromRpc(commandData?.commands ?? []) };
-  }).pipe(Effect.scoped, Effect.result);
-
-  if (Result.isFailure(discovery)) {
-    return buildServerProvider({
-      presentation: PRESENTATION,
-      enabled: true,
-      checkedAt,
-      models: fallbackModels,
-      probe: {
-        installed: true,
-        version,
-        status: "error",
-        auth: { status: "unknown" },
-        message: "Atomic RPC model discovery failed. Check Atomic configuration and credentials.",
-      },
-    });
-  }
-  const discovered = discovery.success;
-  const models = providerModelsFromSettings(
-    discovered.models,
-    settings.customModels,
-    EMPTY_CAPABILITIES,
-  );
-  return buildServerProvider({
-    presentation: PRESENTATION,
-    enabled: true,
-    checkedAt,
-    models,
-    slashCommands: discovered.slashCommands,
-    skills: discovered.skills,
-    probe: {
-      installed: true,
-      version,
-      status: models.length > 0 ? "ready" : "warning",
-      auth: { status: models.length > 0 ? "authenticated" : "unknown" },
-      message:
-        models.length > 0
-          ? "Atomic RPC is ready."
-          : "Atomic is installed, but it reported no configured models.",
-    },
-  });
-});
+  return checkPiCompatibleProviderStatus(settings, ATOMIC_PROVIDER_DEFINITION, cwd, environment);
+}

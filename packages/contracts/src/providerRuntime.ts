@@ -28,6 +28,7 @@ const RuntimeEventRawSource = Schema.Union([
   Schema.Literal("codex.sdk.thread-event"),
   Schema.Literal("opencode.sdk.event"),
   Schema.Literal("atomic.rpc"),
+  Schema.Literal("pi.rpc"),
   Schema.Literal("acp.jsonrpc"),
   Schema.TemplateLiteral(["acp.", Schema.String, ".extension"]),
 ]);
@@ -457,6 +458,8 @@ export const UserInputQuestion = Schema.Struct({
   id: TrimmedNonEmptyStringSchema,
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
+  /** Initial editor/input value supplied by a provider extension. */
+  defaultValue: Schema.optional(Schema.String),
   options: Schema.Array(UserInputQuestionOption),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(Effect.succeed(false)),
@@ -573,6 +576,10 @@ const taskAgentLinkageFields = {
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
   parentAgentId: Schema.optional(TrimmedNonEmptyStringSchema),
   workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Provider-stable workflow stage identity (distinct from the T3 task id). */
+  workflowStageId: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Canonical task ids that must settle before this task can run. */
+  dependsOnTaskIds: Schema.optional(Schema.Array(RuntimeTaskId)),
   agentIndex: Schema.optional(NonNegativeInt),
   phaseIndex: Schema.optional(NonNegativeInt),
   phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),

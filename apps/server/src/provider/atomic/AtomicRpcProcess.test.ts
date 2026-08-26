@@ -50,6 +50,16 @@ process.stdin.on("data", (chunk) => {
   return wrapper;
 };
 
+const writeMockAtomicScript = (source: string) => {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "atomic-rpc-test-"));
+  const script = NodePath.join(dir, "mock-atomic.mjs");
+  NodeFS.writeFileSync(script, source, "utf8");
+  const wrapper = NodePath.join(dir, "mock-atomic.sh");
+  NodeFS.writeFileSync(wrapper, `#!/bin/sh\nexec ${process.execPath} ${script}\n`, "utf8");
+  NodeFS.chmodSync(wrapper, 0o755);
+  return wrapper;
+};
+
 const REPLY_DELAY = 300;
 
 describe("AtomicRpcProcess", () => {
@@ -93,6 +103,27 @@ describe("AtomicRpcProcess", () => {
         .request({ type: "get_state" }, Duration.millis(20))
         .pipe(Effect.result);
       assert.strictEqual(result._tag, "Failure");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("fails pending requests immediately when stdout closes cleanly", () =>
+    Effect.gen(function* () {
+      const rpc = yield* makeAtomicRpcProcess({
+        binaryPath: writeMockAtomicScript(
+          `process.stdin.once("data", () => setTimeout(() => process.exit(0), 50));\nsetInterval(() => {}, 1000);\n`,
+        ),
+        startupTimeout: Duration.seconds(10),
+      });
+      const result = yield* rpc
+        .request({ type: "get_state" })
+        .pipe(Effect.timeout(Duration.millis(500)), Effect.result);
+      assert.strictEqual(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.strictEqual(result.failure._tag, "AtomicRpcError");
+        if (result.failure._tag === "AtomicRpcError") {
+          assert.strictEqual(result.failure.operation, "read");
+        }
+      }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

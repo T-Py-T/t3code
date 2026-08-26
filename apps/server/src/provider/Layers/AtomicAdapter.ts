@@ -10,6 +10,7 @@ import {
   ProviderItemId,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -17,6 +18,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -42,11 +44,11 @@ import {
 import {
   type AtomicRpcEvent,
   type AtomicRpcProcess,
+  atomicRpcEventSequence,
   makeAtomicRpcProcess,
 } from "../atomic/AtomicRpcProcess.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 
-const PROVIDER = ProviderDriverKind.make("atomic");
 const RESUME_VERSION = 1 as const;
 const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown);
 const isRecord = Schema.is(UnknownRecord);
@@ -65,6 +67,7 @@ const AtomicStateData = Schema.Struct({
   thinkingLevel: Schema.optional(Schema.String),
   sessionFile: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
+  isStreaming: Schema.optional(Schema.Boolean),
 });
 const decodeState = Schema.decodeUnknownOption(AtomicStateData);
 const AtomicResumeCursor = Schema.Struct({
@@ -80,6 +83,20 @@ interface PendingUiRequest {
   readonly questionId: string;
 }
 
+interface AtomicWorkflowStageContext {
+  readonly id: string;
+  readonly index: number;
+  name: string;
+  parentIds: ReadonlyArray<string>;
+  awaitingInput: boolean;
+}
+
+interface AtomicWorkflowRunContext {
+  name: string;
+  scriptPath: string | undefined;
+  readonly stages: Map<string, AtomicWorkflowStageContext>;
+}
+
 interface AtomicSessionContext {
   readonly threadId: ThreadId;
   readonly scope: Scope.Closeable;
@@ -88,15 +105,42 @@ interface AtomicSessionContext {
   activeTurnId: TurnId | undefined;
   assistantItemId: RuntimeItemId | undefined;
   reasoningItemId: RuntimeItemId | undefined;
+  messageSequence: number;
+  assistantText: string;
+  reasoningText: string;
+  pendingAssistantError: string | undefined;
+  sawAgentActivity: boolean;
   readonly pendingUi: Map<ApprovalRequestId, PendingUiRequest>;
+  readonly workflowRuns: Map<string, AtomicWorkflowRunContext>;
+  readonly workflowLifecycleSignatures: Map<string, string>;
+  mappedEventSequence: number;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   stopped: boolean;
 }
 
-export interface AtomicAdapterOptions {
+export interface PiCompatibleAdapterOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly instanceId?: ProviderInstanceId;
+  /** Internal process budget override. Primarily used by focused adapter tests. */
+  readonly startupTimeout?: Duration.Input;
+  /** Internal process budget override. Primarily used by focused adapter tests. */
+  readonly requestTimeout?: Duration.Input;
 }
+
+export interface PiCompatibleSettings {
+  readonly binaryPath: string;
+  readonly agentDir: string;
+  readonly launchArgs: string;
+}
+
+export interface PiCompatibleAdapterDefinition {
+  readonly provider: ProviderDriverKind;
+  readonly displayName: string;
+  readonly agentDirEnvironmentVariable: "ATOMIC_CODING_AGENT_DIR" | "PI_CODING_AGENT_DIR";
+  readonly rawSource: "atomic.rpc" | "pi.rpc";
+}
+
+export type AtomicAdapterOptions = PiCompatibleAdapterOptions;
 
 function parseModelSlug(
   slug: string | undefined,
@@ -113,22 +157,116 @@ function field(record: Readonly<Record<string, unknown>>, name: string): string 
   return isString(value) && value.trim().length > 0 ? value : undefined;
 }
 
-function dataText(value: unknown): string | undefined {
-  if (isString(value)) return value;
-  if (!isRecord(value)) return undefined;
-  return field(value, "text") ?? field(value, "content") ?? field(value, "output");
+function stringField(record: Readonly<Record<string, unknown>>, name: string): string | undefined {
+  const value = record[name];
+  return isString(value) ? value : undefined;
 }
 
-function atomicEnvironment(
-  settings: AtomicSettings,
+function workflowStageTaskId(runId: string, stageId: string): string {
+  return `${runId}:wf:${stageId}`;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function atomicSessionUsage(data: unknown) {
+  if (!isRecord(data)) return undefined;
+  const tokens = isRecord(data.tokens) ? data.tokens : undefined;
+  const contextUsage = isRecord(data.contextUsage) ? data.contextUsage : undefined;
+  const usedTokens = nonNegativeNumber(contextUsage?.tokens) ?? nonNegativeNumber(tokens?.total);
+  if (usedTokens === undefined) return undefined;
+  const maxTokens = nonNegativeNumber(contextUsage?.contextWindow);
+  const inputTokens = nonNegativeNumber(tokens?.input);
+  const cachedInputTokens = nonNegativeNumber(tokens?.cacheRead);
+  const outputTokens = nonNegativeNumber(tokens?.output);
+  const totalProcessedTokens = nonNegativeNumber(tokens?.total);
+  const toolUses = nonNegativeNumber(data.toolCalls);
+  return {
+    usedTokens,
+    ...(maxTokens !== undefined && maxTokens > 0 ? { maxTokens } : {}),
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(totalProcessedTokens === undefined ? {} : { totalProcessedTokens }),
+    ...(toolUses === undefined ? {} : { toolUses }),
+  };
+}
+
+function workflowStageDepth(
+  run: AtomicWorkflowRunContext,
+  stage: AtomicWorkflowStageContext,
+  visiting: ReadonlySet<string> = new Set(),
+): number {
+  if (stage.parentIds.length === 0 || visiting.has(stage.id)) return 0;
+  const nextVisiting = new Set(visiting).add(stage.id);
+  return (
+    1 +
+    Math.max(
+      ...stage.parentIds.map((parentId) => {
+        const parent = run.stages.get(parentId);
+        return parent ? workflowStageDepth(run, parent, nextVisiting) : 0;
+      }),
+    )
+  );
+}
+
+function dataText(value: unknown): string | undefined {
+  if (isString(value)) return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map(dataText)
+      .filter((entry): entry is string => entry !== undefined)
+      .join("");
+    return text.length > 0 ? text : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  return (
+    stringField(value, "text") ??
+    stringField(value, "thinking") ??
+    dataText(value.content) ??
+    dataText(value.output) ??
+    dataText(value.result)
+  );
+}
+
+function messageContent(message: Readonly<Record<string, unknown>>, blockType: string): string {
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((block): block is Readonly<Record<string, unknown>> => isRecord(block))
+    .filter((block) => field(block, "type") === blockType)
+    .map((block) =>
+      blockType === "thinking"
+        ? (stringField(block, "thinking") ?? stringField(block, "text") ?? "")
+        : (stringField(block, "text") ?? ""),
+    )
+    .join("");
+}
+
+function visibleMessageText(message: Readonly<Record<string, unknown>>): string | undefined {
+  const text = dataText(message.content);
+  if (!text) return undefined;
+  // Atomic's terminal chat surfaces sometimes include ANSI styling. T3 owns
+  // presentation, so retain the content while removing terminal escapes.
+  // eslint-disable-next-line no-control-regex -- ANSI CSI begins with ESC.
+  const clean = text.replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, "").trim();
+  return clean.length > 0 ? clean : undefined;
+}
+
+function piCompatibleEnvironment(
+  settings: PiCompatibleSettings,
+  definition: PiCompatibleAdapterDefinition,
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   return settings.agentDir
-    ? { ...environment, ATOMIC_CODING_AGENT_DIR: settings.agentDir }
+    ? { ...environment, [definition.agentDirEnvironmentVariable]: settings.agentDir }
     : environment;
 }
 
-function sessionArgs(settings: AtomicSettings, title: string | undefined): ReadonlyArray<string> {
+function sessionArgs(
+  settings: PiCompatibleSettings,
+  title: string | undefined,
+): ReadonlyArray<string> {
   const configured = [...tokenizeCliArgs(settings.launchArgs)];
   const hasTrustFlag = configured.some((arg) => arg === "--approve" || arg === "--no-approve");
   return [
@@ -138,17 +276,23 @@ function sessionArgs(settings: AtomicSettings, title: string | undefined): Reado
   ];
 }
 
-export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
-  settings: AtomicSettings,
-  options?: AtomicAdapterOptions,
+export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(function* (
+  settings: PiCompatibleSettings,
+  definition: PiCompatibleAdapterDefinition,
+  options?: PiCompatibleAdapterOptions,
 ) {
+  const PROVIDER = definition.provider;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* ServerConfig;
-  const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("atomic");
-  const environment = atomicEnvironment(settings, options?.environment ?? process.env);
+  const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make(PROVIDER);
+  const environment = piCompatibleEnvironment(
+    settings,
+    definition,
+    options?.environment ?? process.env,
+  );
   const sessions = new Map<ThreadId, AtomicSessionContext>();
   const locks = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
   const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
@@ -159,7 +303,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
         new ProviderAdapterRequestError({
           provider: PROVIDER,
           method: "crypto/randomUUIDv4",
-          detail: "Failed to generate an Atomic runtime identifier.",
+          detail: `Failed to generate a ${definition.displayName} runtime identifier.`,
           cause,
         }),
     ),
@@ -168,6 +312,19 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
     Effect.all({ eventId: Effect.map(randomId, EventId.make), createdAt: nowIso });
   const publish = (event: ProviderRuntimeEvent) =>
     PubSub.publish(runtimeEvents, event).pipe(Effect.asVoid);
+
+  const awaitMappedEvents = (context: AtomicSessionContext, target: number) => {
+    const wait = (): Effect.Effect<void> =>
+      context.mappedEventSequence >= target
+        ? Effect.void
+        : Effect.sleep(Duration.millis(1)).pipe(Effect.flatMap(wait));
+    return wait().pipe(
+      Effect.timeout(Duration.seconds(5)),
+      Effect.catch(() =>
+        Effect.logWarning(`Timed out draining ${definition.displayName} events through ${target}.`),
+      ),
+    );
+  };
 
   const getLock = (threadId: string) =>
     SynchronizedRef.modifyEffect(locks, (current) => {
@@ -194,7 +351,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
   };
 
   const raw = (payload: AtomicRpcEvent, method?: string) => ({
-    source: "atomic.rpc" as const,
+    source: definition.rawSource,
     ...(method ? { method } : {}),
     payload,
   });
@@ -211,6 +368,10 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
       context.activeTurnId = undefined;
       context.assistantItemId = undefined;
       context.reasoningItemId = undefined;
+      context.assistantText = "";
+      context.reasoningText = "";
+      context.pendingAssistantError = undefined;
+      context.sawAgentActivity = false;
       context.session = { ...rest, status: "ready", updatedAt: yield* nowIso };
       yield* publish({
         type: "turn.completed",
@@ -233,9 +394,12 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
       if (!atomicRequestId || !method) return;
       if (method === "notify") {
         const message = field(event, "message");
-        if (message) {
+        const notifyType = field(event, "notifyType") ?? "info";
+        // Informational notices are terminal UI chrome in Pi (for example
+        // "Obsidian: 2 vaults discovered"), not warnings in a chat transcript.
+        if (message && notifyType !== "info") {
           yield* publish({
-            type: field(event, "notifyType") === "error" ? "runtime.error" : "runtime.warning",
+            type: "runtime.warning",
             ...(yield* eventStamp()),
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
@@ -243,9 +407,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
             payload: {
               message,
-              ...(field(event, "notifyType") === "error"
-                ? { errorClass: "provider_error" as const }
-                : {}),
+              detail: { kind: "extension_notification", notifyType },
             },
             raw: raw(event, "extension_ui_request"),
           });
@@ -255,8 +417,9 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
       if (!["select", "confirm", "input", "editor"].includes(method)) return;
       const requestId = ApprovalRequestId.make(atomicRequestId);
       const questionId = `${atomicRequestId}:answer`;
-      const title = field(event, "title") ?? "Atomic needs input";
+      const title = field(event, "title") ?? `${definition.displayName} needs input`;
       const question = field(event, "message") ?? title;
+      const defaultValue = stringField(event, "prefill") ?? stringField(event, "initialValue");
       const selectOptions = isStringArray(event.options) ? event.options : [];
       const optionsForQuestion =
         method === "confirm"
@@ -287,6 +450,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
               id: questionId,
               header: title,
               question,
+              ...(defaultValue === undefined ? {} : { defaultValue }),
               options: optionsForQuestion,
               multiSelect: false,
             },
@@ -294,6 +458,292 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
         },
         raw: raw(event, "extension_ui_request"),
       });
+    });
+
+  const startProviderTurn = (context: AtomicSessionContext) =>
+    Effect.gen(function* () {
+      if (context.activeTurnId) return context.activeTurnId;
+      const turnId = TurnId.make(yield* randomId);
+      context.activeTurnId = turnId;
+      context.session = {
+        ...context.session,
+        status: "running",
+        activeTurnId: turnId,
+        updatedAt: yield* nowIso,
+      };
+      context.turns.push({ id: turnId, items: [] });
+      yield* publish({
+        type: "turn.started",
+        ...(yield* eventStamp()),
+        provider: PROVIDER,
+        providerInstanceId: boundInstanceId,
+        threadId: context.threadId,
+        turnId,
+        payload: {},
+      });
+      return turnId;
+    });
+
+  const resolveAbandonedUiRequests = (context: AtomicSessionContext) =>
+    Effect.gen(function* () {
+      for (const requestId of context.pendingUi.keys()) {
+        yield* publish({
+          type: "user-input.resolved",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          requestId: RuntimeRequestId.make(requestId),
+          payload: { answers: {} },
+        });
+      }
+      context.pendingUi.clear();
+    });
+
+  const handleWorkflowEntry = (context: AtomicSessionContext, event: AtomicRpcEvent) =>
+    Effect.gen(function* () {
+      const entry = isRecord(event.entry)
+        ? event.entry
+        : isRecord(event.message)
+          ? event.message
+          : undefined;
+      if (!entry) return false;
+      const customType = field(entry, "customType");
+      let data = isRecord(entry.data)
+        ? entry.data
+        : isRecord(entry.details)
+          ? entry.details
+          : entry;
+      let entryType =
+        customType ??
+        (field(entry, "type")?.startsWith("workflow.") ? field(entry, "type") : undefined);
+      if (customType === "workflows:lifecycle-notice") {
+        const kind = field(data, "kind");
+        const scope = field(data, "scope");
+        entryType =
+          kind === "started"
+            ? `workflow.${scope}.start`
+            : kind === "awaiting_input"
+              ? `workflow.${scope}.waiting`
+              : kind === "paused"
+                ? `workflow.${scope}.paused`
+                : kind === "resumed"
+                  ? `workflow.${scope}.resumed`
+                  : ["completed", "failed", "blocked", "quit"].includes(kind ?? "")
+                    ? `workflow.${scope}.end`
+                    : undefined;
+        data = { ...data, ...(field(data, "status") ? {} : { status: kind }) };
+      }
+      if (!entryType?.startsWith("workflow.")) return false;
+      const runId = field(data, "runId");
+      if (!runId) return true;
+      const stageId = field(data, "stageId");
+      const lifecycleTarget = `${runId}:${stageId ?? "run"}`;
+      const lifecycleSignature = [
+        entryType,
+        field(data, "status") ?? "",
+        field(data, "promptMessage") ?? "",
+        dataText(data.result) ?? "",
+      ].join("\u0000");
+      if (context.workflowLifecycleSignatures.get(lifecycleTarget) === lifecycleSignature) {
+        return true;
+      }
+      context.workflowLifecycleSignatures.set(lifecycleTarget, lifecycleSignature);
+      const isRunEntry = entryType === "workflow.run.start" || entryType === "workflow.run.end";
+      const eventWorkflowName =
+        field(data, "workflowName") ?? (isRunEntry ? field(data, "name") : undefined);
+      let workflowRun = context.workflowRuns.get(runId);
+      if (!workflowRun) {
+        workflowRun = {
+          name: eventWorkflowName ?? `${definition.displayName} workflow`,
+          scriptPath: undefined,
+          stages: new Map(),
+        };
+        context.workflowRuns.set(runId, workflowRun);
+      } else if (eventWorkflowName) {
+        workflowRun.name = eventWorkflowName;
+      }
+      const workflowName = workflowRun.name;
+      if (workflowRun.scriptPath === undefined && /^[a-zA-Z0-9._-]+$/u.test(workflowName)) {
+        for (const extension of ["ts", "js"] as const) {
+          const candidate = path.resolve(
+            context.session.cwd,
+            ".atomic",
+            "workflows",
+            `${workflowName}.${extension}`,
+          );
+          if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+            workflowRun.scriptPath = candidate;
+            break;
+          }
+        }
+      }
+      let stage: AtomicWorkflowStageContext | undefined;
+      if (stageId) {
+        const eventStageName = field(data, "stageName") ?? field(data, "name");
+        const eventParentIds = isStringArray(data.parentIds) ? data.parentIds : undefined;
+        const replayKey = field(data, "replayKey");
+        stage = workflowRun.stages.get(stageId);
+        if (!stage) {
+          stage = {
+            id: stageId,
+            index: workflowRun.stages.size,
+            name: eventStageName ?? stageId,
+            parentIds: eventParentIds ?? [],
+            awaitingInput:
+              replayKey?.startsWith("prompt:") === true || entryType === "workflow.stage.waiting",
+          };
+          workflowRun.stages.set(stageId, stage);
+        } else {
+          if (eventStageName) stage.name = eventStageName;
+          if (eventParentIds) stage.parentIds = eventParentIds;
+          if (replayKey?.startsWith("prompt:") === true || entryType === "workflow.stage.waiting") {
+            stage.awaitingInput = true;
+          }
+        }
+      }
+      const stageName = stage?.name;
+      const source = raw(event, field(event, "type") ?? "workflow_lifecycle");
+      const taskId = RuntimeTaskId.make(stage ? workflowStageTaskId(runId, stage.id) : runId);
+      const phaseIndex = stage ? workflowStageDepth(workflowRun, stage) : undefined;
+      const linkage = stage
+        ? ({
+            taskType: "local_agent",
+            workflowName,
+            workflowStageId: stage.id,
+            title: stage.name,
+            role: stage.awaitingInput ? "human input" : "workflow stage",
+            ...(field(data, "model") ? { model: field(data, "model") } : {}),
+            parentAgentId: runId,
+            dependsOnTaskIds: stage.parentIds.map((parentId) =>
+              RuntimeTaskId.make(workflowStageTaskId(runId, parentId)),
+            ),
+            agentIndex: stage.index,
+            phaseIndex,
+            phaseTitle: `Stage ${phaseIndex! + 1}`,
+            timelineBypass: true,
+          } as const)
+        : ({
+            taskType: "local_workflow",
+            workflowName,
+            title: workflowName,
+            runHandles: {
+              runId,
+              ...(workflowRun.scriptPath ? { scriptPath: workflowRun.scriptPath } : {}),
+            },
+          } as const);
+
+      if (entryType === "workflow.run.start" || entryType === "workflow.stage.start") {
+        yield* publish({
+          type: "task.started",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId,
+            description:
+              entryType === "workflow.run.start"
+                ? `Running ${workflowName}`
+                : `Running ${stageName ?? "workflow stage"}`,
+            ...linkage,
+          },
+          raw: source,
+        });
+        if (entryType === "workflow.stage.start" && stage?.awaitingInput) {
+          yield* publish({
+            type: "task.updated",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              taskId,
+              status: "waiting",
+              description: `Awaiting input for ${stage.name}`,
+              ...linkage,
+            },
+            raw: source,
+          });
+        }
+        return true;
+      }
+
+      if (entryType === "workflow.stage.end" || entryType === "workflow.run.end") {
+        const status = field(data, "status");
+        const terminalStatus =
+          status === "failed" || status === "blocked"
+            ? "failed"
+            : status === "cancelled" || status === "interrupted" || status === "quit"
+              ? "stopped"
+              : "completed";
+        const summary =
+          dataText(data.result) ?? field(data, "summary") ?? field(data, "error") ?? undefined;
+        yield* publish({
+          type: "task.completed",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId,
+            status: terminalStatus,
+            ...(summary ? { summary } : {}),
+            ...linkage,
+          },
+          raw: source,
+        });
+        return true;
+      }
+      if (entryType === "workflow.stage.waiting" && stage) {
+        const prompt = field(data, "promptMessage") ?? `Awaiting input for ${stage.name}`;
+        yield* publish({
+          type: "task.progress",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId,
+            status: "waiting",
+            description: prompt,
+            summary: prompt,
+            ...linkage,
+          },
+          raw: source,
+        });
+        return true;
+      }
+      if (
+        entryType === "workflow.stage.paused" ||
+        entryType === "workflow.run.paused" ||
+        entryType === "workflow.stage.resumed" ||
+        entryType === "workflow.run.resumed"
+      ) {
+        const resumed = entryType.endsWith(".resumed");
+        yield* publish({
+          type: "task.updated",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId,
+            status: resumed ? "running" : "idle",
+            description: `${stageName ?? workflowName} ${resumed ? "resumed" : "paused"}`,
+            ...linkage,
+          },
+          raw: source,
+        });
+        return true;
+      }
+      return true;
     });
 
   const handleEvent = (
@@ -306,11 +756,95 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
       if (type === "extension_ui_request") {
         return yield* handleExtensionUi(context, event);
       }
+      if (type === "entry_appended" && (yield* handleWorkflowEntry(context, event))) return;
+      if (type === "message_end") {
+        yield* handleWorkflowEntry(context, event);
+      }
+      if (type === "extension_error") {
+        yield* publish({
+          // Pi treats extension loading as best-effort: one incompatible
+          // extension can fail while the agent and every other extension keep
+          // running. Preserve that recoverability in T3. Transport failures
+          // and assistant message errors still use runtime.error below.
+          type: "runtime.warning",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            message:
+              field(event, "error") ??
+              field(event, "message") ??
+              `${definition.displayName} extension failed.`,
+            detail: {
+              kind: "extension_error",
+              ...(field(event, "extensionPath")
+                ? { extensionPath: field(event, "extensionPath") }
+                : {}),
+            },
+          },
+          raw: raw(event, type),
+        });
+        return;
+      }
+      if (type === "auto_retry_start" || type === "summarization_retry_scheduled") {
+        const attempt = nonNegativeNumber(event.attempt);
+        const maxAttempts = nonNegativeNumber(event.maxAttempts);
+        const delayMs = nonNegativeNumber(event.delayMs);
+        yield* publish({
+          type: "runtime.warning",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            message: `${definition.displayName} is retrying${attempt === undefined ? "" : ` (attempt ${attempt}${maxAttempts === undefined ? "" : ` of ${maxAttempts}`})`}${delayMs === undefined ? "." : ` in ${Math.ceil(delayMs / 1000)}s.`}`,
+            detail: event,
+          },
+          raw: raw(event, type),
+        });
+        return;
+      }
+      if (type === "auto_retry_end") {
+        if (event.success === false) {
+          yield* publish({
+            type: "runtime.warning",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              message:
+                field(event, "finalError") ?? `${definition.displayName} exhausted its retries.`,
+              detail: event,
+            },
+            raw: raw(event, type),
+          });
+        }
+        return;
+      }
+      if (type === "agent_start") {
+        context.sawAgentActivity = true;
+        yield* startProviderTurn(context);
+        return;
+      }
       const turnId = context.activeTurnId;
       if (!turnId) return;
       const source = raw(event, type);
       if (type === "message_start") {
-        context.assistantItemId = RuntimeItemId.make(`${turnId}:assistant`);
+        const message = isRecord(event.message) ? event.message : undefined;
+        if (message && field(message, "role") !== "assistant") return;
+        context.sawAgentActivity = true;
+        context.messageSequence += 1;
+        context.assistantItemId = RuntimeItemId.make(
+          `${turnId}:assistant:${context.messageSequence}`,
+        );
+        context.reasoningItemId = undefined;
+        context.assistantText = "";
+        context.reasoningText = "";
         yield* publish({
           type: "item.started",
           ...(yield* eventStamp()),
@@ -329,11 +863,26 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
           ? event.assistantMessageEvent
           : undefined;
         const updateType = update ? field(update, "type") : undefined;
-        const delta = update ? field(update, "delta") : undefined;
-        if (!delta || (updateType !== "text_delta" && updateType !== "thinking_delta")) return;
+        if (updateType === "error") {
+          const error = update && isRecord(update.error) ? update.error : undefined;
+          context.pendingAssistantError =
+            (update && field(update, "error")) ??
+            (error && field(error, "errorMessage")) ??
+            `${definition.displayName} assistant stream failed.`;
+          return;
+        }
+        const delta = update ? stringField(update, "delta") : undefined;
+        if (
+          delta === undefined ||
+          (updateType !== "text_delta" && updateType !== "thinking_delta")
+        ) {
+          return;
+        }
         const isThinking = updateType === "thinking_delta";
         if (isThinking && !context.reasoningItemId) {
-          context.reasoningItemId = RuntimeItemId.make(`${turnId}:reasoning`);
+          context.reasoningItemId = RuntimeItemId.make(
+            `${turnId}:reasoning:${context.messageSequence}`,
+          );
           yield* publish({
             type: "item.started",
             ...(yield* eventStamp()),
@@ -347,8 +896,26 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
           });
         }
         if (!isThinking && !context.assistantItemId) {
-          context.assistantItemId = RuntimeItemId.make(`${turnId}:assistant`);
+          context.messageSequence += 1;
+          context.assistantItemId = RuntimeItemId.make(
+            `${turnId}:assistant:${context.messageSequence}`,
+          );
+          yield* publish({
+            type: "item.started",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            turnId,
+            itemId: context.assistantItemId,
+            payload: { itemType: "assistant_message", status: "inProgress" },
+            raw: source,
+          });
         }
+        const itemId = isThinking ? context.reasoningItemId : context.assistantItemId;
+        if (!itemId) return;
+        if (isThinking) context.reasoningText += delta;
+        else context.assistantText += delta;
         yield* publish({
           type: "content.delta",
           ...(yield* eventStamp()),
@@ -356,13 +923,95 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
           providerInstanceId: boundInstanceId,
           threadId: context.threadId,
           turnId,
-          itemId: isThinking ? context.reasoningItemId : context.assistantItemId,
+          itemId,
           payload: { streamKind: isThinking ? "reasoning_text" : "assistant_text", delta },
           raw: source,
         });
         return;
       }
       if (type === "message_end") {
+        const message = isRecord(event.message) ? event.message : undefined;
+        const role = message ? field(message, "role") : undefined;
+        if (role === "custom" && message) {
+          if (isBoolean(message.display) && !message.display) return;
+          const text = visibleMessageText(message);
+          if (!text) return;
+          context.messageSequence += 1;
+          const itemId = RuntimeItemId.make(`${turnId}:custom:${context.messageSequence}`);
+          yield* publish({
+            type: "item.started",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            turnId,
+            itemId,
+            payload: { itemType: "assistant_message", status: "inProgress" },
+            raw: source,
+          });
+          yield* publish({
+            type: "content.delta",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            turnId,
+            itemId,
+            payload: { streamKind: "assistant_text", delta: text },
+            raw: source,
+          });
+          yield* publish({
+            type: "item.completed",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            turnId,
+            itemId,
+            payload: { itemType: "assistant_message", status: "completed" },
+            raw: source,
+          });
+          return;
+        }
+        if (role !== undefined && role !== "assistant") return;
+        if (message) {
+          const stopReason = field(message, "stopReason");
+          if (stopReason === "error") {
+            context.pendingAssistantError =
+              field(message, "errorMessage") ??
+              context.pendingAssistantError ??
+              `${definition.displayName} assistant stream failed.`;
+          } else if (stopReason !== "aborted") {
+            // Pi may recover from one failed model/tool-extension cycle and
+            // continue the same agent turn. Only the last assistant outcome at
+            // agent_settled is terminal for T3's thread lifecycle.
+            context.pendingAssistantError = undefined;
+          }
+          const authoritativeReasoning = messageContent(message, "thinking");
+          const authoritativeText = messageContent(message, "text");
+          for (const [itemId, streamKind, current, final] of [
+            [
+              context.reasoningItemId,
+              "reasoning_text",
+              context.reasoningText,
+              authoritativeReasoning,
+            ],
+            [context.assistantItemId, "assistant_text", context.assistantText, authoritativeText],
+          ] as const) {
+            if (!itemId || final.length <= current.length || !final.startsWith(current)) continue;
+            yield* publish({
+              type: "content.delta",
+              ...(yield* eventStamp()),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: context.threadId,
+              turnId,
+              itemId,
+              payload: { streamKind, delta: final.slice(current.length) },
+              raw: source,
+            });
+          }
+        }
         for (const [itemId, itemType] of [
           [context.reasoningItemId, "reasoning"],
           [context.assistantItemId, "assistant_message"],
@@ -380,6 +1029,10 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             raw: source,
           });
         }
+        context.assistantItemId = undefined;
+        context.reasoningItemId = undefined;
+        context.assistantText = "";
+        context.reasoningText = "";
         return;
       }
       if (
@@ -389,7 +1042,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
       ) {
         const toolCallId = field(event, "toolCallId") ?? field(event, "id") ?? `${turnId}:tool`;
         const itemId = RuntimeItemId.make(toolCallId);
-        const toolName = field(event, "toolName") ?? "Atomic tool";
+        const toolName = field(event, "toolName") ?? `${definition.displayName} tool`;
         const lifecycle =
           type === "tool_execution_start"
             ? "item.started"
@@ -397,6 +1050,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
               ? "item.updated"
               : "item.completed";
         const isError = isBoolean(event.isError) ? event.isError : false;
+        const detail = dataText(event.partialResult ?? event.result);
         yield* publish({
           type: lifecycle,
           ...(yield* eventStamp()),
@@ -411,19 +1065,55 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             status:
               lifecycle === "item.completed" ? (isError ? "failed" : "completed") : "inProgress",
             title: toolName,
-            ...(dataText(event.partialResult ?? event.result)
-              ? { detail: dataText(event.partialResult ?? event.result) }
-              : {}),
+            ...(detail ? { detail } : {}),
             data: event,
           },
           raw: source,
         });
         return;
       }
-      if (type === "agent_end") {
-        yield* completeActiveTurn(context, "completed");
+      if (type === "agent_settled") {
+        const statsResult = yield* context.rpc
+          .request({ type: "get_session_stats" })
+          .pipe(Effect.result);
+        if (statsResult._tag === "Success") {
+          const usage = atomicSessionUsage(statsResult.success.data);
+          if (usage) {
+            yield* publish({
+              type: "thread.token-usage.updated",
+              ...(yield* eventStamp()),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: context.threadId,
+              turnId,
+              payload: { usage },
+              raw: source,
+            });
+          }
+        }
+        yield* resolveAbandonedUiRequests(context);
+        const terminalError = context.pendingAssistantError;
+        if (terminalError) {
+          yield* publish({
+            type: "runtime.error",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            turnId,
+            payload: { message: terminalError, class: "provider_error" },
+            raw: source,
+          });
+          yield* completeActiveTurn(context, "failed", terminalError);
+        } else {
+          yield* completeActiveTurn(context, "completed");
+        }
         return;
       }
+      // agent_end is the end of one low-level Pi run. Atomic may still retry,
+      // compact, or deliver queued workflow follow-ups; agent_settled is the
+      // only terminal lifecycle signal.
+      if (type === "agent_end") return;
       if (type === "compaction_start" || type === "compaction_end") {
         const itemId = RuntimeItemId.make(`${turnId}:compaction`);
         yield* publish({
@@ -477,8 +1167,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "startSession",
-            issue:
-              "Atomic RPC does not expose approval callbacks. Choose Full access for Atomic sessions.",
+            issue: `${definition.displayName} RPC does not expose approval callbacks. Choose Full access for ${definition.displayName} sessions.`,
           });
         }
         const existing = sessions.get(input.threadId);
@@ -489,9 +1178,16 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
           const cwd = input.cwd ?? serverConfig.cwd;
           const rpc = yield* makeAtomicRpcProcess({
             binaryPath: settings.binaryPath,
+            runtimeName: definition.displayName,
             args: sessionArgs(settings, input.title),
             cwd,
             environment,
+            ...(options?.startupTimeout === undefined
+              ? {}
+              : { startupTimeout: options.startupTimeout }),
+            ...(options?.requestTimeout === undefined
+              ? {}
+              : { requestTimeout: options.requestTimeout }),
           }).pipe(
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
             Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -591,18 +1287,34 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             activeTurnId: undefined,
             assistantItemId: undefined,
             reasoningItemId: undefined,
+            messageSequence: 0,
+            assistantText: "",
+            reasoningText: "",
+            pendingAssistantError: undefined,
+            sawAgentActivity: false,
             pendingUi: new Map(),
+            workflowRuns: new Map(),
+            workflowLifecycleSignatures: new Map(),
+            mappedEventSequence: 0,
             turns: [],
             stopped: false,
           };
           yield* rpc.events.pipe(
-            Stream.runForEach((event) =>
-              handleEvent(context, event).pipe(
+            Stream.runForEach((event) => {
+              const sequence = atomicRpcEventSequence(event);
+              return handleEvent(context, event).pipe(
                 Effect.catch((cause) =>
-                  Effect.logWarning("Failed to map an Atomic RPC event.", { cause }),
+                  Effect.logWarning(`Failed to map a ${definition.displayName} RPC event.`, {
+                    cause,
+                  }),
                 ),
-              ),
-            ),
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    if (sequence !== undefined) context.mappedEventSequence = sequence;
+                  }),
+                ),
+              );
+            }),
             Effect.forkIn(sessionScope),
           );
           sessions.set(input.threadId, context);
@@ -613,7 +1325,10 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
             threadId: input.threadId,
-            payload: { message: "Atomic RPC session ready", resume: session.resumeCursor },
+            payload: {
+              message: `${definition.displayName} RPC session ready`,
+              resume: session.resumeCursor,
+            },
           });
           yield* publish({
             type: "session.state.changed",
@@ -621,7 +1336,10 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
             threadId: input.threadId,
-            payload: { state: "ready", reason: "Atomic RPC session ready" },
+            payload: {
+              state: "ready",
+              reason: `${definition.displayName} RPC session ready`,
+            },
           });
           yield* publish({
             type: "thread.started",
@@ -634,7 +1352,9 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
           return session;
         }).pipe(
           Effect.ensuring(
-            transferred ? Effect.void : Effect.ignore(Scope.close(sessionScope, Exit.void)),
+            Effect.suspend(() =>
+              transferred ? Effect.void : Effect.ignore(Scope.close(sessionScope, Exit.void)),
+            ),
           ),
         );
       }),
@@ -718,6 +1438,8 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
         const turnId = context.activeTurnId ?? TurnId.make(yield* randomId);
         if (!steering) {
           context.activeTurnId = turnId;
+          context.pendingAssistantError = undefined;
+          context.sawAgentActivity = false;
           context.session = {
             ...context.session,
             status: "running",
@@ -742,13 +1464,16 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             },
           });
         }
-        yield* context.rpc
-          .request({
-            type: "prompt",
-            message: text ?? "Please inspect the attached image.",
-            ...(images.length > 0 ? { images } : {}),
-            ...(steering ? { streamingBehavior: "steer" } : {}),
-          })
+        const promptResponse = yield* context.rpc
+          .request(
+            {
+              type: "prompt",
+              message: text ?? "Please inspect the attached image.",
+              ...(images.length > 0 ? { images } : {}),
+              ...(steering ? { streamingBehavior: "steer" } : {}),
+            },
+            Duration.infinity,
+          )
           .pipe(
             Effect.mapError(
               (cause) =>
@@ -760,6 +1485,43 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
                 }),
             ),
           );
+        // Atomic writes custom/workflow events before the prompt response, but
+        // the transport and adapter consume on separate fibers. Drain those
+        // already-read events before deciding an extension-only turn was idle.
+        yield* awaitMappedEvents(context, promptResponse.precedingEventSequence);
+        // Dialogs with provider-side timeouts resolve without a separate RPC
+        // callback. Once the owning prompt has returned, any remaining cards
+        // are stale and must not leave T3 permanently awaiting input.
+        yield* resolveAbandonedUiRequests(context);
+        if (!steering && context.activeTurnId === turnId && !context.sawAgentActivity) {
+          const stateResponse = yield* context.rpc.request({ type: "get_state" }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "get_state",
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+          // get_state may report idle immediately after Pi has emitted
+          // agent_settled while the adapter fiber is still mapping that event.
+          // Drain everything already observed by the transport before using
+          // the extension-only fallback, or a genuine terminal error can be
+          // overwritten by a synthetic successful completion.
+          yield* awaitMappedEvents(context, stateResponse.precedingEventSequence);
+          if (context.activeTurnId !== turnId) return;
+          const state = Option.getOrUndefined(decodeState(stateResponse.data));
+          // Extension commands such as `/workflow list` can emit custom chat
+          // messages without ever starting a Pi agent run. Their prompt
+          // response is accepted and get_state reports idle, so settle the T3
+          // turn explicitly instead of waiting for an agent event that will
+          // never arrive.
+          if (state?.isStreaming === false) {
+            yield* completeActiveTurn(context, "completed");
+          }
+        }
         return { threadId: input.threadId, turnId, resumeCursor: context.session.resumeCursor };
       }),
     );
@@ -778,6 +1540,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
             }),
         ),
       );
+      yield* resolveAbandonedUiRequests(context);
       yield* completeActiveTurn(context, "interrupted");
     });
 
@@ -790,7 +1553,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
       new ProviderAdapterRequestError({
         provider: PROVIDER,
         method: "respondToRequest",
-        detail: "Atomic RPC does not expose approval requests.",
+        detail: `${definition.displayName} RPC does not expose approval requests.`,
       }),
     );
 
@@ -806,7 +1569,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
         return yield* new ProviderAdapterRequestError({
           provider: PROVIDER,
           method: "extension_ui_response",
-          detail: `Unknown Atomic UI request: ${requestId}`,
+          detail: `Unknown ${definition.displayName} UI request: ${requestId}`,
         });
       }
       const answer = answers[pending.questionId];
@@ -883,7 +1646,7 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
         return yield* new ProviderAdapterRequestError({
           provider: PROVIDER,
           method: "fork",
-          detail: "Atomic session rollback is not available in this first integration.",
+          detail: `${definition.displayName} session rollback is not available in this first integration.`,
         });
       }),
     stopAll: () =>
@@ -898,3 +1661,14 @@ export const makeAtomicAdapter = Effect.fn("makeAtomicAdapter")(function* (
   };
   return adapter;
 });
+
+const ATOMIC_ADAPTER_DEFINITION: PiCompatibleAdapterDefinition = {
+  provider: ProviderDriverKind.make("atomic"),
+  displayName: "Atomic",
+  agentDirEnvironmentVariable: "ATOMIC_CODING_AGENT_DIR",
+  rawSource: "atomic.rpc",
+};
+
+export function makeAtomicAdapter(settings: AtomicSettings, options?: AtomicAdapterOptions) {
+  return makePiCompatibleAdapter(settings, ATOMIC_ADAPTER_DEFINITION, options);
+}

@@ -18,10 +18,21 @@ const AtomicRpcResponse = Schema.Struct({
   data: Schema.optional(Schema.Unknown),
   error: Schema.optional(Schema.String),
 });
-export type AtomicRpcResponse = typeof AtomicRpcResponse.Type;
+type AtomicRpcWireResponse = typeof AtomicRpcResponse.Type;
+export type AtomicRpcResponse = AtomicRpcWireResponse & {
+  /** Number of unsolicited events read before this response frame. */
+  readonly precedingEventSequence: number;
+};
 
 const AtomicRpcEvent = Schema.Record(Schema.String, Schema.Unknown);
 export type AtomicRpcEvent = typeof AtomicRpcEvent.Type;
+
+const eventSequences = new WeakMap<object, number>();
+
+/** Ordered transport cursor attached out-of-band so it never pollutes raw provider data. */
+export function atomicRpcEventSequence(event: AtomicRpcEvent): number | undefined {
+  return eventSequences.get(event);
+}
 
 const isAtomicRpcResponse = Schema.is(AtomicRpcResponse);
 const isAtomicRpcEvent = Schema.is(AtomicRpcEvent);
@@ -50,6 +61,7 @@ export interface AtomicRpcProcess {
 
 export interface AtomicRpcProcessOptions {
   readonly binaryPath: string;
+  readonly runtimeName?: string;
   readonly args?: ReadonlyArray<string>;
   readonly cwd?: string;
   readonly environment?: NodeJS.ProcessEnv;
@@ -72,6 +84,7 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   options: AtomicRpcProcessOptions,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const runtimeName = options.runtimeName ?? "Atomic";
   const environment = options.environment ?? process.env;
   const startupTimeout = options.startupTimeout ?? STARTUP_REQUEST_TIMEOUT;
   const requestTimeout = options.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT;
@@ -93,7 +106,7 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
         (cause) =>
           new AtomicRpcError({
             operation: "spawn",
-            detail: `Could not start '${options.binaryPath}'.`,
+            detail: `Could not start ${runtimeName} from '${options.binaryPath}'.`,
             cause,
           }),
       ),
@@ -104,6 +117,7 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   const pending = new Map<string, Deferred.Deferred<AtomicRpcResponse, AtomicRpcError>>();
   const writeMutex = yield* Semaphore.make(1);
   let requestSequence = 0;
+  let eventSequence = 0;
   // False until Atomic answers its first command, i.e. until startup network
   // work has finished. Gates which timeout `request` applies.
   let settled = false;
@@ -115,13 +129,27 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
           (cause) =>
             new AtomicRpcError({
               operation: typeof value.type === "string" ? value.type : "write",
-              detail: "Could not write to Atomic stdin.",
+              detail: `Could not write to ${runtimeName} stdin.`,
               cause,
             }),
         ),
         Effect.asVoid,
       ),
     );
+
+  const failPending = (cause?: unknown) =>
+    Effect.gen(function* () {
+      if (pending.size === 0) return;
+      const error = new AtomicRpcError({
+        operation: "read",
+        detail: `${runtimeName} RPC output closed or could not be decoded.`,
+        ...(cause === undefined ? {} : { cause }),
+      });
+      for (const deferred of pending.values()) {
+        yield* Deferred.fail(deferred, error);
+      }
+      pending.clear();
+    });
 
   yield* handle.stdout.pipe(
     Stream.pipeThroughChannel(Ndjson.decode({ ignoreEmptyLines: true })),
@@ -132,32 +160,29 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
         if (!deferred) return Effect.void;
         pending.delete(value.id!);
         return value.success
-          ? Deferred.succeed(deferred, value).pipe(Effect.asVoid)
+          ? Deferred.succeed(deferred, {
+              ...value,
+              precedingEventSequence: eventSequence,
+            }).pipe(Effect.asVoid)
           : Deferred.fail(
               deferred,
               new AtomicRpcError({
                 operation: value.command,
-                detail: value.error ?? "Atomic returned an unsuccessful response.",
+                detail: value.error ?? `${runtimeName} returned an unsuccessful response.`,
               }),
             ).pipe(Effect.asVoid);
       }
-      return isAtomicRpcEvent(value)
-        ? PubSub.publish(events, value).pipe(Effect.asVoid)
-        : Effect.logWarning("Ignored malformed Atomic RPC frame.");
+      if (!isAtomicRpcEvent(value)) {
+        return Effect.logWarning(`Ignored malformed ${runtimeName} RPC frame.`);
+      }
+      eventSequence += 1;
+      eventSequences.set(value, eventSequence);
+      return PubSub.publish(events, value).pipe(Effect.asVoid);
     }),
-    Effect.catchCause((cause) =>
-      Effect.gen(function* () {
-        const error = new AtomicRpcError({
-          operation: "read",
-          detail: "Atomic RPC output closed or could not be decoded.",
-          cause,
-        });
-        for (const deferred of pending.values()) {
-          yield* Deferred.fail(deferred, error);
-        }
-        pending.clear();
-      }),
-    ),
+    Effect.catchCause((cause) => failPending(cause)),
+    // A clean EOF is just as terminal as a decode failure. Without this
+    // finalizer, requests wait for their full timeout after the child exits.
+    Effect.ensuring(failPending()),
     Effect.forkScoped,
   );
   yield* handle.stderr.pipe(Stream.runDrain, Effect.ignore, Effect.forkScoped);
@@ -169,12 +194,16 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
       const id = `t3-${++requestSequence}`;
       const deferred = yield* Deferred.make<AtomicRpcResponse, AtomicRpcError>();
       pending.set(id, deferred);
-      yield* write({ ...input, id }).pipe(
-        Effect.tapError(() => Effect.sync(() => pending.delete(id))),
+      const response = yield* Effect.gen(function* () {
+        yield* write({ ...input, id });
+        return yield* Deferred.await(deferred);
+      }).pipe(
+        // The deadline covers both the stdin write and the response wait. A
+        // dead child can otherwise leave a pipe write suspended forever.
+        Effect.timeoutOption(effectiveTimeout),
+        Effect.ensuring(Effect.sync(() => pending.delete(id))),
       );
-      const response = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(effectiveTimeout));
       if (Option.isNone(response)) {
-        pending.delete(id);
         return yield* new AtomicRpcError({
           operation: typeof input.type === "string" ? input.type : "request",
           detail: `Timed out after ${Duration.toMillis(effectiveTimeout)}ms.`,

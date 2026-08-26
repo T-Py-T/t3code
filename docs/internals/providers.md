@@ -7,10 +7,12 @@ orchestration layer does not know which one is behind a thread.
 
 ## Built-in drivers
 
-[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with five entries:
+[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with seven entries:
 
 | Driver kind   | Driver source                           |
 | ------------- | --------------------------------------- |
+| `atomic`      | [`Drivers/AtomicDriver.ts`][atomic]     |
+| `pi`          | [`Drivers/PiDriver.ts`][pi]             |
 | `codex`       | [`Drivers/CodexDriver.ts`][codex]       |
 | `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]     |
 | `cursor`      | [`Drivers/CursorDriver.ts`][cursor]     |
@@ -38,6 +40,10 @@ directory to route session and turn operations for a thread, so callers name a t
 
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.
+
+Pi and Atomic share a Pi-RPC lifecycle adapter, while Atomic adds workflow lifecycle projection and
+workflow source inspection. See [Pi and Atomic providers](./providers-pi-atomic.md) for the protocol
+contract, event mappings, extension UI behavior, and known boundaries.
 
 ## Model manifest
 
@@ -88,6 +94,8 @@ when a request opens (approval) or user input is requested, via
 `flushBufferedAssistantMessagesForTurn`.
 
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
+[atomic]: ../../apps/server/src/provider/Drivers/AtomicDriver.ts
+[pi]: ../../apps/server/src/provider/Drivers/PiDriver.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
 [cursor]: ../../apps/server/src/provider/Drivers/CursorDriver.ts

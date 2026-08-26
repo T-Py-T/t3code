@@ -41,6 +41,19 @@ const multiSelectQuestion = {
 } as const;
 
 describe("resolvePendingUserInputAnswer", () => {
+  it("uses a provider editor's default value until the user changes it", () => {
+    const question = {
+      ...singleSelectQuestion,
+      id: "editor",
+      defaultValue: "ORIGINAL_WORKFLOW_VALUE",
+    };
+
+    expect(resolvePendingUserInputAnswer(question, undefined)).toBe("ORIGINAL_WORKFLOW_VALUE");
+    expect(derivePendingUserInputProgress([question], {}, 0).customAnswer).toBe(
+      "ORIGINAL_WORKFLOW_VALUE",
+    );
+  });
+
   it("prefers a custom answer over selected options", () => {
     expect(
       resolvePendingUserInputAnswer(singleSelectQuestion, {

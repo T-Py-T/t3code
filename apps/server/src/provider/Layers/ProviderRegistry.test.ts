@@ -1546,8 +1546,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 "error";
               attempts += 1
             ) {
-              yield* TestClock.adjust("10 millis");
-              yield* Effect.yieldNow;
+              yield* Effect.sleep("10 millis").pipe(TestClock.withLive);
               initialProviders = yield* registry.getProviders;
             }
             const initialCodex = initialProviders.find(
@@ -1585,8 +1584,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 ) {
                   return providers;
                 }
-                yield* TestClock.adjust("50 millis");
-                yield* Effect.yieldNow;
+                yield* Effect.sleep("50 millis").pipe(TestClock.withLive);
               }
               return yield* registry.getProviders;
             });

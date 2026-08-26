@@ -391,6 +391,9 @@ describe("AtomicAdapter", () => {
         "Edit this value before the workflow continues.",
       );
       assert.equal(requested.payload.questions[0]?.defaultValue, "ORIGINAL_WORKFLOW_VALUE");
+      if (requested.requestId === undefined) {
+        return assert.fail("Expected the Atomic user-input request to have an id.");
+      }
 
       // Deliberately cross the ordinary command deadline before the user answers.
       yield* Effect.sleep(Duration.millis(80));

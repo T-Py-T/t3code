@@ -1526,7 +1526,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           // the extension-only fallback, or a genuine terminal error can be
           // overwritten by a synthetic successful completion.
           yield* awaitMappedEvents(context, stateResponse.precedingEventSequence);
-          if (context.activeTurnId !== turnId) return;
+          if (context.activeTurnId !== turnId) {
+            return { threadId: input.threadId, turnId, resumeCursor: context.session.resumeCursor };
+          }
           const state = Option.getOrUndefined(decodeState(stateResponse.data));
           // Extension commands such as `/workflow list` can emit custom chat
           // messages without ever starting a Pi agent run. Their prompt

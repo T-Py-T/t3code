@@ -26,8 +26,9 @@ import {
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
   isProviderSendTurnSupportedImageMimeType,
+  providerRuntimeModes,
 } from "./orchestration.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
 const decodeFullThreadDiffInput = Schema.decodeUnknownEffect(OrchestrationGetFullThreadDiffInput);
@@ -46,6 +47,17 @@ const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSessi
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
+
+it("limits Atomic and Pi sessions to full access", () => {
+  assert.deepStrictEqual(providerRuntimeModes(ProviderDriverKind.make("atomic")), ["full-access"]);
+  assert.deepStrictEqual(providerRuntimeModes(ProviderDriverKind.make("pi")), ["full-access"]);
+  assert.deepStrictEqual(providerRuntimeModes(ProviderDriverKind.make("codex")), [
+    "approval-required",
+    "auto-accept-edits",
+    "auto",
+    "full-access",
+  ]);
+});
 
 function getOptionValue(
   options: ReadonlyArray<{ id: string; value: unknown }> | undefined,

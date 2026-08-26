@@ -130,6 +130,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
         instanceId,
         environment: processEnv,
       });
+      yield* Effect.addFinalizer(() => adapter.stopAll().pipe(Effect.ignore));
       const checkProvider = checkPiProviderStatus(
         effectiveConfig,
         serverConfig.cwd,
@@ -171,6 +172,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
         snapshot,
         adapter,
         textGeneration: makeUnsupportedTextGeneration(),
+        supportsTextGeneration: false,
       } satisfies ProviderInstance;
     }),
 };

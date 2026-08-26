@@ -7,8 +7,9 @@ T3 Code integrates Pi and Atomic as separate built-in providers over their share
 Pi is the compatibility baseline. Atomic uses the same chat lifecycle and adds extension events for
 workflows and interactive UI.
 
-This document records the adapter contract so the implementation can be maintained in this fork or
-proposed upstream without rediscovering the protocol and lifecycle decisions.
+This document records the adapter contract so the implementation can be maintained in this fork
+without rediscovering the protocol and lifecycle decisions. Upstream publication is a separate
+decision and must not happen without the fork owner's explicit approval for that specific action.
 
 ## Supported user experience
 
@@ -22,8 +23,11 @@ proposed upstream without rediscovering the protocol and lifecycle decisions.
 | Show context and token usage after a turn              | Yes                  | Yes    |
 | Ask select, confirm, input, and editor questions       | Yes                  | Yes    |
 | Preserve editor prefill text                           | Yes                  | Yes    |
-| Show workflow runs, stages, dependencies, and status   | Protocol events only | Yes    |
-| Open contained workflow source from the Agents panel   | No                   | Yes    |
+| Show workflow runs, stages, dependencies, and status   | Protocol events only | Yes\*  |
+| Open contained workflow source from the Agents panel   | No                   | Yes\*  |
+
+\* Project-local Atomic workflows require **Trust project resources** for that provider instance.
+The switch is off by default.
 
 Both providers are Early Access and disabled by default. Pi 0.84.3 or newer is recommended. Pi
 0.84.0 through 0.84.2 can use the compatibility reducer, but may omit complete tool or usage
@@ -62,8 +66,9 @@ have one implementation.
 [`AtomicRpcProcess.ts`](../../apps/server/src/provider/atomic/AtomicRpcProcess.ts) owns one child
 process and exposes request, notification, event-stream, and kill operations.
 
-- The child starts as `<binary> --mode rpc`. Session processes also receive `--no-approve` unless
-  launch arguments explicitly contain `--approve` or `--no-approve`.
+- The child starts as `<binary> --mode rpc`. Session processes receive `--no-approve` by default,
+  or `--approve` when **Trust project resources** is enabled. An explicit `--approve` or
+  `--no-approve` in launch arguments takes precedence over the switch.
 - Requests and notifications are JSON objects framed by an ASCII LF (`\n`). JSON strings may contain
   Unicode line separator U+2028; it is data, not an RPC frame boundary.
 - Standard input remains open for the lifetime of the session. Closing it after the first command
@@ -73,10 +78,10 @@ process and exposes request, notification, event-stream, and kill operations.
   credentials and fetch model metadata before replying. Later requests use a 15-second budget.
 - A clean output EOF fails pending requests immediately rather than making them wait for a timeout.
 
-Each response carries an out-of-band `precedingEventSequence`. The adapter waits until all earlier
-events have been mapped before it treats a response as proof that a turn is idle or settled. This
-barrier prevents a synthetic success from racing ahead of a terminal event already emitted by the
-CLI.
+Each response carries an out-of-band `precedingEventSequence`. The adapter waits for all earlier
+events to be mapped before it treats a response as proof that a turn is idle or settled, but the
+wait is bounded by five seconds. After that deadline it logs a warning and continues, so the
+barrier reduces rather than eliminates races with a terminal event already emitted by the CLI.
 
 The session owns a closeable Effect scope. Ownership must move to the live session context before
 `startSession` returns; otherwise the child process and event consumer are finalized and a later
@@ -142,7 +147,10 @@ when all of these checks pass:
 1. The requested path is absolute.
 2. The file resolves under the current thread workspace's `.atomic/workflows` directory.
 3. The resolved leaf is a regular `.js` or `.ts` file, including after symlink resolution.
-4. The read stays within the size cap, and the opened inode still matches the resolved leaf.
+4. Every directory from the approved root to the script is pinned before the file is opened.
+5. The final open refuses symlinks, and the opened file and directory identities must still match
+   the approved path before any contents are returned.
+6. The read stays within the size cap.
 
 Claude's existing contained `.js` workflow source behavior remains unchanged. Atomic source is
 displayed in the existing Agents-panel script viewer through the same orchestration query.
@@ -153,8 +161,16 @@ Each provider instance supports:
 
 - an explicit binary path for CLIs outside the server process's `PATH`;
 - an optional isolated agent directory;
+- an explicit project-resource trust switch, disabled by default;
 - additional tokenized launch arguments; and
 - multiple independently configured provider instances.
+
+With trust disabled, T3 launches the CLI with `--no-approve`, so workspace-local workflows, skills,
+extensions, prompts, packages, and settings are ignored. Enabling the switch passes `--approve`,
+which makes those resources available to the agent. Trusted extensions and workflow tools execute
+with the permissions of the T3 server process; the switch should be enabled only for workspaces the
+user trusts. The Atomic agent-directory placeholder follows Atomic's default, `~/.atomic/agent`.
+Home-relative agent-directory settings are expanded for both discovery and live sessions.
 
 Models use the CLI's `provider/model` identity. Thinking choices come from the model's reported
 capabilities. Model changes do not require a new T3 thread, but continuation identity remains scoped
@@ -162,6 +178,34 @@ to the configured provider instance.
 
 Pi and Atomic currently support agent sessions only. They do not implement T3's auxiliary commit
 message, pull-request text, branch-name, or thread-title generation operations.
+
+The shared settings contract therefore excludes Pi and Atomic from auxiliary text-generation
+selectors. Their session protocol also has no approval callback, so web and mobile offer only Full
+access for these providers instead of presenting runtime modes the adapter cannot honor.
+
+## Automated review hardening
+
+The closed upstream experiment in
+[`pingdotgg/t3code#8262`](https://github.com/pingdotgg/t3code/pull/8262) was used as read-only review
+input. The fork keeps these follow-up protections even though that pull request remains closed:
+
+- session start/stop has a lifecycle lock independent from the long-lived prompt lock, so stopping
+  an interactive prompt cannot deadlock and a late start cannot resurrect a stopped session;
+- prompt and post-prompt state failures both fail the active turn and retire the broken session;
+- a successful post-prompt state response that omits `isStreaming` fails and retires the session
+  instead of leaving the T3 turn running forever;
+- interruption drains acknowledged events and suppresses unscoped late agent output until the next
+  explicit turn, preventing phantom turns after an abort;
+- driver-scope finalizers stop every live Pi/Atomic session;
+- clean RPC output EOF is remembered, so later requests fail immediately with runtime and binary
+  context instead of waiting for a timeout;
+- explicit selections, settings fallbacks, runtime modes, and mobile/web controls respect provider
+  capabilities;
+- editor defaults do not overwrite an option the user selected or restore text the user cleared;
+- provider discovery expands home-relative agent directories exactly as live sessions do, and
+  project-resource trust is passed explicitly as `--approve` or `--no-approve`;
+- workflow dependency depth is memoized, waiting workflows are not labeled as running, completed
+  graphs are not labeled live, and workflow-source reads defend against leaf and directory swaps.
 
 ## Known boundary
 

@@ -24,6 +24,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { makeAtomicRpcProcess } from "../atomic/AtomicRpcProcess.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
 
 const AtomicModel = Schema.Struct({
   id: Schema.String,
@@ -84,7 +85,10 @@ function piCompatibleEnvironment(
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   return settings.agentDir
-    ? { ...environment, [definition.agentDirEnvironmentVariable]: settings.agentDir }
+    ? {
+        ...environment,
+        [definition.agentDirEnvironmentVariable]: expandHomePath(settings.agentDir),
+      }
     : environment;
 }
 

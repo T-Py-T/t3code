@@ -5,6 +5,7 @@ import {
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
+  providerSupportsTextGeneration,
   type ServerProvider,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -331,7 +332,9 @@ export function resolveAppModelSelectionState(
     instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
     model: DEFAULT_TEXT_GENERATION_MODEL,
   };
-  const entries = deriveProviderInstanceEntries(providers);
+  const entries = deriveProviderInstanceEntries(providers).filter((entry) =>
+    providerSupportsTextGeneration(entry.driverKind),
+  );
   const selectedEntry = entries.find(
     (entry) => entry.instanceId === selection.instanceId && entry.enabled && entry.isAvailable,
   );

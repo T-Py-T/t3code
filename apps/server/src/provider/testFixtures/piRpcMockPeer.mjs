@@ -2,6 +2,9 @@ let buffer = "";
 let isStreaming = false;
 let pendingUiPrompt;
 let abortableTurnActive = false;
+let pendingInterruptedPrompt;
+let failNextGetState = false;
+let omitStreamingFromNextGetState = false;
 
 const write = (value) => {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -426,6 +429,20 @@ const runAbortableTurn = (command) => {
 const handle = (command) => {
   switch (command.type) {
     case "get_state":
+      if (failNextGetState) {
+        failNextGetState = false;
+        failureResponse(command, "The state transport failed after the prompt response.");
+        return;
+      }
+      if (omitStreamingFromNextGetState) {
+        omitStreamingFromNextGetState = false;
+        response(command, {
+          model: { provider: "openai-codex", id: "gpt-5.4" },
+          sessionId: "pi-rpc-mock-session",
+          sessionFile: "/tmp/pi-rpc-mock-session.jsonl",
+        });
+        return;
+      }
       response(command, {
         model: { provider: "openai-codex", id: "gpt-5.4" },
         thinkingLevel: "high",
@@ -461,6 +478,22 @@ const handle = (command) => {
         runTerminalAssistantErrorTurn(command);
       } else if (command.message === "/t3-prompt-rejected") {
         failureResponse(command, "The prompt transport rejected the request.");
+      } else if (command.message === "/t3-state-rejected") {
+        failNextGetState = true;
+        response(command);
+      } else if (command.message === "/t3-state-missing-stream") {
+        omitStreamingFromNextGetState = true;
+        response(command);
+      } else if (command.message === "/t3-interrupt-inflight") {
+        isStreaming = true;
+        pendingInterruptedPrompt = command;
+        write({
+          type: "extension_ui_request",
+          id: "interrupt-ready",
+          method: "input",
+          title: "Interrupt test ready",
+          message: "Interrupt this prompt now.",
+        });
       } else if (command.message === "/t3-abort-drain") {
         runAbortableTurn(command);
       } else if (command.message === "/t3-ui-wait") {
@@ -472,6 +505,60 @@ const handle = (command) => {
       }
       return;
     case "abort":
+      if (pendingInterruptedPrompt) {
+        const prompt = pendingInterruptedPrompt;
+        pendingInterruptedPrompt = undefined;
+        isStreaming = false;
+        response(command);
+        setTimeout(() => {
+          write({ type: "agent_start" });
+          write({ type: "message_start", message: { role: "assistant", content: [] } });
+          write({
+            type: "message_update",
+            assistantMessageEvent: {
+              type: "text_delta",
+              contentIndex: 0,
+              delta: "LATE_AFTER_ABORT",
+            },
+          });
+          write({
+            type: "entry_appended",
+            entry: {
+              type: "custom",
+              customType: "workflow.run.start",
+              data: {
+                runId: "interrupt-marker-before-response",
+                name: "interrupt-marker-before-response",
+              },
+            },
+          });
+          response(prompt);
+          setTimeout(() => {
+            write({ type: "agent_start" });
+            write({ type: "message_start", message: { role: "assistant", content: [] } });
+            write({
+              type: "message_update",
+              assistantMessageEvent: {
+                type: "text_delta",
+                contentIndex: 0,
+                delta: "LATE_AFTER_RESPONSE",
+              },
+            });
+            write({
+              type: "entry_appended",
+              entry: {
+                type: "custom",
+                customType: "workflow.run.start",
+                data: {
+                  runId: "interrupt-marker-after-response",
+                  name: "interrupt-marker-after-response",
+                },
+              },
+            });
+          }, 10);
+        }, 10);
+        return;
+      }
       if (abortableTurnActive) {
         write({
           type: "entry_appended",

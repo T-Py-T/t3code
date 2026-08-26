@@ -84,6 +84,13 @@ status, dependency order, summaries, and an **Awaiting input** state. When the w
 or `.ts` script in the current workspace's `.atomic/workflows` directory, **{} script** opens its
 contained, read-only source.
 
+To load workflows from the current workspace, enable **Settings** → **Atomic** → **Trust project
+resources** for that Atomic instance. It is off by default. Enabling it also allows Atomic to load
+other project-local skills, extensions, prompts, packages, and settings. Only enable it for a
+workspace you trust: extensions and workflow tools run with the permissions of the T3 Code server.
+You can still inspect workflow source through T3's contained, read-only viewer after Atomic reports
+the run.
+
 Atomic's parent RPC stream does not include private child-stage reasoning or tool transcripts, so
 T3 Code reports only the workflow lifecycle and summary details Atomic publishes.
 

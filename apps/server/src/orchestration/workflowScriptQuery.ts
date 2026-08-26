@@ -12,6 +12,7 @@
  * The client-supplied path is a hint from the workflow's runHandles; it is
  * never trusted beyond these checks.
  */
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -119,25 +120,66 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
     });
   }
 
-  // TOCTOU-safe read (review finding): open FIRST, then verify what was
-  // actually opened via the file descriptor. Re-checking the path after
-  // open would race against a swap; fstat on the handle cannot. The two
-  // containment checks fail with their own tagged reasons (not manufactured
-  // Errors folded into read-failed); "read-failed" is reserved for genuine
-  // platform failures with the real cause attached.
+  // Pin every directory from the approved root to the script before opening
+  // the file. A malicious process can otherwise replace `.atomic/workflows`
+  // (or any nested directory) after the realpath containment check and make a
+  // path-based open read outside the workspace. O_NOFOLLOW protects the final
+  // component; comparing the still-open directory handles with lstat after
+  // the file open detects directory replacement as well.
   const read = yield* Effect.tryPromise({
     try: async () => {
-      const handle = await NodeFSP.open(resolved, "r");
+      const relativePath = NodePath.relative(containingRoot.path, resolved);
+      const pathSegments = relativePath.split(NodePath.sep);
+      const directoryPaths = [containingRoot.path];
+      for (const segment of pathSegments.slice(0, -1)) {
+        directoryPaths.push(NodePath.join(directoryPaths.at(-1)!, segment));
+      }
+      const directoryHandles: Array<{
+        readonly path: string;
+        readonly handle: Awaited<ReturnType<typeof NodeFSP.open>>;
+        readonly dev: number;
+        readonly ino: number;
+      }> = [];
+      let handle: Awaited<ReturnType<typeof NodeFSP.open>> | undefined;
       try {
+        for (const directoryPath of directoryPaths) {
+          const directoryHandle = await NodeFSP.open(directoryPath, NodeFS.constants.O_RDONLY);
+          const directoryStat = await directoryHandle.stat();
+          if (!directoryStat.isDirectory()) {
+            await directoryHandle.close();
+            return { failure: "changed-during-read" as const };
+          }
+          directoryHandles.push({
+            path: directoryPath,
+            handle: directoryHandle,
+            dev: directoryStat.dev,
+            ino: directoryStat.ino,
+          });
+        }
+        handle = await NodeFSP.open(
+          resolved,
+          NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW,
+        );
         const stat = await handle.stat();
         if (!stat.isFile()) {
           return { failure: "not-regular-file" as const };
         }
-        // The opened inode must be the same one realpath resolved to: a
-        // process swapping the path between realpath and open changes the
-        // inode, which this comparison catches.
+        for (const directory of directoryHandles) {
+          const pathStat = await NodeFSP.lstat(directory.path);
+          if (
+            pathStat.isSymbolicLink() ||
+            !pathStat.isDirectory() ||
+            pathStat.ino !== directory.ino ||
+            pathStat.dev !== directory.dev
+          ) {
+            return { failure: "changed-during-read" as const };
+          }
+        }
+        // The opened inode must also still be the file reached through the
+        // pinned directory chain. Restoring a swapped directory before this
+        // check exposes the original file again and produces an inode mismatch.
         const pathStat = await NodeFSP.lstat(resolved);
-        if (stat.ino !== pathStat.ino || stat.dev !== pathStat.dev) {
+        if (pathStat.isSymbolicLink() || stat.ino !== pathStat.ino || stat.dev !== pathStat.dev) {
           return { failure: "changed-during-read" as const };
         }
         const truncated = stat.size > SCRIPT_BYTE_CAP;
@@ -148,7 +190,8 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
           truncated,
         };
       } finally {
-        await handle.close();
+        await handle?.close();
+        await Promise.all(directoryHandles.map(({ handle: directory }) => directory.close()));
       }
     },
     catch: (cause) =>

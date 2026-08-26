@@ -218,7 +218,7 @@ function WorkflowGraph({ group }: { group: AgentPanelWorkflowGroup }) {
     <div className="mx-1.5 mt-1.5 rounded-md border border-border/50 bg-background/35 px-2 py-2">
       <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[.6rem] uppercase tracking-wider text-muted-foreground/70">
         <Braces aria-hidden className="size-3" />
-        Live workflow graph
+        {workflowIsLive(group) ? "Live workflow graph" : "Workflow graph"}
       </div>
       {group.phases.map((phase, index) => (
         <div key={phase.index}>

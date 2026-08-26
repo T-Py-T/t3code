@@ -34,6 +34,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -110,6 +111,8 @@ interface AtomicSessionContext {
   reasoningText: string;
   pendingAssistantError: string | undefined;
   sawAgentActivity: boolean;
+  promptInFlightTurnId: TurnId | undefined;
+  suppressAgentEventsUntilNextTurn: boolean;
   readonly pendingUi: Map<ApprovalRequestId, PendingUiRequest>;
   readonly workflowRuns: Map<string, AtomicWorkflowRunContext>;
   readonly workflowLifecycleSignatures: Map<string, string>;
@@ -130,6 +133,7 @@ export interface PiCompatibleAdapterOptions {
 export interface PiCompatibleSettings {
   readonly binaryPath: string;
   readonly agentDir: string;
+  readonly trustProjectResources: boolean;
   readonly launchArgs: string;
 }
 
@@ -197,18 +201,22 @@ function workflowStageDepth(
   run: AtomicWorkflowRunContext,
   stage: AtomicWorkflowStageContext,
   visiting: ReadonlySet<string> = new Set(),
+  depths: Map<string, number> = new Map(),
 ): number {
+  const cached = depths.get(stage.id);
+  if (cached !== undefined) return cached;
   if (stage.parentIds.length === 0 || visiting.has(stage.id)) return 0;
   const nextVisiting = new Set(visiting).add(stage.id);
-  return (
+  const depth =
     1 +
     Math.max(
       ...stage.parentIds.map((parentId) => {
         const parent = run.stages.get(parentId);
-        return parent ? workflowStageDepth(run, parent, nextVisiting) : 0;
+        return parent ? workflowStageDepth(run, parent, nextVisiting, depths) : 0;
       }),
-    )
-  );
+    );
+  depths.set(stage.id, depth);
+  return depth;
 }
 
 function dataText(value: unknown): string | undefined {
@@ -259,7 +267,10 @@ function piCompatibleEnvironment(
   environment: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   return settings.agentDir
-    ? { ...environment, [definition.agentDirEnvironmentVariable]: settings.agentDir }
+    ? {
+        ...environment,
+        [definition.agentDirEnvironmentVariable]: expandHomePath(settings.agentDir),
+      }
     : environment;
 }
 
@@ -270,7 +281,7 @@ function sessionArgs(
   const configured = [...tokenizeCliArgs(settings.launchArgs)];
   const hasTrustFlag = configured.some((arg) => arg === "--approve" || arg === "--no-approve");
   return [
-    ...(hasTrustFlag ? [] : ["--no-approve"]),
+    ...(hasTrustFlag ? [] : [settings.trustProjectResources ? "--approve" : "--no-approve"]),
     ...configured,
     ...(title ? ["--name", title] : []),
   ];
@@ -294,7 +305,8 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
     options?.environment ?? process.env,
   );
   const sessions = new Map<ThreadId, AtomicSessionContext>();
-  const locks = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+  const turnLocks = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+  const lifecycleLocks = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
   const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const randomId = crypto.randomUUIDv4.pipe(
@@ -326,8 +338,11 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
     );
   };
 
-  const getLock = (threadId: string) =>
-    SynchronizedRef.modifyEffect(locks, (current) => {
+  const getLock = (
+    lockStore: SynchronizedRef.SynchronizedRef<Map<string, Semaphore.Semaphore>>,
+    threadId: string,
+  ) =>
+    SynchronizedRef.modifyEffect(lockStore, (current) => {
       const existing = current.get(threadId);
       if (existing) return Effect.succeed([existing, current] as const);
       return Semaphore.make(1).pipe(
@@ -338,8 +353,15 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         }),
       );
     });
-  const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(getLock(threadId), (lock) => lock.withPermit(effect));
+  const withLock = <A, E, R>(
+    lockStore: SynchronizedRef.SynchronizedRef<Map<string, Semaphore.Semaphore>>,
+    threadId: string,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.flatMap(getLock(lockStore, threadId), (lock) => lock.withPermit(effect));
+  const withTurnLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+    withLock(turnLocks, threadId, effect);
+  const withLifecycleLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+    withLock(lifecycleLocks, threadId, effect);
 
   const requireSession = (
     threadId: ThreadId,
@@ -758,12 +780,14 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       const type = field(event, "type");
       if (!type) return;
       if (type === "extension_ui_request") {
+        if (context.suppressAgentEventsUntilNextTurn) return;
         return yield* handleExtensionUi(context, event);
       }
       if (type === "entry_appended" && (yield* handleWorkflowEntry(context, event))) return;
       if (type === "message_end") {
         yield* handleWorkflowEntry(context, event);
       }
+      if (context.suppressAgentEventsUntilNextTurn) return;
       if (type === "extension_error") {
         yield* publish({
           // Pi treats extension loading as best-effort: one incompatible
@@ -1160,7 +1184,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
     });
 
   const startSession: ProviderAdapterShape<ProviderAdapterError>["startSession"] = (input) =>
-    withThreadLock(
+    withLifecycleLock(
       input.threadId,
       Effect.gen(function* () {
         if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -1299,6 +1323,8 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             reasoningText: "",
             pendingAssistantError: undefined,
             sawAgentActivity: false,
+            promptInFlightTurnId: undefined,
+            suppressAgentEventsUntilNextTurn: false,
             pendingUi: new Map(),
             workflowRuns: new Map(),
             workflowLifecycleSignatures: new Map(),
@@ -1368,7 +1394,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
     );
 
   const sendTurn: ProviderAdapterShape<ProviderAdapterError>["sendTurn"] = (input) =>
-    withThreadLock(
+    withTurnLock(
       input.threadId,
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
@@ -1471,81 +1497,105 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             },
           });
         }
-        const promptResponse = yield* context.rpc
-          .request(
-            {
-              type: "prompt",
-              message: text ?? "Please inspect the attached image.",
-              ...(images.length > 0 ? { images } : {}),
-              ...(steering ? { streamingBehavior: "steer" } : {}),
-            },
-            Duration.infinity,
-          )
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "prompt",
-                  detail: cause.message,
-                  cause,
-                }),
-            ),
-            Effect.tapError((cause) =>
-              context.stopped
-                ? Effect.void
-                : Effect.gen(function* () {
-                    yield* completeActiveTurn(context, "failed", cause.message);
-                    yield* stopSessionInternal(context, false);
+        context.promptInFlightTurnId = turnId;
+        context.suppressAgentEventsUntilNextTurn = false;
+        return yield* Effect.gen(function* () {
+          const promptResponse = yield* context.rpc
+            .request(
+              {
+                type: "prompt",
+                message: text ?? "Please inspect the attached image.",
+                ...(images.length > 0 ? { images } : {}),
+                ...(steering ? { streamingBehavior: "steer" } : {}),
+              },
+              Duration.infinity,
+            )
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "prompt",
+                    detail: cause.message,
+                    cause,
                   }),
-            ),
-          );
-        // Atomic writes custom/workflow events before the prompt response, but
-        // the transport and adapter consume on separate fibers. Drain those
-        // already-read events before deciding an extension-only turn was idle.
-        yield* awaitMappedEvents(context, promptResponse.precedingEventSequence);
-        // Dialogs with provider-side timeouts resolve without a separate RPC
-        // callback. Once the owning prompt has returned, any remaining cards
-        // are stale and must not leave T3 permanently awaiting input.
-        yield* resolveAbandonedUiRequests(context);
-        if (!steering && context.activeTurnId === turnId && !context.sawAgentActivity) {
-          const stateResponse = yield* context.rpc.request({ type: "get_state" }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "get_state",
-                  detail: cause.message,
-                  cause,
+              ),
+            );
+          // Atomic writes custom/workflow events before the prompt response,
+          // but the transport and adapter consume on separate fibers. Drain
+          // those already-read events before deciding an extension-only turn
+          // was idle.
+          yield* awaitMappedEvents(context, promptResponse.precedingEventSequence);
+          // Dialogs with provider-side timeouts resolve without a separate RPC
+          // callback. Once the owning prompt has returned, any remaining cards
+          // are stale and must not leave T3 permanently awaiting input.
+          yield* resolveAbandonedUiRequests(context);
+          if (!steering && context.activeTurnId === turnId && !context.sawAgentActivity) {
+            const stateResponse = yield* context.rpc.request({ type: "get_state" }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "get_state",
+                    detail: cause.message,
+                    cause,
+                  }),
+              ),
+            );
+            // get_state may report idle immediately after Pi has emitted
+            // agent_settled while the adapter fiber is still mapping that
+            // event. Drain everything already observed by the transport before
+            // using the extension-only fallback, or a genuine terminal error
+            // can be overwritten by a synthetic successful completion.
+            yield* awaitMappedEvents(context, stateResponse.precedingEventSequence);
+            if (context.activeTurnId !== turnId) {
+              return {
+                threadId: input.threadId,
+                turnId,
+                resumeCursor: context.session.resumeCursor,
+              };
+            }
+            const state = Option.getOrUndefined(decodeState(stateResponse.data));
+            if (state?.isStreaming === undefined) {
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "get_state",
+                detail: `${definition.displayName} RPC state did not report whether the session is streaming.`,
+              });
+            }
+            // Extension commands such as `/workflow list` can emit custom chat
+            // messages without ever starting a Pi agent run. Their prompt
+            // response is accepted and get_state reports idle, so settle the T3
+            // turn explicitly instead of waiting for an agent event that will
+            // never arrive.
+            if (state.isStreaming === false) {
+              yield* completeActiveTurn(context, "completed");
+            }
+          }
+          return { threadId: input.threadId, turnId, resumeCursor: context.session.resumeCursor };
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (context.promptInFlightTurnId !== turnId) return;
+              context.promptInFlightTurnId = undefined;
+            }),
+          ),
+          Effect.tapError((cause) =>
+            context.stopped
+              ? Effect.void
+              : Effect.gen(function* () {
+                  yield* completeActiveTurn(context, "failed", cause.message);
+                  yield* stopSessionInternal(context, false);
                 }),
-            ),
-          );
-          // get_state may report idle immediately after Pi has emitted
-          // agent_settled while the adapter fiber is still mapping that event.
-          // Drain everything already observed by the transport before using
-          // the extension-only fallback, or a genuine terminal error can be
-          // overwritten by a synthetic successful completion.
-          yield* awaitMappedEvents(context, stateResponse.precedingEventSequence);
-          if (context.activeTurnId !== turnId) {
-            return { threadId: input.threadId, turnId, resumeCursor: context.session.resumeCursor };
-          }
-          const state = Option.getOrUndefined(decodeState(stateResponse.data));
-          // Extension commands such as `/workflow list` can emit custom chat
-          // messages without ever starting a Pi agent run. Their prompt
-          // response is accepted and get_state reports idle, so settle the T3
-          // turn explicitly instead of waiting for an agent event that will
-          // never arrive.
-          if (state?.isStreaming === false) {
-            yield* completeActiveTurn(context, "completed");
-          }
-        }
-        return { threadId: input.threadId, turnId, resumeCursor: context.session.resumeCursor };
+          ),
+        );
       }),
     );
 
   const interruptTurn: ProviderAdapterShape<ProviderAdapterError>["interruptTurn"] = (threadId) =>
     Effect.gen(function* () {
       const context = yield* requireSession(threadId);
+      const promptInFlightTurnId = context.promptInFlightTurnId;
       const response = yield* context.rpc.request({ type: "abort" }).pipe(
         Effect.mapError(
           (cause) =>
@@ -1558,6 +1608,15 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         ),
       );
       yield* awaitMappedEvents(context, response.precedingEventSequence);
+      if (
+        promptInFlightTurnId !== undefined &&
+        context.promptInFlightTurnId === promptInFlightTurnId
+      ) {
+        // Keep suppressing unscoped Pi agent events even after the interrupted
+        // prompt response arrives. Some runtimes flush buffered events after
+        // that response; the next explicit T3 turn is the safe reset point.
+        context.suppressAgentEventsUntilNextTurn = true;
+      }
       yield* resolveAbandonedUiRequests(context);
       yield* completeActiveTurn(context, "interrupted");
     });
@@ -1639,7 +1698,10 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
     respondToRequest,
     respondToUserInput,
     stopSession: (threadId) =>
-      Effect.flatMap(requireSession(threadId), (context) => stopSessionInternal(context, true)),
+      withLifecycleLock(
+        threadId,
+        Effect.flatMap(requireSession(threadId), (context) => stopSessionInternal(context, true)),
+      ),
     listSessions: () => Effect.sync(() => Array.from(sessions.values(), ({ session }) => session)),
     hasSession: (threadId) =>
       Effect.sync(() => {

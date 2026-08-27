@@ -81,6 +81,10 @@ export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
 export const AuthRelayReadScope = "relay:read" as const;
 export const AuthRelayWriteScope = "relay:write" as const;
+export const AuthComputerReadScope = "computer:read" as const;
+export const AuthComputerOperateScope = "computer:operate" as const;
+export const AuthComputerApproveScope = "computer:approve" as const;
+export const AuthComputerHostScope = "computer:host" as const;
 export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -90,6 +94,10 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthAccessWriteScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  AuthComputerReadScope,
+  AuthComputerOperateScope,
+  AuthComputerApproveScope,
+  AuthComputerHostScope,
 ]);
 export type AuthEnvironmentScope = typeof AuthEnvironmentScope.Type;
 export const AuthEnvironmentScopes = Schema.Array(AuthEnvironmentScope);

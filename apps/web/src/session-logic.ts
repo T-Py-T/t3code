@@ -4,6 +4,10 @@ import * as Schema from "effect/Schema";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
   ApprovalRequestId,
+  ComputerUseHistoryState,
+  type ComputerUseActionRisk,
+  type ComputerUseHistoryState as ComputerUseHistoryStateValue,
+  type ComputerUseOperation,
   isToolLifecycleItemType,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
@@ -111,6 +115,17 @@ export interface WorkLogEntry {
     workflowId: string | null;
     agentTaskIds: ReadonlyArray<string>;
   };
+  computerUse?: {
+    state: ComputerUseHistoryStateValue;
+    operation?: ComputerUseOperation;
+    target?: {
+      displayName: string;
+      stableIdentity: string;
+    };
+    risk?: ComputerUseActionRisk;
+    providerInstanceId?: string;
+    resultTag?: string;
+  };
 }
 
 const workLogCollapseKey = Symbol();
@@ -140,6 +155,50 @@ export interface PendingApproval {
 
 const isProviderRequestKind = Schema.is(ProviderRequestKind);
 const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
+const isComputerUseHistoryState = Schema.is(ComputerUseHistoryState);
+
+function extractComputerUseState(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown> | null,
+): WorkLogEntry["computerUse"] {
+  if (!activity.kind.startsWith("computer-use.") || !payload) return undefined;
+  if (!isComputerUseHistoryState(payload.state)) return undefined;
+  const target =
+    payload.target && typeof payload.target === "object"
+      ? (payload.target as Record<string, unknown>)
+      : null;
+  return {
+    state: payload.state,
+    ...(payload.operation === "status" ||
+    payload.operation === "listTargets" ||
+    payload.operation === "observe" ||
+    payload.operation === "act"
+      ? { operation: payload.operation }
+      : {}),
+    ...(target &&
+    typeof target.displayName === "string" &&
+    typeof target.stableIdentity === "string"
+      ? {
+          target: {
+            displayName: target.displayName,
+            stableIdentity: target.stableIdentity,
+          },
+        }
+      : {}),
+    ...(payload.risk === "inspect" ||
+    payload.risk === "reversible-local" ||
+    payload.risk === "external-side-effect" ||
+    payload.risk === "sensitive-data" ||
+    payload.risk === "destructive-or-privileged" ||
+    payload.risk === "forbidden"
+      ? { risk: payload.risk }
+      : {}),
+    ...(typeof payload.providerInstanceId === "string"
+      ? { providerInstanceId: payload.providerInstanceId }
+      : {}),
+    ...(typeof payload.resultTag === "string" ? { resultTag: payload.resultTag } : {}),
+  };
+}
 
 export interface PendingUserInput {
   requestId: ApprovalRequestId;
@@ -1002,6 +1061,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (requestKind) {
     entry.requestKind = requestKind;
   }
+  const computerUse = extractComputerUseState(activity, payload);
+  if (computerUse) {
+    entry.computerUse = computerUse;
+  }
   if (toolCallId) {
     entry.toolCallId = toolCallId;
   }
@@ -1089,7 +1152,27 @@ function collapseDerivedWorkLogEntries(
   // rows (live-test finding, thread 7ac7ef05).
   const groupKeyByTaskId = new Map<string, string>();
   const toolLifecycleRowIndex = new Map<string, number>();
+  const computerUseRowIndex = new Map<string, number>();
   for (const entry of entries) {
+    if (entry.computerUse) {
+      const computerUseKey = `computer-use:${entry.turnId ?? "no-turn"}:${
+        entry.computerUse.target?.stableIdentity ?? entry.computerUse.operation ?? "control"
+      }`;
+      const existingIndex = computerUseRowIndex.get(computerUseKey);
+      if (existingIndex !== undefined) {
+        const existing = collapsed[existingIndex]!;
+        collapsed[existingIndex] = {
+          ...mergeDerivedWorkLogEntries(existing, entry),
+          id: existing.id,
+          createdAt: existing.createdAt,
+          turnId: existing.turnId ?? null,
+        };
+        continue;
+      }
+      computerUseRowIndex.set(computerUseKey, collapsed.length);
+      collapsed.push(entry);
+      continue;
+    }
     const isTaskRow =
       entry.taskId !== undefined &&
       !entry.isBackgroundTask &&

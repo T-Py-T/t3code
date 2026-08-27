@@ -1437,6 +1437,60 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("keeps a Computer Use card visible when adjacent tool work overflows", () => {
+    const timelineEntries = [
+      {
+        id: "tool-before",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:01Z",
+        entry: {
+          id: "tool-before",
+          createdAt: "2026-01-01T00:00:01Z",
+          label: "Prepared target list",
+          tone: "tool" as const,
+        },
+      },
+      {
+        id: "computer-use-card",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "computer-use-card",
+          createdAt: "2026-01-01T00:00:02Z",
+          label: "Acting in TextEdit.",
+          tone: "tool" as const,
+          computerUse: {
+            state: "acting" as const,
+            operation: "act" as const,
+            target: { displayName: "TextEdit", stableIdentity: "textedit" },
+          },
+        },
+      },
+      {
+        id: "tool-after",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:03Z",
+        entry: {
+          id: "tool-after",
+          createdAt: "2026-01-01T00:00:03Z",
+          label: "Reported result",
+          tone: "tool" as const,
+        },
+      },
+    ];
+
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows.map((row) => row.id)).toContain("computer-use-card");
+    expect(rows.find((row) => row.kind === "work-toggle")).toMatchObject({ hiddenCount: 1 });
+  });
+
   it.each([
     ["recovered", ["failed", "completed"], false],
     ["ending in failure", ["completed", "failed"], true],

@@ -70,6 +70,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -465,6 +466,7 @@ const makeWsRpcLayer = (
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const computerUseBroker = yield* ComputerUseBroker.ComputerUseBroker;
+      const computerUseHistory = yield* ComputerUseHistory.ComputerUseHistory;
       const computerUsePolicy = yield* ComputerUsePolicy.ComputerUsePolicy;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -1770,18 +1772,40 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUseGetControlState,
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
-              const [host, activeControl, persistentGrants] = yield* Effect.all([
+              const [host, activeControl, persistentGrants, paused] = yield* Effect.all([
                 computerUseBroker.hostFor(environmentId).pipe(Effect.map(Option.getOrUndefined)),
                 computerUseBroker.activeControlFor(environmentId),
                 computerUsePolicy.listPersistent(environmentId),
+                computerUsePolicy.isPaused(environmentId),
               ]);
               return {
                 environmentId,
+                paused,
                 ...(host === undefined ? {} : { host }),
                 ...(activeControl === undefined ? {} : { activeControl }),
                 persistentGrants,
               };
             }),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseGetHistory]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseGetHistory,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUseHistory.list(environmentId, input.limit),
+              ),
+              Effect.map((entries) => ({ entries })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseClearHistory]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseClearHistory,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) => computerUseHistory.clear(environmentId)),
+              Effect.map((deleted) => ({ deleted })),
+            ),
             { "rpc.aggregate": "computer-use" },
           ),
         [WS_METHODS.computerUseRevokePersistentGrant]: (input) =>
@@ -1800,9 +1824,90 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUseStop,
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
-                computerUseBroker.stopEnvironment(environmentId, "user"),
+                computerUsePolicy.pause(environmentId).pipe(
+                  Effect.andThen(computerUseBroker.stopEnvironment(environmentId, "user")),
+                  Effect.tap((stopped) =>
+                    stopped > 0
+                      ? computerUseHistory.append({
+                          environmentId,
+                          state: "stopped",
+                          summary: `Stopped ${stopped} active Computer Use session${stopped === 1 ? "" : "s"}.`,
+                          resultTag: "user",
+                        })
+                      : Effect.void,
+                  ),
+                ),
               ),
               Effect.map((stopped) => ({ stopped })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseTakeOver]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseTakeOver,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUsePolicy.pause(environmentId).pipe(
+                  Effect.andThen(computerUseBroker.stopEnvironment(environmentId, "takeover")),
+                  Effect.tap((stopped) =>
+                    stopped > 0
+                      ? computerUseHistory.append({
+                          environmentId,
+                          state: "taken-over",
+                          summary: `Released ${stopped} Computer Use session${stopped === 1 ? "" : "s"} for human takeover.`,
+                          resultTag: "takeover",
+                        })
+                      : Effect.void,
+                  ),
+                ),
+              ),
+              Effect.map((stopped) => ({ stopped })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUsePause]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUsePause,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUsePolicy.pause(environmentId).pipe(
+                  Effect.andThen(computerUseBroker.stopEnvironment(environmentId, "interrupted")),
+                  Effect.tap((stopped) =>
+                    computerUseHistory.append({
+                      environmentId,
+                      state: "paused",
+                      summary:
+                        stopped > 0
+                          ? "Paused active Computer Use control."
+                          : "Paused Computer Use before the next action.",
+                      resultTag: "user",
+                    }),
+                  ),
+                ),
+              ),
+              Effect.map((stopped) => ({ stopped })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseResume]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseResume,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUsePolicy.resume(environmentId).pipe(
+                  Effect.tap((resumed) =>
+                    resumed
+                      ? computerUseHistory.append({
+                          environmentId,
+                          state: "resumed",
+                          summary: "Computer Use can start a new controlled action.",
+                          resultTag: "user",
+                        })
+                      : Effect.void,
+                  ),
+                ),
+              ),
+              Effect.map((resumed) => ({ resumed })),
             ),
             { "rpc.aggregate": "computer-use" },
           ),

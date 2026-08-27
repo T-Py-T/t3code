@@ -5,7 +5,12 @@ import {
   COMPUTER_USE_MAX_ACTIONS_PER_BATCH,
   COMPUTER_USE_MAX_TEXT_LENGTH,
   COMPUTER_USE_MAX_TIMEOUT_MS,
+  COMPUTER_USE_HISTORY_MAX_ENTRIES,
+  COMPUTER_USE_HISTORY_MAX_QUERY_ENTRIES,
   ComputerUseActionBatch,
+  ComputerUseHistoryEntry,
+  ComputerUseHistoryEntryList,
+  ComputerUseHistoryInput,
   ComputerUseHostRequest,
   ComputerUseHostResponse,
   ComputerUseHostStreamEvent,
@@ -17,6 +22,9 @@ const decodeHostRequest = Schema.decodeUnknownSync(ComputerUseHostRequest);
 const decodeHostResponse = Schema.decodeUnknownSync(ComputerUseHostResponse);
 const decodeHostStreamEvent = Schema.decodeUnknownSync(ComputerUseHostStreamEvent);
 const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
+const decodeHistoryEntry = Schema.decodeUnknownSync(ComputerUseHistoryEntry);
+const decodeHistory = Schema.decodeUnknownSync(ComputerUseHistoryEntryList);
+const decodeHistoryInput = Schema.decodeUnknownSync(ComputerUseHistoryInput);
 
 const allActions = [
   { _tag: "click", x: 10, y: 20 },
@@ -169,5 +177,39 @@ describe("Computer Use contracts", () => {
       leaseId: "lease-1",
       reason: "takeover",
     });
+  });
+
+  it("bounds privacy-safe Computer Use history without action payload fields", () => {
+    const entry = decodeHistoryEntry({
+      entryId: "history-1",
+      environmentId: "environment-1",
+      hostId: "host-1",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      providerInstanceId: "atomic",
+      operation: "act",
+      target: {
+        kind: "application",
+        displayName: "TextEdit",
+        applicationId: "com.apple.TextEdit",
+        stableIdentity: "macos:com.apple.TextEdit:APPLE",
+      },
+      risk: "reversible-local",
+      state: "completed",
+      summary: "Completed 1 action in TextEdit.",
+      resultTag: "success",
+      createdAt: "2026-08-27T20:00:00.000Z",
+      screenshot: "must-not-be-part-of-history",
+      text: "must-not-be-part-of-history",
+    });
+
+    expect(entry).not.toHaveProperty("screenshot");
+    expect(entry).not.toHaveProperty("text");
+    expect(() =>
+      decodeHistory(Array.from({ length: COMPUTER_USE_HISTORY_MAX_ENTRIES + 1 }, () => entry)),
+    ).toThrow();
+    expect(() =>
+      decodeHistoryInput({ limit: COMPUTER_USE_HISTORY_MAX_QUERY_ENTRIES + 1 }),
+    ).toThrow();
   });
 });

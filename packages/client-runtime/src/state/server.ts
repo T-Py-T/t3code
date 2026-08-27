@@ -699,6 +699,12 @@ export function createServerEnvironmentAtoms<R, E>(
     staleTimeMs: 1_000,
     refreshIntervalMs: 2_000,
   });
+  const computerUseHistory = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:computer-use:history",
+    tag: WS_METHODS.computerUseGetHistory,
+    staleTimeMs: 1_000,
+    refreshIntervalMs: 2_000,
+  });
   const refreshComputerUseControlState = (
     environmentId: EnvironmentId,
     registry: Parameters<
@@ -715,6 +721,7 @@ export function createServerEnvironmentAtoms<R, E>(
     settingsValueAtom,
     providersValueAtom,
     computerUseControlState,
+    computerUseHistory,
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
@@ -804,9 +811,35 @@ export function createServerEnvironmentAtoms<R, E>(
       onSuccess: ({ environmentId }, registry) =>
         refreshComputerUseControlState(environmentId, registry),
     }),
+    clearComputerUseHistory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer-use:clear-history",
+      tag: WS_METHODS.computerUseClearHistory,
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => {
+          registry.refresh(computerUseHistory({ environmentId, input: { limit: 50 } }));
+        }),
+    }),
     stopComputerUse: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:computer-use:stop",
       tag: WS_METHODS.computerUseStop,
+      onSuccess: ({ environmentId }, registry) =>
+        refreshComputerUseControlState(environmentId, registry),
+    }),
+    takeOverComputerUse: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer-use:take-over",
+      tag: WS_METHODS.computerUseTakeOver,
+      onSuccess: ({ environmentId }, registry) =>
+        refreshComputerUseControlState(environmentId, registry),
+    }),
+    pauseComputerUse: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer-use:pause",
+      tag: WS_METHODS.computerUsePause,
+      onSuccess: ({ environmentId }, registry) =>
+        refreshComputerUseControlState(environmentId, registry),
+    }),
+    resumeComputerUse: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer-use:resume",
+      tag: WS_METHODS.computerUseResume,
       onSuccess: ({ environmentId }, registry) =>
         refreshComputerUseControlState(environmentId, registry),
     }),

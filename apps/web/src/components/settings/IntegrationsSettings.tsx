@@ -21,7 +21,17 @@ import {
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
-import { InfoIcon, RefreshCwIcon, ShieldCheckIcon, SquareIcon, XIcon } from "lucide-react";
+import {
+  HistoryIcon,
+  InfoIcon,
+  PauseIcon,
+  PlayIcon,
+  RefreshCwIcon,
+  ShieldCheckIcon,
+  SquareIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
@@ -441,20 +451,42 @@ export function ComputerUseAccessControls() {
       ? null
       : serverEnvironment.computerUseControlState({ environmentId, input: {} }),
   );
+  const history = useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : serverEnvironment.computerUseHistory({ environmentId, input: { limit: 50 } }),
+  );
   const revokePersistentGrant = useAtomCommand(
     serverEnvironment.revokeComputerUsePersistentGrant,
     "remove Computer Use access",
   );
   const stopComputerUse = useAtomCommand(serverEnvironment.stopComputerUse, "stop Computer Use");
+  const pauseComputerUse = useAtomCommand(serverEnvironment.pauseComputerUse, "pause Computer Use");
+  const resumeComputerUse = useAtomCommand(
+    serverEnvironment.resumeComputerUse,
+    "resume Computer Use",
+  );
+  const clearHistory = useAtomCommand(
+    serverEnvironment.clearComputerUseHistory,
+    "clear Computer Use history",
+  );
   const state = controlState.data;
-  const status = state?.activeControl ? "active" : state?.host ? "connected" : "disconnected";
-  const statusText = state?.activeControl
-    ? `${state.activeControl.providerInstanceId} is controlling this computer.`
-    : state?.host
-      ? `${state.host.platform === "macos" ? "Mac" : "Windows"} host connected and ready.`
-      : controlState.isPending
-        ? "Checking the native host…"
-        : "Native computer host is not connected.";
+  const status = state?.paused
+    ? "paused"
+    : state?.activeControl
+      ? "active"
+      : state?.host
+        ? "connected"
+        : "disconnected";
+  const statusText = state?.paused
+    ? "Computer Use is paused. Resume it before an agent can start another action."
+    : state?.activeControl
+      ? `${state.activeControl.providerInstanceId} is controlling this computer.`
+      : state?.host
+        ? `${state.host.platform === "macos" ? "Mac" : "Windows"} host connected and ready.`
+        : controlState.isPending
+          ? "Checking the native host…"
+          : "Native computer host is not connected.";
 
   return (
     <div data-computer-use-status={status} className="space-y-1">
@@ -470,16 +502,38 @@ export function ComputerUseAccessControls() {
         }
         control={
           <div className="flex items-center gap-2">
-            {state?.activeControl && environmentId ? (
+            {state?.paused && environmentId ? (
               <Button
                 size="sm"
-                variant="destructive-outline"
-                aria-label="Stop computer control"
-                onClick={() => void stopComputerUse({ environmentId, input: {} })}
+                variant="outline"
+                aria-label="Resume computer control"
+                onClick={() => void resumeComputerUse({ environmentId, input: {} })}
               >
-                <SquareIcon className="size-3" />
-                Stop
+                <PlayIcon className="size-3" />
+                Resume
               </Button>
+            ) : null}
+            {state?.activeControl && environmentId ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label="Pause computer control"
+                  onClick={() => void pauseComputerUse({ environmentId, input: {} })}
+                >
+                  <PauseIcon className="size-3" />
+                  Pause
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive-outline"
+                  aria-label="Stop computer control"
+                  onClick={() => void stopComputerUse({ environmentId, input: {} })}
+                >
+                  <SquareIcon className="size-3" />
+                  Stop
+                </Button>
+              </>
             ) : null}
             <Button
               size="icon-sm"
@@ -538,6 +592,49 @@ export function ComputerUseAccessControls() {
                 <XIcon className="size-3" />
               </Button>
             ) : null}
+          </div>
+        ))}
+      </SettingsRow>
+
+      <SettingsRow
+        title="Recent Computer Use activity"
+        description="Keeps 30 days of bounded metadata: target, stage, result, provider, and time. Screenshots, page contents, accessibility trees, clipboard values, and typed text are never saved here."
+        status={
+          history.error ? (
+            <span className="text-destructive">{history.error}</span>
+          ) : history.data?.entries.length === 0 ? (
+            "No Computer Use activity has been recorded."
+          ) : undefined
+        }
+        control={
+          history.data && history.data.entries.length > 0 && environmentId ? (
+            <Button
+              size="sm"
+              variant="ghost-muted"
+              aria-label="Clear Computer Use history"
+              onClick={() => void clearHistory({ environmentId, input: {} })}
+            >
+              <Trash2Icon className="size-3" />
+              Clear
+            </Button>
+          ) : null
+        }
+      >
+        {history.data?.entries.map((entry) => (
+          <div
+            key={entry.entryId}
+            data-computer-use-history={entry.state}
+            className="mt-2 flex min-w-0 items-start gap-2.5 rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
+          >
+            <HistoryIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{entry.summary}</div>
+              <div className="mt-0.5 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+                <span>{entry.state.replaceAll("-", " ")}</span>
+                {entry.providerInstanceId ? <span>{entry.providerInstanceId}</span> : null}
+                <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString()}</time>
+              </div>
+            </div>
           </div>
         ))}
       </SettingsRow>

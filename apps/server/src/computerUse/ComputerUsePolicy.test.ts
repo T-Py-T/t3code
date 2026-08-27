@@ -343,3 +343,34 @@ it.effect("consumes a user-confirmed external side effect exactly once", () =>
     expect(yield* policy.evaluate(input)).toEqual(decision);
   }),
 );
+
+it.effect("pauses future target access until the user explicitly resumes it", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+    yield* policy.grant({ scope, target, access: "operate", duration: "session" });
+    yield* policy.pause(environmentId);
+
+    expect(yield* policy.isPaused(environmentId)).toBe(true);
+    expect(
+      yield* policy.evaluate({
+        scope,
+        target,
+        access: "operate",
+        risk: "reversible-local",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual({ _tag: "deny", reason: "paused" });
+    expect(yield* policy.resume(environmentId)).toBe(true);
+    expect(yield* policy.resume(environmentId)).toBe(false);
+    expect(yield* policy.isPaused(environmentId)).toBe(false);
+    expect(
+      yield* policy.evaluate({
+        scope,
+        target,
+        access: "operate",
+        risk: "reversible-local",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual({ _tag: "allow" });
+  }),
+);

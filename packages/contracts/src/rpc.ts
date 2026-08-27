@@ -206,9 +206,13 @@ import {
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 import {
+  ComputerUseClearHistoryResult,
   ComputerUseControlState,
+  ComputerUseHistoryInput,
+  ComputerUseHistoryResult,
   ComputerUseRevokePersistentGrantInput,
   ComputerUseRevokePersistentGrantResult,
+  ComputerUseResumeResult,
   ComputerUseStopResult,
 } from "./computerUse.ts";
 
@@ -300,8 +304,13 @@ export const WS_METHODS = {
 
   // Computer Use controls
   computerUseGetControlState: "computerUse.getControlState",
+  computerUseGetHistory: "computerUse.getHistory",
+  computerUseClearHistory: "computerUse.clearHistory",
   computerUseRevokePersistentGrant: "computerUse.revokePersistentGrant",
   computerUseStop: "computerUse.stop",
+  computerUseTakeOver: "computerUse.takeOver",
+  computerUsePause: "computerUse.pause",
+  computerUseResume: "computerUse.resume",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -476,6 +485,18 @@ export const WsComputerUseGetControlStateRpc = Rpc.make(WS_METHODS.computerUseGe
   error: EnvironmentAuthorizationError,
 });
 
+export const WsComputerUseGetHistoryRpc = Rpc.make(WS_METHODS.computerUseGetHistory, {
+  payload: ComputerUseHistoryInput,
+  success: ComputerUseHistoryResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseClearHistoryRpc = Rpc.make(WS_METHODS.computerUseClearHistory, {
+  payload: Schema.Struct({}),
+  success: ComputerUseClearHistoryResult,
+  error: EnvironmentAuthorizationError,
+});
+
 export const WsComputerUseRevokePersistentGrantRpc = Rpc.make(
   WS_METHODS.computerUseRevokePersistentGrant,
   {
@@ -488,6 +509,24 @@ export const WsComputerUseRevokePersistentGrantRpc = Rpc.make(
 export const WsComputerUseStopRpc = Rpc.make(WS_METHODS.computerUseStop, {
   payload: Schema.Struct({}),
   success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseTakeOverRpc = Rpc.make(WS_METHODS.computerUseTakeOver, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUsePauseRpc = Rpc.make(WS_METHODS.computerUsePause, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
+  payload: Schema.Struct({}),
+  success: ComputerUseResumeResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1069,8 +1108,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetUsageSummaryRpc,
   WsServerSignalProcessRpc,
   WsComputerUseGetControlStateRpc,
+  WsComputerUseGetHistoryRpc,
+  WsComputerUseClearHistoryRpc,
   WsComputerUseRevokePersistentGrantRpc,
   WsComputerUseStopRpc,
+  WsComputerUseTakeOverRpc,
+  WsComputerUsePauseRpc,
+  WsComputerUseResumeRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

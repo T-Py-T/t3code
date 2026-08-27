@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 
 import * as ComputerUseBroker from "./ComputerUseBroker.ts";
 import * as ComputerUsePolicy from "./ComputerUsePolicy.ts";
+import * as ComputerUseHistory from "./ComputerUseHistory.ts";
 import * as ComputerUseToolkit from "./ComputerUseToolkit.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -59,11 +60,13 @@ const observation: ComputerUseObservation = {
 const makeHarness = Effect.gen(function* () {
   const broker = yield* ComputerUseBroker.make.pipe(Effect.provide(NodeServices.layer));
   const policy = yield* ComputerUsePolicy.make;
+  const history = yield* ComputerUseHistory.make;
   const toolkit = yield* ComputerUseToolkit.make.pipe(
     Effect.provideService(ComputerUseBroker.ComputerUseBroker, broker),
     Effect.provideService(ComputerUsePolicy.ComputerUsePolicy, policy),
+    Effect.provideService(ComputerUseHistory.ComputerUseHistory, history),
   );
-  return { broker, policy, toolkit } as const;
+  return { broker, history, policy, toolkit } as const;
 });
 
 const respondTo = (
@@ -74,7 +77,7 @@ const respondTo = (
 it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker, policy, toolkit } = yield* makeHarness;
+      const { broker, history, policy, toolkit } = yield* makeHarness;
       const operations: string[] = [];
       const events = yield* broker.connect(host);
       yield* Stream.runForEach(events, (event) => {
@@ -142,6 +145,14 @@ it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
         decision: { _tag: "request-app-grant", access: "observe" },
       });
       expect(operations).toEqual(["status", "listTargets"]);
+      expect((yield* history.list(environmentId)).map((entry) => entry.state)).toEqual([
+        "waiting-approval",
+        "requested",
+        "completed",
+        "requested",
+        "completed",
+        "requested",
+      ]);
 
       yield* policy.grant({
         scope: { ...invocationScope, hostId: host.hostId },
@@ -161,7 +172,7 @@ it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
           scope: invocationScope,
           target,
           observationId: observation.observationId,
-          batch: { actions: [{ _tag: "click", x: 10, y: 20 }] },
+          batch: { actions: [{ _tag: "text-entry", text: "typed-secret" }] },
           risk: "reversible-local",
           runtimeMode: "full-access",
         }),
@@ -169,6 +180,17 @@ it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
         _tag: "success",
         value: { completedActions: 1, observation },
       });
+      const persistedMetadata = (yield* history.list(environmentId))
+        .flatMap((entry) => [
+          entry.summary,
+          entry.resultTag ?? "",
+          entry.target?.displayName ?? "",
+          entry.target?.applicationId ?? "",
+          entry.target?.stableIdentity ?? "",
+        ])
+        .join("\n");
+      expect(persistedMetadata).not.toContain("typed-secret");
+      expect(persistedMetadata).not.toContain("field-1");
       expect(
         yield* toolkit.act({
           scope: invocationScope,
@@ -191,7 +213,7 @@ it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
 it.effect("maps malformed helper results to the broker's typed failure", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker, policy, toolkit } = yield* makeHarness;
+      const { broker, history, policy, toolkit } = yield* makeHarness;
       const events = yield* broker.connect(host);
       yield* Stream.runForEach(events, (event) => {
         if (event.type !== "request") return Effect.void;
@@ -215,6 +237,9 @@ it.effect("maps malformed helper results to the broker's typed failure", () =>
         .observe({ scope: invocationScope, target, runtimeMode: "approval-required" })
         .pipe(Effect.flip);
       expect(failure).toBeInstanceOf(ComputerUseMalformedResponseError);
+      expect(yield* history.list(environmentId, 1)).toMatchObject([
+        { state: "failed", resultTag: "ComputerUseMalformedResponseError" },
+      ]);
     }),
   ),
 );

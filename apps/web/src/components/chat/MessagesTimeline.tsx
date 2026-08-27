@@ -53,11 +53,15 @@ import {
   EyeIcon,
   GlobeIcon,
   HammerIcon,
+  HandIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
+  PauseIcon,
   PaintbrushIcon,
+  PlayIcon,
   SearchIcon,
   SquarePenIcon,
+  SquareIcon,
   TerminalIcon,
   Undo2Icon,
   WrenchIcon,
@@ -65,6 +69,8 @@ import {
   ZapIcon,
 } from "lucide-react";
 import { Button } from "../ui/button";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
@@ -2625,12 +2631,126 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   if (workEntry.agentSpawn) {
     return <AgentSpawnCtaRow workEntry={workEntry} />;
   }
+  if (workEntry.computerUse) {
+    return <ComputerUseWorkEntryRow workEntry={workEntry} />;
+  }
   return (
     <PlainWorkEntryRow
       workEntry={workEntry}
       workspaceRoot={workspaceRoot}
       isExpandedToolGroupEntry={isExpandedToolGroupEntry}
     />
+  );
+});
+
+const ComputerUseWorkEntryRow = memo(function ComputerUseWorkEntryRow({
+  workEntry,
+}: {
+  workEntry: TimelineWorkEntry;
+}) {
+  const { activeThreadEnvironmentId } = use(TimelineRowCtx);
+  const stopComputerUse = useAtomCommand(serverEnvironment.stopComputerUse, "stop Computer Use");
+  const takeOverComputerUse = useAtomCommand(
+    serverEnvironment.takeOverComputerUse,
+    "take over Computer Use",
+  );
+  const pauseComputerUse = useAtomCommand(serverEnvironment.pauseComputerUse, "pause Computer Use");
+  const resumeComputerUse = useAtomCommand(
+    serverEnvironment.resumeComputerUse,
+    "resume Computer Use",
+  );
+  const state = workEntry.computerUse;
+  if (!state) return null;
+  const active =
+    state.state === "requested" ||
+    state.state === "waiting-approval" ||
+    state.state === "observing" ||
+    state.state === "acting";
+  const resumeRequired =
+    state.state === "paused" || state.state === "stopped" || state.state === "taken-over";
+  const stateLabel = state.state.replaceAll("-", " ");
+
+  return (
+    <section
+      data-computer-use-card={state.state}
+      className="rounded-xl border border-info/25 bg-info/5 px-3 py-2.5 shadow-xs"
+      aria-label={`Computer Use ${stateLabel}`}
+    >
+      <div className="flex min-w-0 items-start gap-2.5">
+        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-info/10 text-info-foreground">
+          {state.operation === "observe" ? (
+            <EyeIcon className="size-3.5" />
+          ) : (
+            <MousePointerClickIcon className="size-3.5" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium text-sm">Computer Use</span>
+            <span className="rounded-full border border-border/70 bg-background/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              {stateLabel}
+            </span>
+          </div>
+          <p className="mt-1 text-foreground/85 text-sm leading-relaxed">{workEntry.label}</p>
+          <div className="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+            {state.target ? <span className="truncate">{state.target.displayName}</span> : null}
+            {state.providerInstanceId ? <span>{state.providerInstanceId}</span> : null}
+            {state.risk ? <span>{state.risk.replaceAll("-", " ")}</span> : null}
+          </div>
+        </div>
+      </div>
+      {active ? (
+        <div className="mt-2 flex flex-wrap justify-end gap-1.5 border-border/50 border-t pt-2">
+          <Button
+            size="sm"
+            variant="ghost-muted"
+            aria-label="Pause this Computer Use session"
+            onClick={() =>
+              void pauseComputerUse({ environmentId: activeThreadEnvironmentId, input: {} })
+            }
+          >
+            <PauseIcon className="size-3" />
+            Pause
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost-muted"
+            aria-label="Stop this Computer Use session"
+            onClick={() =>
+              void stopComputerUse({ environmentId: activeThreadEnvironmentId, input: {} })
+            }
+          >
+            <SquareIcon className="size-3" />
+            Stop
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label="Take over this Computer Use session"
+            onClick={() =>
+              void takeOverComputerUse({ environmentId: activeThreadEnvironmentId, input: {} })
+            }
+          >
+            <HandIcon className="size-3" />
+            Take over
+          </Button>
+        </div>
+      ) : resumeRequired ? (
+        <div className="mt-2 flex justify-end border-border/50 border-t pt-2">
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label="Resume Computer Use after this pause"
+            onClick={() =>
+              void resumeComputerUse({ environmentId: activeThreadEnvironmentId, input: {} })
+            }
+          >
+            <PlayIcon className="size-3" />
+            Allow a new action
+          </Button>
+        </div>
+      ) : null}
+    </section>
   );
 });
 

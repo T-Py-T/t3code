@@ -10,7 +10,9 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
+import * as ComputerUseProjection from "./computerUse/ComputerUseProjection.ts";
 import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
 import * as MacOsComputerUseHost from "./computerUse/MacOsComputerUseHost.ts";
 import * as ServerConfig from "./config.ts";
@@ -148,9 +150,12 @@ const PtyAdapterLive = Layer.unwrap(
   }),
 );
 
+const ComputerUseHistoryLive = ComputerUseHistory.layer;
+const ComputerUsePolicyLive = ComputerUsePolicy.layer.pipe(Layer.provide(ComputerUseHistoryLive));
 const ComputerUseDependenciesLive = Layer.mergeAll(
   ComputerUseBroker.layer,
-  ComputerUsePolicy.layer,
+  ComputerUseHistoryLive,
+  ComputerUsePolicyLive,
 );
 const ComputerUseCoreLayerLive = Layer.mergeAll(
   ComputerUseDependenciesLive,
@@ -696,6 +701,7 @@ export const makeServerLayer = Layer.unwrap(
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
       MacOsComputerUseHostLive,
+      ComputerUseProjection.layer,
     );
 
     return serverApplicationLayer.pipe(

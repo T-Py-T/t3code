@@ -49,10 +49,19 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.computerUseGetControlState)).toBe(
       AuthComputerReadScope,
     );
+    expect(requiredScopeForRpcMethod(WS_METHODS.computerUseGetHistory)).toBe(AuthComputerReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.computerUseClearHistory)).toBe(
+      AuthComputerOperateScope,
+    );
     expect(requiredScopeForRpcMethod(WS_METHODS.computerUseRevokePersistentGrant)).toBe(
       AuthComputerOperateScope,
     );
     expect(requiredScopeForRpcMethod(WS_METHODS.computerUseStop)).toBe(AuthComputerOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.computerUseTakeOver)).toBe(
+      AuthComputerOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.computerUsePause)).toBe(AuthComputerOperateScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.computerUseResume)).toBe(AuthComputerOperateScope);
   });
 
   it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {

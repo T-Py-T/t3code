@@ -19,12 +19,14 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import * as ServerConfig from "../config.ts";
+import { ComputerUseHistory } from "./ComputerUseHistory.ts";
 
 export interface ComputerUsePolicyScope {
   readonly environmentId: EnvironmentId;
@@ -115,6 +117,9 @@ export class ComputerUsePolicy extends Context.Service<
     readonly listPersistent: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<ReadonlyArray<ComputerUsePersistentGrantSummary>>;
+    readonly pause: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    readonly resume: (environmentId: EnvironmentId) => Effect.Effect<boolean>;
+    readonly isPaused: (environmentId: EnvironmentId) => Effect.Effect<boolean>;
     readonly requestApproval: (
       input: ComputerUseApprovalRequestInput,
     ) => Effect.Effect<ComputerUseApprovalId>;
@@ -124,10 +129,12 @@ export class ComputerUsePolicy extends Context.Service<
 
 const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
   Effect.gen(function* ComputerUsePolicyMake() {
+    const history = yield* Effect.serviceOption(ComputerUseHistory);
     const grants = yield* SynchronizedRef.make<ReadonlyArray<GrantRecord>>(
       persistence ? yield* persistence.load : [],
     );
     const confirmations = yield* SynchronizedRef.make<ReadonlyArray<ConfirmationRecord>>([]);
+    const pausedEnvironments = yield* SynchronizedRef.make<ReadonlySet<EnvironmentId>>(new Set());
     const approvals = yield* SynchronizedRef.make<ApprovalState>({
       pending: new Map(),
       sequence: 0,
@@ -158,20 +165,59 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
           return [...retained, input];
         });
         if (input.duration === "persistent") yield* savePersistentGrants;
+        if (input.duration === "persistent" && Option.isSome(history)) {
+          yield* history.value.append({
+            environmentId: input.scope.environmentId,
+            hostId: input.scope.hostId,
+            threadId: input.scope.threadId,
+            turnId: input.scope.turnId,
+            providerInstanceId: input.scope.providerInstanceId,
+            target: input.target,
+            state: "grant-created",
+            summary: `Always allowed ${input.access === "operate" ? "control of" : "observation of"} ${input.target.displayName} on this computer.`,
+            resultTag: input.access,
+          });
+        }
       },
     );
 
     const revoke: ComputerUsePolicy["Service"]["revoke"] = Effect.fn("ComputerUsePolicy.revoke")(
       (input) =>
         SynchronizedRef.modify(grants, (current) => {
+          const removed = current.filter(
+            (candidate) =>
+              candidate.scope.environmentId === input.environmentId &&
+              candidate.scope.hostId === input.hostId &&
+              candidate.target.stableIdentity === input.stableIdentity,
+          );
           const retained = current.filter(
             (candidate) =>
               candidate.scope.environmentId !== input.environmentId ||
               candidate.scope.hostId !== input.hostId ||
               candidate.target.stableIdentity !== input.stableIdentity,
           );
-          return [current.length - retained.length, retained] as const;
-        }).pipe(Effect.tap((removed) => (removed > 0 ? savePersistentGrants : Effect.void))),
+          return [removed, retained] as const;
+        }).pipe(
+          Effect.tap((removed) => (removed.length > 0 ? savePersistentGrants : Effect.void)),
+          Effect.tap((removed) =>
+            Option.isSome(history)
+              ? Effect.forEach(
+                  removed,
+                  (grant) =>
+                    history.value.append({
+                      environmentId: grant.scope.environmentId,
+                      hostId: grant.scope.hostId,
+                      target: grant.target,
+                      state: "grant-revoked",
+                      summary: `Removed permanent Computer Use access to ${grant.target.displayName}.`,
+                      resultTag: grant.access,
+                    }),
+                  { discard: true },
+                )
+              : Effect.void,
+          ),
+          Effect.map((removed) => removed.length),
+        ),
     );
 
     const listPersistent: ComputerUsePolicy["Service"]["listPersistent"] = Effect.fn(
@@ -203,6 +249,9 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
       }
       if (input.risk === "forbidden") {
         return { _tag: "deny", reason: "forbidden-action" } as const;
+      }
+      if ((yield* SynchronizedRef.get(pausedEnvironments)).has(input.scope.environmentId)) {
+        return { _tag: "deny", reason: "paused" } as const;
       }
 
       const matchingGrant = yield* SynchronizedRef.modify(grants, (current) => {
@@ -279,6 +328,32 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
       }),
     );
 
+    const pause: ComputerUsePolicy["Service"]["pause"] = Effect.fn("ComputerUsePolicy.pause")(
+      (environmentId) =>
+        SynchronizedRef.update(
+          pausedEnvironments,
+          (current) => new Set([...current, environmentId]),
+        ),
+    );
+
+    const resume: ComputerUsePolicy["Service"]["resume"] = Effect.fn("ComputerUsePolicy.resume")(
+      (environmentId) =>
+        SynchronizedRef.modify(pausedEnvironments, (current) => {
+          if (!current.has(environmentId)) return [false, current] as const;
+          const next = new Set(current);
+          next.delete(environmentId);
+          return [true, next] as const;
+        }),
+    );
+
+    const isPaused: ComputerUsePolicy["Service"]["isPaused"] = Effect.fn(
+      "ComputerUsePolicy.isPaused",
+    )((environmentId) =>
+      SynchronizedRef.get(pausedEnvironments).pipe(
+        Effect.map((current) => current.has(environmentId)),
+      ),
+    );
+
     const resolveApproval: ComputerUsePolicy["Service"]["resolveApproval"] = Effect.fn(
       "ComputerUsePolicy.resolveApproval",
     )(function* ({ approvalId, decision }) {
@@ -325,6 +400,9 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
       grant,
       revoke,
       listPersistent,
+      pause,
+      resume,
+      isPaused,
       requestApproval,
       resolveApproval,
     });

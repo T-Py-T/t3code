@@ -29,6 +29,7 @@ import {
   type ComputerUseStopInput,
 } from "./ComputerUseBroker.ts";
 import { ComputerUsePolicy } from "./ComputerUsePolicy.ts";
+import { ComputerUseHistory } from "./ComputerUseHistory.ts";
 
 export interface ComputerUsePolicyBoundary {
   readonly _tag: "policy";
@@ -92,9 +93,34 @@ const targetIdentityMatches = (expected: ComputerUseTarget, actual: ComputerUseT
   expected.applicationId === actual.applicationId &&
   expected.stableIdentity === actual.stableIdentity;
 
+const historyStateForBrokerError = (
+  error: ComputerUseBrokerError,
+): "failed" | "paused" | "stopped" | "taken-over" => {
+  if (error._tag !== "ComputerUseStoppedError") return "failed";
+  if (error.reason === "interrupted") return "paused";
+  if (error.reason === "takeover") return "taken-over";
+  return "stopped";
+};
+
 export const make = Effect.gen(function* ComputerUseToolkitMake() {
   const broker = yield* ComputerUseBroker;
   const policy = yield* ComputerUsePolicy;
+  const history = yield* ComputerUseHistory;
+
+  const appendHistory = (
+    scope: ComputerUseInvocationScope,
+    input: Omit<
+      Parameters<ComputerUseHistory["Service"]["append"]>[0],
+      "environmentId" | "threadId" | "turnId" | "providerInstanceId"
+    >,
+  ) =>
+    history.append({
+      environmentId: scope.environmentId,
+      threadId: scope.threadId,
+      turnId: scope.turnId,
+      providerInstanceId: scope.providerInstanceId,
+      ...input,
+    });
 
   const requireHost = Effect.fn("ComputerUseToolkit.requireHost")(function* (
     scope: ComputerUseInvocationScope,
@@ -102,16 +128,44 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
   ) {
     const available = yield* broker.hostFor(scope.environmentId);
     if (Option.isSome(available)) return available.value;
+    yield* appendHistory(scope, {
+      operation,
+      state: "failed",
+      summary: "No verified Computer Use host was available.",
+      resultTag: "no-available-host",
+    });
     return yield* new ComputerUseNoAvailableHostError({ operation, ...scope });
   });
 
   const status: ComputerUseToolkit["Service"]["status"] = Effect.fn("ComputerUseToolkit.status")(
     function* ({ scope }) {
       const host = yield* requireHost(scope, "status");
-      const hostStatus = yield* broker.invoke(
-        { scope, operation: "status", input: {} },
-        ComputerUseHostStatus,
-      );
+      yield* appendHistory(scope, {
+        hostId: host.hostId,
+        operation: "status",
+        state: "requested",
+        summary: "Checked the Computer Use host status.",
+      });
+      const hostStatus = yield* broker
+        .invoke({ scope, operation: "status", input: {} }, ComputerUseHostStatus)
+        .pipe(
+          Effect.tapError((error) =>
+            appendHistory(scope, {
+              hostId: host.hostId,
+              operation: "status",
+              state: "failed",
+              summary: "Computer Use host status could not be read.",
+              resultTag: error._tag,
+            }),
+          ),
+        );
+      yield* appendHistory(scope, {
+        hostId: host.hostId,
+        operation: "status",
+        state: "completed",
+        summary: "Computer Use host status is available.",
+        resultTag: "success",
+      });
       return ComputerUseStatus.make({ host, status: hostStatus });
     },
   );
@@ -119,20 +173,54 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
   const listTargets: ComputerUseToolkit["Service"]["listTargets"] = Effect.fn(
     "ComputerUseToolkit.listTargets",
   )(function* ({ scope, kind }) {
-    yield* requireHost(scope, "listTargets");
-    return yield* broker.invoke(
-      {
-        scope,
-        operation: "listTargets",
-        input: kind === undefined ? {} : { kind },
-      },
-      ComputerUseTargetList,
-    );
+    const host = yield* requireHost(scope, "listTargets");
+    yield* appendHistory(scope, {
+      hostId: host.hostId,
+      operation: "listTargets",
+      state: "requested",
+      summary: kind ? `Looked for ${kind} targets.` : "Looked for available application targets.",
+    });
+    const result = yield* broker
+      .invoke(
+        {
+          scope,
+          operation: "listTargets",
+          input: kind === undefined ? {} : { kind },
+        },
+        ComputerUseTargetList,
+      )
+      .pipe(
+        Effect.tapError((error) =>
+          appendHistory(scope, {
+            hostId: host.hostId,
+            operation: "listTargets",
+            state: "failed",
+            summary: "Available Computer Use targets could not be listed.",
+            resultTag: error._tag,
+          }),
+        ),
+      );
+    yield* appendHistory(scope, {
+      hostId: host.hostId,
+      operation: "listTargets",
+      state: "completed",
+      summary: `Found ${result.targets.length} available target${result.targets.length === 1 ? "" : "s"}.`,
+      resultTag: "success",
+    });
+    return result;
   });
 
   const observe: ComputerUseToolkit["Service"]["observe"] = Effect.fn("ComputerUseToolkit.observe")(
     function* (input) {
       const host = yield* requireHost(input.scope, "observe");
+      yield* appendHistory(input.scope, {
+        hostId: host.hostId,
+        operation: "observe",
+        target: input.target,
+        risk: "inspect",
+        state: "requested",
+        summary: `Requested observation of ${input.target.displayName}.`,
+      });
       const decision = yield* policy.evaluate({
         scope: { ...input.scope, hostId: host.hostId },
         target: input.target,
@@ -154,6 +242,26 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
                 decision,
               })
             : undefined;
+        const paused = decision._tag === "deny" && decision.reason === "paused";
+        yield* appendHistory(input.scope, {
+          hostId: host.hostId,
+          operation: "observe",
+          target: input.target,
+          risk: "inspect",
+          state:
+            decision._tag === "request-app-grant"
+              ? "waiting-approval"
+              : paused
+                ? "paused"
+                : "failed",
+          summary:
+            decision._tag === "request-app-grant"
+              ? `Waiting for permission to observe ${input.target.displayName}.`
+              : paused
+                ? `Computer Use is paused before observing ${input.target.displayName}.`
+                : `Observation of ${input.target.displayName} was blocked by policy.`,
+          resultTag: decision._tag,
+        });
         return {
           _tag: "policy",
           ...(approvalId === undefined ? {} : { approvalId }),
@@ -162,23 +270,54 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
           risk: "inspect",
         } as const;
       }
-      const value = yield* broker.invoke(
-        {
-          scope: input.scope,
-          operation: "observe",
-          targetId: input.target.targetId,
-          input: {
-            ...(input.includeScreenshot === undefined
-              ? {}
-              : { includeScreenshot: input.includeScreenshot }),
-            ...(input.includeAccessibility === undefined
-              ? {}
-              : { includeAccessibility: input.includeAccessibility }),
+      yield* appendHistory(input.scope, {
+        hostId: host.hostId,
+        operation: "observe",
+        target: input.target,
+        risk: "inspect",
+        state: "observing",
+        summary: `Observing ${input.target.displayName}.`,
+      });
+      const value = yield* broker
+        .invoke(
+          {
+            scope: input.scope,
+            operation: "observe",
+            targetId: input.target.targetId,
+            input: {
+              ...(input.includeScreenshot === undefined
+                ? {}
+                : { includeScreenshot: input.includeScreenshot }),
+              ...(input.includeAccessibility === undefined
+                ? {}
+                : { includeAccessibility: input.includeAccessibility }),
+            },
           },
-        },
-        ComputerUseObservation,
-      );
+          ComputerUseObservation,
+        )
+        .pipe(
+          Effect.tapError((error) =>
+            appendHistory(input.scope, {
+              hostId: host.hostId,
+              operation: "observe",
+              target: input.target,
+              risk: "inspect",
+              state: historyStateForBrokerError(error),
+              summary: `Observation of ${input.target.displayName} failed.`,
+              resultTag: error._tag,
+            }),
+          ),
+        );
       if (!targetIdentityMatches(input.target, value.target)) {
+        yield* appendHistory(input.scope, {
+          hostId: host.hostId,
+          operation: "observe",
+          target: input.target,
+          risk: "inspect",
+          state: "failed",
+          summary: `${input.target.displayName} changed identity before observation completed.`,
+          resultTag: "identity-changed",
+        });
         return {
           _tag: "policy",
           decision: { _tag: "deny", reason: "identity-changed" },
@@ -186,6 +325,15 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
           risk: "inspect",
         } as const;
       }
+      yield* appendHistory(input.scope, {
+        hostId: host.hostId,
+        operation: "observe",
+        target: input.target,
+        risk: "inspect",
+        state: "completed",
+        summary: `Observed ${input.target.displayName}.`,
+        resultTag: "success",
+      });
       return { _tag: "success", value } as const;
     },
   );
@@ -193,6 +341,14 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
   const act: ComputerUseToolkit["Service"]["act"] = Effect.fn("ComputerUseToolkit.act")(
     function* (input) {
       const host = yield* requireHost(input.scope, "act");
+      yield* appendHistory(input.scope, {
+        hostId: host.hostId,
+        operation: "act",
+        target: input.target,
+        risk: input.risk,
+        state: "requested",
+        summary: `Requested ${input.batch.actions.length} action${input.batch.actions.length === 1 ? "" : "s"} in ${input.target.displayName}.`,
+      });
       const decision = yield* policy.evaluate({
         scope: { ...input.scope, hostId: host.hostId },
         target: input.target,
@@ -214,6 +370,22 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
                 decision,
               })
             : undefined;
+        const waiting =
+          decision._tag === "request-app-grant" || decision._tag === "request-action-confirmation";
+        const paused = decision._tag === "deny" && decision.reason === "paused";
+        yield* appendHistory(input.scope, {
+          hostId: host.hostId,
+          operation: "act",
+          target: input.target,
+          risk: input.risk,
+          state: waiting ? "waiting-approval" : paused ? "paused" : "failed",
+          summary: waiting
+            ? `Waiting for approval to act in ${input.target.displayName}.`
+            : paused
+              ? `Computer Use is paused before acting in ${input.target.displayName}.`
+              : `Actions in ${input.target.displayName} were blocked by policy.`,
+          resultTag: decision._tag,
+        });
         return {
           _tag: "policy",
           ...(approvalId === undefined ? {} : { approvalId }),
@@ -222,6 +394,14 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
           risk: input.risk,
         } as const;
       }
+      yield* appendHistory(input.scope, {
+        hostId: host.hostId,
+        operation: "act",
+        target: input.target,
+        risk: input.risk,
+        state: "acting",
+        summary: `Acting in ${input.target.displayName}.`,
+      });
       const resultSchema = ComputerUseActResult.check(
         Schema.makeFilter(
           (result) =>
@@ -229,17 +409,40 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
             "completedActions cannot exceed the submitted action count.",
         ),
       );
-      const value = yield* broker.invoke(
-        {
-          scope: input.scope,
-          operation: "act",
-          targetId: input.target.targetId,
-          observationId: input.observationId,
-          input: input.batch,
-        },
-        resultSchema,
-      );
+      const value = yield* broker
+        .invoke(
+          {
+            scope: input.scope,
+            operation: "act",
+            targetId: input.target.targetId,
+            observationId: input.observationId,
+            input: input.batch,
+          },
+          resultSchema,
+        )
+        .pipe(
+          Effect.tapError((error) =>
+            appendHistory(input.scope, {
+              hostId: host.hostId,
+              operation: "act",
+              target: input.target,
+              risk: input.risk,
+              state: historyStateForBrokerError(error),
+              summary: `Actions in ${input.target.displayName} failed.`,
+              resultTag: error._tag,
+            }),
+          ),
+        );
       if (!targetIdentityMatches(input.target, value.observation.target)) {
+        yield* appendHistory(input.scope, {
+          hostId: host.hostId,
+          operation: "act",
+          target: input.target,
+          risk: input.risk,
+          state: "failed",
+          summary: `${input.target.displayName} changed identity before the action completed.`,
+          resultTag: "identity-changed",
+        });
         return {
           _tag: "policy",
           decision: { _tag: "deny", reason: "identity-changed" },
@@ -247,6 +450,15 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
           risk: input.risk,
         } as const;
       }
+      yield* appendHistory(input.scope, {
+        hostId: host.hostId,
+        operation: "act",
+        target: input.target,
+        risk: input.risk,
+        state: "completed",
+        summary: `Completed ${value.completedActions} action${value.completedActions === 1 ? "" : "s"} in ${input.target.displayName}.`,
+        resultTag: "success",
+      });
       return { _tag: "success", value } as const;
     },
   );

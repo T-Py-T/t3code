@@ -26,6 +26,8 @@ export const ComputerUseObservationId = makeComputerUseId("ComputerUseObservatio
 export type ComputerUseObservationId = typeof ComputerUseObservationId.Type;
 export const ComputerUseApprovalId = makeComputerUseId("ComputerUseApprovalId");
 export type ComputerUseApprovalId = typeof ComputerUseApprovalId.Type;
+export const ComputerUseHistoryEntryId = makeComputerUseId("ComputerUseHistoryEntryId");
+export type ComputerUseHistoryEntryId = typeof ComputerUseHistoryEntryId.Type;
 
 export const ComputerUseTargetKind = Schema.Literals([
   "application",
@@ -77,7 +79,7 @@ export const ComputerUsePolicyDecision = Schema.Union([
     risk: ComputerUseActionRisk,
   }),
   Schema.TaggedStruct("deny", {
-    reason: Schema.Literals(["forbidden-action", "forbidden-target", "identity-changed"]),
+    reason: Schema.Literals(["forbidden-action", "forbidden-target", "identity-changed", "paused"]),
   }),
 ]);
 export type ComputerUsePolicyDecision = typeof ComputerUsePolicyDecision.Type;
@@ -333,6 +335,7 @@ export type ComputerUseActiveControl = typeof ComputerUseActiveControl.Type;
 
 export const ComputerUseControlState = Schema.Struct({
   environmentId: EnvironmentId,
+  paused: Schema.Boolean,
   host: Schema.optional(ComputerUseVerifiedHost),
   activeControl: Schema.optional(ComputerUseActiveControl),
   persistentGrants: ComputerUsePersistentGrantSummaryList,
@@ -356,6 +359,84 @@ export const ComputerUseStopResult = Schema.Struct({
   stopped: NonNegativeInt,
 });
 export type ComputerUseStopResult = typeof ComputerUseStopResult.Type;
+
+export const COMPUTER_USE_HISTORY_MAX_ENTRIES = 1_000;
+export const COMPUTER_USE_HISTORY_MAX_QUERY_ENTRIES = 200;
+export const COMPUTER_USE_HISTORY_RETENTION_DAYS = 30;
+
+export const ComputerUseHistoryState = Schema.Literals([
+  "requested",
+  "waiting-approval",
+  "observing",
+  "acting",
+  "completed",
+  "failed",
+  "stopped",
+  "taken-over",
+  "paused",
+  "resumed",
+  "grant-created",
+  "grant-revoked",
+]);
+export type ComputerUseHistoryState = typeof ComputerUseHistoryState.Type;
+
+export const ComputerUseHistoryTarget = Schema.Struct({
+  kind: ComputerUseTargetKind,
+  displayName: ComputerUseShortString,
+  applicationId: ComputerUseShortString,
+  stableIdentity: ComputerUseShortString,
+});
+export type ComputerUseHistoryTarget = typeof ComputerUseHistoryTarget.Type;
+
+/**
+ * Durable Computer Use metadata. This deliberately has no screenshot, raw
+ * accessibility/DOM state, clipboard data, action payload, or typed value.
+ */
+export const ComputerUseHistoryEntry = Schema.Struct({
+  entryId: ComputerUseHistoryEntryId,
+  environmentId: EnvironmentId,
+  hostId: Schema.optional(ComputerUseHostId),
+  threadId: Schema.optional(ThreadId),
+  turnId: Schema.optional(TurnId),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  operation: Schema.optional(ComputerUseOperation),
+  target: Schema.optional(ComputerUseHistoryTarget),
+  risk: Schema.optional(ComputerUseActionRisk),
+  state: ComputerUseHistoryState,
+  summary: ComputerUseShortString,
+  resultTag: Schema.optional(ComputerUseShortString),
+  createdAt: Schema.String,
+});
+export type ComputerUseHistoryEntry = typeof ComputerUseHistoryEntry.Type;
+
+export const ComputerUseHistoryEntryList = Schema.Array(ComputerUseHistoryEntry).check(
+  Schema.isMaxLength(COMPUTER_USE_HISTORY_MAX_ENTRIES),
+);
+export type ComputerUseHistoryEntryList = typeof ComputerUseHistoryEntryList.Type;
+
+export const ComputerUseHistoryInput = Schema.Struct({
+  limit: Schema.optional(
+    Schema.Int.check(
+      Schema.isBetween({ minimum: 1, maximum: COMPUTER_USE_HISTORY_MAX_QUERY_ENTRIES }),
+    ),
+  ),
+});
+export type ComputerUseHistoryInput = typeof ComputerUseHistoryInput.Type;
+
+export const ComputerUseHistoryResult = Schema.Struct({
+  entries: ComputerUseHistoryEntryList,
+});
+export type ComputerUseHistoryResult = typeof ComputerUseHistoryResult.Type;
+
+export const ComputerUseClearHistoryResult = Schema.Struct({
+  deleted: NonNegativeInt,
+});
+export type ComputerUseClearHistoryResult = typeof ComputerUseClearHistoryResult.Type;
+
+export const ComputerUseResumeResult = Schema.Struct({
+  resumed: Schema.Boolean,
+});
+export type ComputerUseResumeResult = typeof ComputerUseResumeResult.Type;
 
 const ComputerUseHostRequestFields = {
   requestId: ComputerUseRequestId,

@@ -9,6 +9,10 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
+import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
+import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
+import * as MacOsComputerUseHost from "./computerUse/MacOsComputerUseHost.ts";
 import * as ServerConfig from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
@@ -142,6 +146,18 @@ const PtyAdapterLive = Layer.unwrap(
       return NodePtyAdapter.layer;
     }
   }),
+);
+
+const ComputerUseDependenciesLive = Layer.mergeAll(
+  ComputerUseBroker.layer,
+  ComputerUsePolicy.layer,
+);
+const ComputerUseCoreLayerLive = Layer.mergeAll(
+  ComputerUseDependenciesLive,
+  ComputerUseToolkit.layer.pipe(Layer.provide(ComputerUseDependenciesLive)),
+);
+const MacOsComputerUseHostLive = MacOsComputerUseHost.layer.pipe(
+  Layer.provide(ProcessRunner.layer),
 );
 
 const ServerSettingsLayerLive = ServerSettings.layer.pipe(
@@ -679,9 +695,11 @@ export const makeServerLayer = Layer.unwrap(
       runtimeStateLayer,
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
+      MacOsComputerUseHostLive,
     );
 
     return serverApplicationLayer.pipe(
+      Layer.provideMerge(ComputerUseCoreLayerLive),
       Layer.provideMerge(runtimeServicesLive),
       Layer.provide(activationLayer),
       Layer.provideMerge(serverRelayBrokerTracingLayer),

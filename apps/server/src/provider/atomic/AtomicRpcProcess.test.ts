@@ -112,6 +112,7 @@ describe("AtomicRpcProcess", () => {
         binaryPath: writeMockAtomicScript(
           `process.stdin.once("data", () => setTimeout(() => process.exit(0), 50));\nsetInterval(() => {}, 1000);\n`,
         ),
+        runtimeName: "Pi",
         startupTimeout: Duration.seconds(10),
       });
       const result = yield* rpc
@@ -125,6 +126,19 @@ describe("AtomicRpcProcess", () => {
         assert.strictEqual(result.failure._tag, "AtomicRpcError");
         if (result.failure._tag === "AtomicRpcError") {
           assert.strictEqual(result.failure.operation, "read");
+          assert.strictEqual(result.failure.runtimeName, "Pi");
+          assert.match(result.failure.message, /^Pi RPC read failed:/u);
+        }
+      }
+
+      const afterEof = yield* rpc
+        .request({ type: "get_state" })
+        .pipe(Effect.timeout(Duration.seconds(1)), Effect.result);
+      assert.strictEqual(afterEof._tag, "Failure");
+      if (afterEof._tag === "Failure") {
+        assert.strictEqual(afterEof.failure._tag, "AtomicRpcError");
+        if (afterEof.failure._tag === "AtomicRpcError") {
+          assert.strictEqual(afterEof.failure.operation, "read");
         }
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

@@ -273,6 +273,29 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("replaces an explicitly selected session-only text generation provider", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const next = yield* serverSettings.updateSettings({
+        providers: {
+          atomic: { enabled: true },
+          pi: { enabled: true },
+          codex: { enabled: false },
+          claudeAgent: { enabled: true },
+        },
+        textGenerationModelSelection: {
+          instanceId: ProviderInstanceId.make("atomic"),
+          model: "openai-codex/gpt-5.4",
+        },
+      });
+
+      assert.deepEqual(next.textGenerationModelSelection, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-haiku-4-5",
+      });
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("buffers changes after a subscription is acquired but before it is consumed", () =>
     Effect.scoped(
       Effect.gen(function* () {

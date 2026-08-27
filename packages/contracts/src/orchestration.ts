@@ -22,7 +22,7 @@ import {
   TrimmedString,
   TurnId,
 } from "./baseSchemas.ts";
-import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -117,14 +117,32 @@ export const ModelSelection = ModelSelectionSource.pipe(
 );
 export type ModelSelection = typeof ModelSelection.Type;
 
-export const RuntimeMode = Schema.Literals([
+export const RUNTIME_MODES = [
   "approval-required",
   "auto-accept-edits",
   "auto",
   "full-access",
-]);
+] as const;
+export const RuntimeMode = Schema.Literals(RUNTIME_MODES);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+const FULL_ACCESS_ONLY_RUNTIME_MODES: ReadonlyArray<RuntimeMode> = ["full-access"];
+const FULL_ACCESS_ONLY_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
+  ProviderDriverKind.make("atomic"),
+  ProviderDriverKind.make("pi"),
+]);
+
+/** Runtime modes a provider can safely honor in its session protocol. */
+export function providerRuntimeModes(provider: ProviderDriverKind): ReadonlyArray<RuntimeMode> {
+  return FULL_ACCESS_ONLY_PROVIDERS.has(provider) ? FULL_ACCESS_ONLY_RUNTIME_MODES : RUNTIME_MODES;
+}
+
+export function providerSupportsRuntimeMode(
+  provider: ProviderDriverKind,
+  mode: RuntimeMode,
+): boolean {
+  return providerRuntimeModes(provider).includes(mode);
+}
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";

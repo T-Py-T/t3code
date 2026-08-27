@@ -8,13 +8,7 @@ import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstance
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
-export type TextGenerationProvider =
-  | "atomic"
-  | "codex"
-  | "claudeAgent"
-  | "cursor"
-  | "grok"
-  | "opencode";
+export type TextGenerationProvider = "codex" | "claudeAgent" | "cursor" | "grok" | "opencode";
 
 export interface CommitMessageGenerationInput {
   cwd: string;
@@ -138,14 +132,21 @@ const resolveInstance = (
 ): Effect.Effect<ProviderInstance["textGeneration"], TextGenerationError> =>
   registry.getInstance(instanceId).pipe(
     Effect.flatMap((instance) =>
-      instance
-        ? Effect.succeed(instance.textGeneration)
-        : Effect.fail(
+      instance?.supportsTextGeneration === false
+        ? Effect.fail(
             new TextGenerationError({
               operation,
-              detail: `No provider instance registered for id '${instanceId}'.`,
+              detail: `Provider instance '${instanceId}' does not support auxiliary text generation.`,
             }),
-          ),
+          )
+        : instance
+          ? Effect.succeed(instance.textGeneration)
+          : Effect.fail(
+              new TextGenerationError({
+                operation,
+                detail: `No provider instance registered for id '${instanceId}'.`,
+              }),
+            ),
     ),
   );
 

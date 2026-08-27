@@ -231,6 +231,12 @@ export const ClientSettingsSchema = Schema.Struct({
   // old keys, so everyone, including prior beta opt-outs, resets to the new
   // default sidebar.
   legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Fork preference: use the compact project/thread tree and partition it by
+  // environment. A fresh key lets the fork opt in even when an existing
+  // settings file has explicitly persisted the upstream sidebar default.
+  sidebarEnvironmentProjectTreeEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -577,15 +583,25 @@ export const AtomicSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Atomic agent directory",
         description: "Optional ATOMIC_CODING_AGENT_DIR for isolated Atomic configuration.",
-        providerSettingsForm: { placeholder: "~/.atomic", clearWhenEmpty: "omit" },
+        providerSettingsForm: { placeholder: "~/.atomic/agent", clearWhenEmpty: "omit" },
+      }),
+    ),
+    trustProjectResources: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Trust project resources",
+        description:
+          "Load project-local Atomic workflows, skills, extensions, prompts, and settings for this instance.",
+        providerSettingsForm: { control: "switch" },
       }),
     ),
     launchArgs: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Launch arguments",
-        description: "Additional CLI arguments passed to Atomic RPC sessions.",
-        providerSettingsForm: { placeholder: "e.g. --approve", clearWhenEmpty: "omit" },
+        description:
+          "Additional CLI arguments passed to Atomic RPC sessions. An explicit --approve or --no-approve overrides the project trust switch.",
+        providerSettingsForm: { placeholder: "e.g. --offline", clearWhenEmpty: "omit" },
       }),
     ),
     customModels: Schema.Array(Schema.String).pipe(
@@ -593,7 +609,7 @@ export const AtomicSettings = makeProviderSettingsSchema(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
-  { order: ["binaryPath", "agentDir", "launchArgs"] },
+  { order: ["binaryPath", "agentDir", "trustProjectResources", "launchArgs"] },
 );
 export type AtomicSettings = typeof AtomicSettings.Type;
 
@@ -618,12 +634,22 @@ export const PiSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "~/.pi/agent", clearWhenEmpty: "omit" },
       }),
     ),
+    trustProjectResources: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Trust project resources",
+        description:
+          "Load project-local Pi skills, extensions, prompts, packages, and settings for this instance.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
     launchArgs: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Launch arguments",
-        description: "Additional CLI arguments passed to Pi RPC sessions.",
-        providerSettingsForm: { placeholder: "e.g. --approve", clearWhenEmpty: "omit" },
+        description:
+          "Additional CLI arguments passed to Pi RPC sessions. An explicit --approve or --no-approve overrides the project trust switch.",
+        providerSettingsForm: { placeholder: "e.g. --offline", clearWhenEmpty: "omit" },
       }),
     ),
     customModels: Schema.Array(Schema.String).pipe(
@@ -631,7 +657,7 @@ export const PiSettings = makeProviderSettingsSchema(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
-  { order: ["binaryPath", "agentDir", "launchArgs"] },
+  { order: ["binaryPath", "agentDir", "trustProjectResources", "launchArgs"] },
 );
 export type PiSettings = typeof PiSettings.Type;
 
@@ -937,6 +963,7 @@ const AtomicSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   agentDir: Schema.optionalKey(TrimmedString),
+  trustProjectResources: Schema.optionalKey(Schema.Boolean),
   launchArgs: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
@@ -945,6 +972,7 @@ const PiSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   agentDir: Schema.optionalKey(TrimmedString),
+  trustProjectResources: Schema.optionalKey(Schema.Boolean),
   launchArgs: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
@@ -1047,6 +1075,7 @@ export const ClientSettingsPatch = Schema.Struct({
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarEnvironmentProjectTreeEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),

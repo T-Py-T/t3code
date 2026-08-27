@@ -117,9 +117,10 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to the current sidebar with automatic merge and inactivity settling", () => {
+  it("defaults the fork to the environment project tree with automatic settling", () => {
     const settings = decodeClientSettings({});
     expect(settings.legacySidebarEnabled).toBe(false);
+    expect(settings.sidebarEnvironmentProjectTreeEnabled).toBe(true);
     expect(settings.sidebarAutoSettleAfterDays).toBe(3);
     expect(settings.sidebarAutoSettleOnMerge).toBe(true);
   });
@@ -139,6 +140,17 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
       true,
     );
+  });
+
+  it("allows the fork's environment project tree to be disabled", () => {
+    expect(
+      decodeClientSettings({ sidebarEnvironmentProjectTreeEnabled: false })
+        .sidebarEnvironmentProjectTreeEnabled,
+    ).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ sidebarEnvironmentProjectTreeEnabled: false })
+        .sidebarEnvironmentProjectTreeEnabled,
+    ).toBe(false);
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {
@@ -235,14 +247,20 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.cursor.enabled).toBe(false);
     expect(decoded.providers.grok.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);
+    expect(decoded.providers.atomic.enabled).toBe(false);
+    expect(decoded.providers.atomic.binaryPath).toBe("atomic");
+    expect(decoded.providers.atomic.agentDir).toBe("");
+    expect(decoded.providers.atomic.trustProjectResources).toBe(false);
     expect(decoded.providers.pi.enabled).toBe(false);
     expect(decoded.providers.pi.binaryPath).toBe("pi");
+    expect(decoded.providers.pi.trustProjectResources).toBe(false);
   });
 
   it("derives per-driver defaults from the settings schemas", () => {
     expect(defaultEnabledForDriver(ProviderDriverKind.make("codex"))).toBe(true);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("cursor"))).toBe(false);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("grok"))).toBe(false);
+    expect(defaultEnabledForDriver(ProviderDriverKind.make("atomic"))).toBe(false);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("pi"))).toBe(false);
     // Unknown fork drivers stay enabled; their own build decides otherwise.
     expect(defaultEnabledForDriver(ProviderDriverKind.make("ollama"))).toBe(true);

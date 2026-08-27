@@ -36,14 +36,17 @@ export function atomicRpcEventSequence(event: AtomicRpcEvent): number | undefine
 
 const isAtomicRpcResponse = Schema.is(AtomicRpcResponse);
 const isAtomicRpcEvent = Schema.is(AtomicRpcEvent);
+const encodeJsonString = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 export class AtomicRpcError extends Schema.TaggedErrorClass<AtomicRpcError>()("AtomicRpcError", {
+  runtimeName: Schema.String,
+  binaryPath: Schema.String,
   operation: Schema.String,
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
-    return `Atomic RPC ${this.operation} failed: ${this.detail}`;
+    return `${this.runtimeName} RPC ${this.operation} failed: ${this.detail}`;
   }
 }
 
@@ -105,6 +108,8 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
       Effect.mapError(
         (cause) =>
           new AtomicRpcError({
+            runtimeName,
+            binaryPath: options.binaryPath,
             operation: "spawn",
             detail: `Could not start ${runtimeName} from '${options.binaryPath}'.`,
             cause,
@@ -118,35 +123,58 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   const writeMutex = yield* Semaphore.make(1);
   let requestSequence = 0;
   let eventSequence = 0;
+  let terminalError: AtomicRpcError | undefined;
   // False until Atomic sends its first response, i.e. until startup network
   // work has finished. Gates which timeout `request` applies.
   let settled = false;
 
   const write = (value: Readonly<Record<string, unknown>>) =>
-    writeMutex.withPermits(1)(
-      Stream.run(Stream.encodeText(Stream.make(`${JSON.stringify(value)}\n`)), handle.stdin).pipe(
-        Effect.mapError(
-          (cause) =>
-            new AtomicRpcError({
-              operation: typeof value.type === "string" ? value.type : "write",
-              detail: `Could not write to ${runtimeName} stdin.`,
-              cause,
-            }),
-        ),
-        Effect.asVoid,
-      ),
+    Effect.suspend(() =>
+      terminalError
+        ? Effect.fail(terminalError)
+        : writeMutex.withPermits(1)(
+            encodeJsonString(value).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new AtomicRpcError({
+                    runtimeName,
+                    binaryPath: options.binaryPath,
+                    operation: typeof value.type === "string" ? value.type : "write",
+                    detail: `Could not encode a ${runtimeName} RPC command.`,
+                    cause,
+                  }),
+              ),
+              Effect.flatMap((encoded) =>
+                Stream.run(Stream.encodeText(Stream.make(`${encoded}\n`)), handle.stdin).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AtomicRpcError({
+                        runtimeName,
+                        binaryPath: options.binaryPath,
+                        operation: typeof value.type === "string" ? value.type : "write",
+                        detail: `Could not write to ${runtimeName} stdin.`,
+                        cause,
+                      }),
+                  ),
+                ),
+              ),
+              Effect.asVoid,
+            ),
+          ),
     );
 
   const failPending = (cause?: unknown) =>
     Effect.gen(function* () {
-      if (pending.size === 0) return;
-      const error = new AtomicRpcError({
+      terminalError ??= new AtomicRpcError({
+        runtimeName,
+        binaryPath: options.binaryPath,
         operation: "read",
         detail: `${runtimeName} RPC output closed or could not be decoded.`,
         ...(cause === undefined ? {} : { cause }),
       });
+      if (pending.size === 0) return;
       for (const deferred of pending.values()) {
-        yield* Deferred.fail(deferred, error);
+        yield* Deferred.fail(deferred, terminalError);
       }
       pending.clear();
     });
@@ -167,6 +195,8 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
           : Deferred.fail(
               deferred,
               new AtomicRpcError({
+                runtimeName,
+                binaryPath: options.binaryPath,
                 operation: value.command,
                 detail: value.error ?? `${runtimeName} returned an unsuccessful response.`,
               }),
@@ -190,6 +220,7 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   const notify: AtomicRpcProcess["notify"] = write;
   const request: AtomicRpcProcess["request"] = (input, timeout) =>
     Effect.gen(function* () {
+      if (terminalError) return yield* terminalError;
       const effectiveTimeout = timeout ?? (settled ? requestTimeout : startupTimeout);
       const id = `t3-${++requestSequence}`;
       const deferred = yield* Deferred.make<AtomicRpcResponse, AtomicRpcError>();
@@ -205,6 +236,8 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
       );
       if (Option.isNone(response)) {
         return yield* new AtomicRpcError({
+          runtimeName,
+          binaryPath: options.binaryPath,
           operation: typeof input.type === "string" ? input.type : "request",
           detail: `Timed out after ${Duration.toMillis(effectiveTimeout)}ms.`,
         });

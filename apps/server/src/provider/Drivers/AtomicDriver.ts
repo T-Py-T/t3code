@@ -133,6 +133,7 @@ export const AtomicDriver: ProviderDriver<AtomicSettings, AtomicDriverEnv> = {
         instanceId,
         environment: processEnv,
       });
+      yield* Effect.addFinalizer(() => adapter.stopAll().pipe(Effect.ignore));
       const checkProvider = checkAtomicProviderStatus(
         effectiveConfig,
         serverConfig.cwd,
@@ -174,6 +175,7 @@ export const AtomicDriver: ProviderDriver<AtomicSettings, AtomicDriverEnv> = {
         snapshot,
         adapter,
         textGeneration: makeUnsupportedTextGeneration(),
+        supportsTextGeneration: false,
       } satisfies ProviderInstance;
     }),
 };

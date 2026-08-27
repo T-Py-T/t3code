@@ -1,4 +1,4 @@
-import { Path, Svg } from "react-native-svg";
+import { Path, Rect, Svg } from "react-native-svg";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
 type ProviderIconProps = {
@@ -11,6 +11,32 @@ export function ProviderIcon(props: ProviderIconProps) {
   const isDarkMode = themeAppearance === "dark";
   const size = props.size ?? 16;
   const mono = isDarkMode ? "#e5e5e5" : "#171717";
+
+  if (props.provider === "atomic") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 32 32" fill="none">
+        <Rect width="32" height="32" rx="7" fill="#1E1E2E" />
+        <Path d="M9 9h14v5h-9v9H9V9Z" fill="#45475A" opacity={0.72} />
+        <Path d="M14 9h9v14h-5v-9h-4V9Z" fill="#89B4FA" />
+        <Rect x="10" y="10" width="3" height="3" rx={0.5} fill="#B4BEFE" />
+        <Rect x="19" y="19" width="3" height="3" rx={0.5} fill="#74C7EC" />
+      </Svg>
+    );
+  }
+
+  if (props.provider === "pi") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 800 800" fill="none">
+        <Rect width="800" height="800" rx="160" fill="#000" />
+        <Path
+          fill="#fff"
+          fillRule="evenodd"
+          d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
+        />
+        <Path fill="#fff" d="M517.36 400H634.72V634.72H517.36Z" />
+      </Svg>
+    );
+  }
 
   if (props.provider === "claudeAgent") {
     return (

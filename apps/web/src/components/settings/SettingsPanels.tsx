@@ -7,6 +7,7 @@ import {
   type BackgroundActivityProfile,
   type DesktopUpdateChannel,
   ProviderDriverKind,
+  providerSupportsTextGeneration,
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
@@ -123,9 +124,11 @@ import { ThemeLibrary } from "./ThemeSettings";
 import {
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
+  DEFAULT_SIDEBAR_TREE_SETTINGS,
   durationToSeconds,
   formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
+  getChangedSidebarTreeSettingLabels,
   getChangedTypographySettingLabels,
   normalizeIntervalSeconds,
   PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
@@ -495,6 +498,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode
         ? ["Project Grouping"]
         : []),
+      ...getChangedSidebarTreeSettingLabels(settings),
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
@@ -574,6 +578,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.enableProviderUpdateChecks,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
+      settings.sidebarEnvironmentProjectTreeEnabled,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
@@ -657,6 +662,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
+      ...DEFAULT_SIDEBAR_TREE_SETTINGS,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       enableLegacyTokenStreaming: DEFAULT_UNIFIED_SETTINGS.enableLegacyTokenStreaming,
@@ -1835,10 +1841,11 @@ function LegacyFeaturesSection() {
             />
             <SettingsRow
               {...searchableSetting("legacy-sidebar")}
-              description="Brings back the original sidebar with per-project thread trees. The default sidebar shows one flat list: active work as rich cards, settled threads as compact rows."
+              description="Brings back the original flat project tree when Environment project tree is off. The card sidebar shows active work as rich cards and settled threads as compact rows."
               control={
                 <Switch
                   checked={settings.legacySidebarEnabled}
+                  disabled={settings.sidebarEnvironmentProjectTreeEnabled}
                   onCheckedChange={(checked) =>
                     updateSettings({ legacySidebarEnabled: Boolean(checked) })
                   }
@@ -1875,7 +1882,9 @@ export function GeneralSettingsPanel() {
   const textGenModel = textGenerationModelSelection.model;
   const textGenModelOptions = textGenerationModelSelection.options;
   const textGenerationModelInstanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings),
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(serverProviders), settings).filter(
+      (entry) => providerSupportsTextGeneration(entry.driverKind),
+    ),
   );
   const textGenInstanceEntry = textGenerationModelInstanceEntries.find(
     (entry) => entry.instanceId === textGenInstanceId,
@@ -1910,8 +1919,22 @@ export function GeneralSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection title="General">
         <SettingsRow
+          {...searchableSetting("environment-project-tree")}
+          description="Use the compact sidebar shown on the T3 Code website, grouped as environment, project, then thread."
+          control={
+            <Switch
+              checked={settings.sidebarEnvironmentProjectTreeEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarEnvironmentProjectTreeEnabled: Boolean(checked) })
+              }
+              aria-label="Environment project tree"
+            />
+          }
+        />
+
+        <SettingsRow
           {...searchableSetting("project-grouping")}
-          description="Combine matching repositories across environments."
+          description="Combine matching repositories. In the environment project tree, grouping stays within each environment."
           resetAction={
             settings.sidebarProjectGroupingMode !==
             DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode ? (

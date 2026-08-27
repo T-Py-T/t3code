@@ -477,6 +477,140 @@ describe("AtomicAdapter", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("fails and retires a session when post-prompt state recovery fails", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-state-rejected");
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const result = yield* adapter
+        .sendTurn({ threadId, input: "/t3-state-rejected", attachments: [] })
+        .pipe(Effect.result);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(result._tag, "Failure");
+      assert.isFalse(yield* adapter.hasSession(threadId));
+      assert.isDefined(
+        events.find((event) => event.type === "turn.completed" && event.payload.state === "failed"),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("fails and retires a session when post-prompt state omits streaming status", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-state-missing-stream");
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const result = yield* adapter
+        .sendTurn({ threadId, input: "/t3-state-missing-stream", attachments: [] })
+        .pipe(Effect.result);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(result._tag, "Failure");
+      assert.isFalse(yield* adapter.hasSession(threadId));
+      assert.isDefined(
+        events.find((event) => event.type === "turn.completed" && event.payload.state === "failed"),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("does not attribute late events to a new turn after interrupting a prompt", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-interrupt-inflight");
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "task.started" &&
+            event.payload.taskId === "interrupt-marker-after-response",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const interruptReadyFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.type === "user-input.requested" && event.requestId === "interrupt-ready",
+        ),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "/t3-interrupt-inflight", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Fiber.join(interruptReadyFiber);
+      yield* adapter.interruptTurn(threadId);
+      yield* Fiber.join(sendFiber);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.lengthOf(
+        events.filter((event) => event.type === "turn.started"),
+        1,
+        "late agent_start must not create a phantom turn",
+      );
+      assert.notInclude(
+        events
+          .filter((event) => event.type === "content.delta")
+          .map((event) => (event.type === "content.delta" ? event.payload.delta : "")),
+        "LATE_AFTER_ABORT",
+      );
+      assert.notInclude(
+        events
+          .filter((event) => event.type === "content.delta")
+          .map((event) => (event.type === "content.delta" ? event.payload.delta : "")),
+        "LATE_AFTER_RESPONSE",
+      );
+      assert.lengthOf(
+        events.filter(
+          (event) => event.type === "turn.completed" && event.payload.state === "interrupted",
+        ),
+        1,
+      );
+
+      const nextTurnEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.sendTurn({ threadId, input: "next turn", attachments: [] });
+      const nextTurnEvents = Array.from(yield* Fiber.join(nextTurnEventsFiber));
+      assert.include(
+        nextTurnEvents
+          .filter((event) => event.type === "content.delta")
+          .map((event) => (event.type === "content.delta" ? event.payload.delta : "")),
+        "PI_RPC_OK",
+        "a real next turn must reset interrupted-event suppression",
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.live("drains acknowledged tool events before completing an interruption", () =>
     Effect.gen(function* () {
       const adapter = yield* makeAdapter();

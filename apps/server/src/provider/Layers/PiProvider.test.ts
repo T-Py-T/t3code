@@ -17,12 +17,13 @@ const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockPeer = NodePath.join(__dirname, "../testFixtures/piRpcMockPeer.mjs");
 const decodePiSettings = Schema.decodeSync(PiSettings);
 
-function writeMockWrapper(version: string): string {
+function writeMockWrapper(version: string, expectedAgentDir?: string): string {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pi-provider-test-"));
   const wrapper = NodePath.join(dir, "mock-pi.sh");
   NodeFS.writeFileSync(
     wrapper,
     `#!/bin/sh
+${expectedAgentDir === undefined ? "" : `if [ "$PI_CODING_AGENT_DIR" != ${JSON.stringify(expectedAgentDir)} ]; then\n  exit 32\nfi\n`}
 if [ "$1" = "--version" ]; then
   printf '${version}\\n'
   exit 0
@@ -50,6 +51,26 @@ describe("PiProvider", () => {
         ["openai-codex/gpt-5.4"],
       );
       assert.match(snapshot.message ?? "", /0\.84\.3/u);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("expands a home-relative Pi agent directory during provider discovery", () =>
+    Effect.gen(function* () {
+      const expectedAgentDir = NodePath.join(NodeOS.homedir(), ".pi-provider-review");
+      const snapshot = yield* checkPiProviderStatus(
+        decodePiSettings({
+          enabled: true,
+          binaryPath: writeMockWrapper("0.84.3", expectedAgentDir),
+          agentDir: "~/.pi-provider-review",
+        }),
+        process.cwd(),
+      );
+
+      assert.equal(snapshot.status, "ready");
+      assert.deepEqual(
+        snapshot.models.map((model) => model.slug),
+        ["openai-codex/gpt-5.4"],
+      );
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

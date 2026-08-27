@@ -21,12 +21,14 @@ const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockPeer = NodePath.join(__dirname, "../testFixtures/piRpcMockPeer.mjs");
 const decodePiSettings = Schema.decodeSync(PiSettings);
 
-function writeMockWrapper(): string {
+function writeMockWrapper(expectedTrustFlag?: "--approve" | "--no-approve"): string {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pi-adapter-test-"));
   const wrapper = NodePath.join(dir, "mock-pi.sh");
   NodeFS.writeFileSync(
     wrapper,
-    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"\n`,
+    `#!/bin/sh
+${expectedTrustFlag === undefined ? "" : `case " $* " in\n  *" ${expectedTrustFlag} "*) ;;\n  *) exit 33 ;;\nesac\n`}exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"
+`,
     "utf8",
   );
   NodeFS.chmodSync(wrapper, 0o755);
@@ -37,7 +39,7 @@ describe("PiAdapter", () => {
   it.live("uses the shared Pi lifecycle for thinking, tools, queued runs, and completion", () =>
     Effect.gen(function* () {
       const adapter = yield* makePiAdapter(
-        decodePiSettings({ enabled: true, binaryPath: writeMockWrapper() }),
+        decodePiSettings({ enabled: true, binaryPath: writeMockWrapper("--no-approve") }),
       ).pipe(
         Effect.provide(
           ServerConfig.layerTest(process.cwd(), { prefix: "pi-adapter-test-" }).pipe(
@@ -75,6 +77,35 @@ describe("PiAdapter", () => {
       assert.isTrue(events.every((event) => event.provider === "pi"));
       const raw = events.find((event) => event.raw)?.raw;
       assert.equal(raw?.source, "pi.rpc");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("passes explicit project trust when the provider setting enables it", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makePiAdapter(
+        decodePiSettings({
+          enabled: true,
+          binaryPath: writeMockWrapper("--approve"),
+          trustProjectResources: true,
+        }),
+      ).pipe(
+        Effect.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "pi-adapter-trust-test-" }).pipe(
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      );
+      const threadId = ThreadId.make("pi-project-trust");
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("pi"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      assert.isTrue(yield* adapter.hasSession(threadId));
+      yield* adapter.stopSession(threadId);
     }).pipe(Effect.scoped),
   );
 });

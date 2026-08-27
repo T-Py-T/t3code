@@ -1286,13 +1286,19 @@ const makeWsRpcLayer = (
                 .getThreadShellById(input.threadId)
                 .pipe(Effect.mapError(projectionFailure));
               if (Option.isNone(thread)) {
-                return yield* projectionFailure(`Thread ${input.threadId} was not found.`);
+                return yield* new OrchestrationGetWorkflowScriptError({
+                  reason: "not-found",
+                  scriptPath: input.scriptPath,
+                });
               }
               const project = yield* projectionSnapshotQuery
                 .getProjectShellById(thread.value.projectId)
                 .pipe(Effect.mapError(projectionFailure));
               if (Option.isNone(project)) {
-                return yield* projectionFailure(`Project ${thread.value.projectId} was not found.`);
+                return yield* new OrchestrationGetWorkflowScriptError({
+                  reason: "root-unavailable",
+                  scriptPath: input.scriptPath,
+                });
               }
               return yield* readWorkflowScript({
                 scriptPath: input.scriptPath,

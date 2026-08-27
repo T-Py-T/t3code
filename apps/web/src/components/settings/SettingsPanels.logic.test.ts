@@ -11,8 +11,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   backgroundActivitySharedPolicySettings,
   buildProviderInstanceUpdatePatch,
+  DEFAULT_SIDEBAR_TREE_SETTINGS,
   formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
+  getChangedSidebarTreeSettingLabels,
   getChangedTypographySettingLabels,
   isSamePreviewViewport,
   hasChangedBackgroundActivitySettings,
@@ -149,6 +151,18 @@ describe("project grouping toggle", () => {
   it("restores repository path grouping when the toggle is cycled", () => {
     expect(projectGroupingModeFromToggle(false, "repository_path")).toBe("separate");
     expect(projectGroupingModeFromToggle(true, "repository_path")).toBe("repository_path");
+  });
+});
+
+describe("environment project tree restore", () => {
+  it("detects an opt-out and supplies the fork default for reset", () => {
+    expect(getChangedSidebarTreeSettingLabels(DEFAULT_SIDEBAR_TREE_SETTINGS)).toEqual([]);
+    expect(
+      getChangedSidebarTreeSettingLabels({ sidebarEnvironmentProjectTreeEnabled: false }),
+    ).toEqual(["Environment project tree"]);
+    expect(DEFAULT_SIDEBAR_TREE_SETTINGS).toEqual({
+      sidebarEnvironmentProjectTreeEnabled: true,
+    });
   });
 });
 

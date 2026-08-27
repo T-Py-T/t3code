@@ -9,6 +9,7 @@ import {
   resolveProjectGroupingMode,
 } from "./logicalProject";
 import {
+  buildSidebarEnvironmentProjectHierarchy,
   buildPhysicalToLogicalProjectKeyMap,
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
@@ -19,6 +20,7 @@ import type { Project } from "./types";
 
 const primaryEnvironmentId = EnvironmentId.make("env-primary");
 const remoteEnvironmentId = EnvironmentId.make("env-remote");
+const stagingEnvironmentId = EnvironmentId.make("env-staging");
 const repositoryIdentity = {
   canonicalKey: "github.com/example/shared-repo",
   locator: {
@@ -79,6 +81,66 @@ describe("environment grouping", () => {
     }).length;
 
     expect(projectGroupCount).toBe(1);
+  });
+
+  it("partitions the compact sidebar by environment before grouping projects", () => {
+    const primary = makeProject({ repositoryIdentity });
+    const remote = makeProject({
+      id: ProjectId.make("project-remote"),
+      environmentId: remoteEnvironmentId,
+      repositoryIdentity,
+    });
+    const staging = makeProject({
+      id: ProjectId.make("project-staging"),
+      environmentId: stagingEnvironmentId,
+      repositoryIdentity,
+    });
+
+    const hierarchy = buildSidebarEnvironmentProjectHierarchy({
+      projects: [staging, remote, primary],
+      settings: defaultGroupingSettings,
+      primaryEnvironmentId,
+      resolveEnvironmentLabel: (environmentId) =>
+        environmentId === primaryEnvironmentId
+          ? "This Mac"
+          : environmentId === remoteEnvironmentId
+            ? "Build server"
+            : "Staging server",
+    });
+
+    expect(hierarchy.sections.map((section) => section.label)).toEqual([
+      "This Mac",
+      "Build server",
+      "Staging server",
+    ]);
+    expect(hierarchy.sections.map((section) => section.projects.length)).toEqual([1, 1, 1]);
+    expect(hierarchy.sections[0]?.projects[0]?.projectKey).not.toBe(
+      hierarchy.sections[1]?.projects[0]?.projectKey,
+    );
+    expect(new Set(hierarchy.physicalToLogicalProjectKey.values()).size).toBe(3);
+  });
+
+  it("retains repository grouping for projects inside one environment", () => {
+    const checkout = makeProject({
+      id: ProjectId.make("project-checkout"),
+      repositoryIdentity,
+    });
+    const worktree = makeProject({
+      id: ProjectId.make("project-worktree"),
+      workspaceRoot: "/tmp/shared-repo-worktree",
+      repositoryIdentity,
+    });
+
+    const hierarchy = buildSidebarEnvironmentProjectHierarchy({
+      projects: [checkout, worktree],
+      settings: defaultGroupingSettings,
+      primaryEnvironmentId,
+      resolveEnvironmentLabel: () => "This Mac",
+    });
+
+    expect(hierarchy.sections).toHaveLength(1);
+    expect(hierarchy.sections[0]?.projects).toHaveLength(1);
+    expect(hierarchy.sections[0]?.projects[0]?.groupedProjectCount).toBe(2);
   });
 
   it("keeps projects without repository identity physically scoped", () => {

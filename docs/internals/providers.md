@@ -50,7 +50,8 @@ Codex can optionally bridge to OpenAI's signed macOS Computer Use MCP client fro
 `CODEX_HOME`. The OpenAI helper, not T3 Code, owns the host's Accessibility and Screen Recording
 permissions.
 See [Codex Computer Use](./providers-codex-computer-use.md) for discovery, session configuration,
-approval routing, remote semantics, and current provider boundaries.
+approval routing, remote semantics, and current provider boundaries. The provider-neutral target is
+defined in the [T3 Computer Use specification](./computer-use.md).
 
 ## Model manifest
 

@@ -8,6 +8,10 @@ is an OpenAI Computer Use bridge, not a T3-owned accessibility host. The feature
 reuses the Codex app-server transport and T3's existing MCP elicitation approval projection instead
 of adding a second desktop-control protocol.
 
+The feature-complete T3-owned replacement is defined in the
+[T3 Computer Use specification](./computer-use.md). This document describes only the current bridge
+and its verified limits.
+
 ## User and process flow
 
 1. The user enables **OpenAI Computer Use bridge** on one Codex provider instance.

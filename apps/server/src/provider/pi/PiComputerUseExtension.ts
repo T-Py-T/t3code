@@ -121,29 +121,148 @@ const definitions = [
   { name: "computer_stop", label: "Stop computer use", description: "Immediately release this turn's Computer Use control lease.", parameters: emptyObject },
 ];
 
-export default function t3ComputerUseExtension(pi) {
-  if (!endpoint || !authorization) return;
-  for (const definition of definitions) {
-    pi.registerTool({
-      ...definition,
-      promptSnippet: "Use " + definition.name + " only for user-authorized native computer interaction through T3 Code.",
-      executionMode: "sequential",
-      async execute(_toolCallId, args, signal, _onUpdate, ctx) {
-        let result = await callTool(definition.name, args, signal);
-        const boundary = result && result.structuredContent;
-        if (await approvePolicyBoundary(boundary, signal, ctx)) {
-          result = await callTool(definition.name, args, signal);
-        }
-        const content = Array.isArray(result && result.content)
-          ? result.content
-          : [{ type: "text", text: JSON.stringify(result && result.structuredContent ? result.structuredContent : {}) }];
-        return {
-          content,
-          details: result && result.structuredContent ? result.structuredContent : {},
-          isError: Boolean(result && result.isError),
+const workflowControlActions = new Set([
+  "status",
+  "stages",
+  "stage",
+  "transcript",
+  "send",
+  "pause",
+  "resume",
+  "interrupt",
+  "quit",
+  "reload",
+]);
+let executeWorkflowAction;
+
+async function loadWorkflowExecutor(pi) {
+  if (executeWorkflowAction) return executeWorkflowAction;
+  if (typeof pi.getAllTools !== "function") throw new Error("Atomic workflow tools are unavailable.");
+  const workflowTool = pi.getAllTools().find((entry) => entry && entry.name === "workflow");
+  const sourceInfo = workflowTool && workflowTool.sourceInfo;
+  const bundlePath = sourceInfo && sourceInfo.path;
+  if (
+    typeof bundlePath !== "string" ||
+    sourceInfo.configurationOrigin !== "bundled" ||
+    !bundlePath.includes("/builtin/workflows/") ||
+    !bundlePath.endsWith("/index.bundle.mjs")
+  ) {
+    throw new Error("Atomic's bundled workflow controller is unavailable.");
+  }
+  const workflowModule = await import(bundlePath);
+  if (typeof workflowModule.default !== "function") {
+    throw new Error("Atomic's bundled workflow controller is incompatible.");
+  }
+  const registrationProxy = new Proxy(pi, {
+    get(target, property) {
+      if (property === "registerTool") {
+        return (definition) => {
+          if (definition && definition.name === "workflow") {
+            executeWorkflowAction = definition.execute;
+          }
         };
+      }
+      if (
+        property === "registerCommand" ||
+        property === "registerMessageRenderer" ||
+        property === "registerShortcut" ||
+        property === "on"
+      ) {
+        return () => undefined;
+      }
+      if (property === "ui" || property === "events") return undefined;
+      const value = target[property];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  workflowModule.default(registrationProxy);
+  if (typeof executeWorkflowAction !== "function") {
+    throw new Error("Atomic's bundled workflow executor could not be captured.");
+  }
+  return executeWorkflowAction;
+}
+
+async function emitWorkflowActionResult(pi, envelope, result) {
+  if (typeof pi.sendMessage !== "function") return;
+  await pi.sendMessage(
+    {
+      customType: "t3:workflow-action",
+      content: "",
+      display: false,
+      details: {
+        actionId: envelope.actionId,
+        request: envelope.request,
+        result,
       },
-    });
+    },
+    { triggerTurn: false, excludeFromContext: true },
+  );
+}
+
+function registerWorkflowControlBridge(pi) {
+  if (typeof pi.registerCommand !== "function") return;
+  pi.registerCommand("t3-workflow-action", {
+    description: "Private T3 Code bridge for Atomic workflow inspection and control.",
+    async handler(encoded, ctx) {
+      let envelope;
+      try {
+        envelope = JSON.parse(Buffer.from(encoded.trim(), "base64url").toString("utf8"));
+        if (
+          !envelope ||
+          typeof envelope.actionId !== "string" ||
+          !envelope.request ||
+          !workflowControlActions.has(envelope.request.action)
+        ) {
+          throw new Error("Invalid T3 workflow action.");
+        }
+        const execute = await loadWorkflowExecutor(pi);
+        const output = await execute(
+          "t3-workflow-action-" + envelope.actionId,
+          envelope.request,
+          undefined,
+          undefined,
+          ctx,
+        );
+        await emitWorkflowActionResult(pi, envelope, output && output.details ? output.details : {});
+      } catch (error) {
+        const fallback = envelope && typeof envelope.actionId === "string"
+          ? envelope
+          : { actionId: "invalid", request: {} };
+        await emitWorkflowActionResult(pi, fallback, {
+          action: "t3_bridge_error",
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  });
+}
+
+export default function t3ComputerUseExtension(pi) {
+  registerWorkflowControlBridge(pi);
+  if (endpoint && authorization) {
+    for (const definition of definitions) {
+      pi.registerTool({
+        ...definition,
+        promptSnippet: "Use " + definition.name + " only for user-authorized native computer interaction through T3 Code.",
+        executionMode: "sequential",
+        async execute(_toolCallId, args, signal, _onUpdate, ctx) {
+          let result = await callTool(definition.name, args, signal);
+          const boundary = result && result.structuredContent;
+          if (await approvePolicyBoundary(boundary, signal, ctx)) {
+            result = await callTool(definition.name, args, signal);
+          }
+          const content = Array.isArray(result && result.content)
+            ? result.content
+            : [{ type: "text", text: JSON.stringify(result && result.structuredContent ? result.structuredContent : {}) }];
+          return {
+            content,
+            details: result && result.structuredContent ? result.structuredContent : {},
+            isError: Boolean(result && result.isError),
+          };
+        },
+      });
+    }
   }
 }
 `;

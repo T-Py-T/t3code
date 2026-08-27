@@ -6,6 +6,10 @@ let abortableTurnActive = false;
 let pendingInterruptedPrompt;
 let failNextGetState = false;
 let omitStreamingFromNextGetState = false;
+const workflowInputRunId = "workflow-input-run-1";
+const workflowInputStageId = "workflow-input-confirm";
+const workflowInputPromptId = "workflow-input-prompt-1";
+let workflowInputPending = false;
 
 const write = (value) => {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -339,6 +343,158 @@ const runWorkflowCommand = (command) => {
   }, 20);
 };
 
+const runWorkflowInputCommand = (command) => {
+  workflowInputPending = true;
+  response(command);
+  setTimeout(() => {
+    write({
+      type: "entry_appended",
+      entry: {
+        type: "custom",
+        customType: "workflow.run.start",
+        data: { runId: workflowInputRunId, name: "t3-workflow-input", inputs: {} },
+      },
+    });
+    write({
+      type: "entry_appended",
+      entry: {
+        type: "custom",
+        customType: "workflow.stage.start",
+        data: {
+          runId: workflowInputRunId,
+          stageId: workflowInputStageId,
+          name: "Confirm",
+          parentIds: [],
+          replayKey: "prompt:confirm:t3-workflow-input",
+        },
+      },
+    });
+  }, 5);
+};
+
+const writeWorkflowActionResult = (envelope, result) => {
+  const message = {
+    role: "custom",
+    customType: "t3:workflow-action",
+    content: "",
+    display: false,
+    details: { actionId: envelope.actionId, request: envelope.request, result },
+    excludeFromContext: true,
+  };
+  write({ type: "message_start", message });
+  write({ type: "message_end", message });
+};
+
+const runWorkflowActionCommand = (command) => {
+  const encoded = String(command.message).slice("/t3-workflow-action ".length).trim();
+  const envelope = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  if (envelope.request.action === "status" && envelope.request.runId === workflowInputRunId) {
+    writeWorkflowActionResult(envelope, {
+      action: "statusDetail",
+      runId: workflowInputRunId,
+      detail: {
+        runId: workflowInputRunId,
+        name: "t3-workflow-input",
+        status: workflowInputPending ? "running" : "completed",
+        stages: [
+          {
+            id: workflowInputStageId,
+            name: "Confirm",
+            status: workflowInputPending ? "awaiting_input" : "completed",
+            ...(workflowInputPending
+              ? {
+                  pendingPrompt: {
+                    id: workflowInputPromptId,
+                    kind: "confirm",
+                    message: "Continue the Atomic workflow?",
+                  },
+                }
+              : {}),
+          },
+        ],
+        tools: [
+          {
+            kind: "tool",
+            id: "tool:prepare",
+            name: "Prepare host check",
+            parentIds: [],
+            status: "completed",
+            executionOrder: 1,
+            resultSummary: "READY",
+          },
+          ...(workflowInputPending
+            ? []
+            : [
+                {
+                  kind: "tool",
+                  id: "tool:finish",
+                  name: "Finish host check",
+                  parentIds: [workflowInputStageId],
+                  status: "completed",
+                  executionOrder: 3,
+                  resultSummary: "DONE",
+                },
+              ]),
+        ],
+      },
+    });
+    response(command);
+    return;
+  }
+  if (
+    envelope.request.action === "send" &&
+    envelope.request.runId === workflowInputRunId &&
+    envelope.request.stageId === workflowInputStageId &&
+    envelope.request.promptId === workflowInputPromptId &&
+    envelope.request.response === true &&
+    workflowInputPending
+  ) {
+    workflowInputPending = false;
+    writeWorkflowActionResult(envelope, {
+      action: "send",
+      runId: workflowInputRunId,
+      stageId: workflowInputStageId,
+      delivery: "answer",
+      status: "ok",
+      message: `Answered prompt ${workflowInputPromptId}.`,
+    });
+    write({
+      type: "entry_appended",
+      entry: {
+        type: "custom",
+        customType: "workflow.stage.end",
+        data: {
+          runId: workflowInputRunId,
+          stageId: workflowInputStageId,
+          name: "Confirm",
+          status: "completed",
+        },
+      },
+    });
+    write({
+      type: "entry_appended",
+      entry: {
+        type: "custom",
+        customType: "workflow.run.end",
+        data: {
+          runId: workflowInputRunId,
+          name: "t3-workflow-input",
+          status: "completed",
+          result: "WORKFLOW_INPUT_OK",
+        },
+      },
+    });
+    response(command);
+    return;
+  }
+  writeWorkflowActionResult(envelope, {
+    action: envelope.request.action,
+    status: "failed",
+    error: "Unexpected workflow action.",
+  });
+  response(command);
+};
+
 const runRecoverableExtensionErrorTurn = (command) => {
   isStreaming = true;
   response(command);
@@ -486,7 +642,11 @@ const handle = (command) => {
       });
       return;
     case "prompt":
-      if (command.message === "/t3-recoverable-extension-error") {
+      if (String(command.message).startsWith("/t3-workflow-action ")) {
+        runWorkflowActionCommand(command);
+      } else if (command.message === "/t3-workflow-input-test") {
+        runWorkflowInputCommand(command);
+      } else if (command.message === "/t3-recoverable-extension-error") {
         runRecoverableExtensionErrorTurn(command);
       } else if (command.message === "/t3-terminal-assistant-error") {
         runTerminalAssistantErrorTurn(command);

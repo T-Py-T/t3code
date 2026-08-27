@@ -14,6 +14,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -138,6 +139,7 @@ describe("AtomicAdapter", () => {
       assert.isString(extensionPath);
       assert.isTrue(NodeFS.existsSync(extensionPath!));
       assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "computer_status");
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "t3-workflow-action");
 
       yield* adapter.stopSession(threadId);
       assert.isFalse(NodeFS.existsSync(extensionPath!));
@@ -375,6 +377,156 @@ describe("AtomicAdapter", () => {
           "WORKFLOW_OK",
         );
       }).pipe(Effect.scoped),
+  );
+
+  it.live("surfaces and answers background Atomic workflow prompts without a model turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-background-workflow-input");
+      const requestedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "user-input.requested"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1:wf:tool:finish",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "/t3-workflow-input-test",
+        attachments: [],
+      });
+
+      const requested = yield* Fiber.join(requestedFiber).pipe(Effect.map(Option.getOrThrow));
+      if (requested.type !== "user-input.requested" || requested.requestId === undefined) {
+        return assert.fail("Expected a background Atomic workflow prompt.");
+      }
+      assert.equal(requested.payload.questions[0]?.question, "Continue the Atomic workflow?");
+      assert.deepEqual(
+        requested.payload.questions[0]?.options.map((option) => option.label),
+        ["Yes", "No"],
+      );
+      const questionId = requested.payload.questions[0]?.id;
+      assert.isString(questionId);
+
+      yield* adapter.respondToUserInput(threadId, ApprovalRequestId.make(requested.requestId), {
+        [questionId!]: "Yes",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "user-input.resolved" && event.requestId === requested.requestId,
+        ),
+      );
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1" &&
+            event.payload.summary === "WORKFLOW_INPUT_OK",
+        ),
+      );
+      const prepareTool = events.find(
+        (event) =>
+          event.type === "task.completed" &&
+          event.payload.taskId === "workflow-input-run-1:wf:tool:prepare",
+      );
+      assert.equal(
+        prepareTool?.type === "task.completed" ? prepareTool.payload.title : undefined,
+        "Prepare host check",
+      );
+      assert.equal(
+        prepareTool?.type === "task.completed" ? prepareTool.payload.role : undefined,
+        "workflow tool",
+      );
+      const finishTool = events.find(
+        (event) =>
+          event.type === "task.completed" &&
+          event.payload.taskId === "workflow-input-run-1:wf:tool:finish",
+      );
+      assert.equal(
+        finishTool?.type === "task.completed" ? finishTool.payload.summary : undefined,
+        "DONE",
+      );
+      assert.deepEqual(
+        finishTool?.type === "task.completed" ? finishTool.payload.dependsOnTaskIds : undefined,
+        [RuntimeTaskId.make("workflow-input-run-1:wf:workflow-input-confirm")],
+      );
+      assert.isUndefined(
+        events.find(
+          (event) =>
+            event.type === "item.started" && event.payload.itemType === "assistant_message",
+        ),
+        "the private workflow bridge must not start a model turn",
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("stops active Atomic workflow tasks when their provider session closes", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-stop-background-workflow");
+      const requestedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "user-input.requested"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "/t3-workflow-input-test",
+        attachments: [],
+      });
+      yield* Fiber.join(requestedFiber).pipe(Effect.map(Option.getOrThrow));
+
+      yield* adapter.stopSession(threadId);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1:wf:workflow-input-confirm" &&
+            event.payload.status === "stopped",
+        ),
+      );
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1" &&
+            event.payload.status === "stopped",
+        ),
+      );
+      assert.isDefined(events.find((event) => event.type === "user-input.resolved"));
+      assert.equal(events.at(-1)?.type, "session.exited");
+    }).pipe(Effect.scoped),
   );
 
   it.live("treats an extension load failure as recoverable when Pi keeps running", () =>

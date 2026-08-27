@@ -74,141 +74,152 @@ const respondTo = (
   response: Omit<ComputerUseHostResponse, "hostId">,
 ) => broker.respond({ ...response, hostId: host.hostId } as ComputerUseHostResponse);
 
-it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { broker, history, policy, toolkit } = yield* makeHarness;
-      const operations: string[] = [];
-      const events = yield* broker.connect(host);
-      yield* Stream.runForEach(events, (event) => {
-        if (event.type !== "request") return Effect.void;
-        operations.push(event.request.operation);
-        const correlation = {
-          connectionId: event.connectionId,
-          leaseId: event.request.leaseId,
-          requestId: event.request.requestId,
+for (const providerInstance of ["codex", "pi", "atomic"] as const) {
+  it.effect(`exposes the same policy-governed toolkit to ${providerInstance}`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const providerScope = {
+          ...invocationScope,
+          providerInstanceId: ProviderInstanceId.make(providerInstance),
         };
-        switch (event.request.operation) {
-          case "status":
-            return respondTo(broker, {
-              ...correlation,
-              ok: true,
-              result: {
-                locked: false,
-                permissions: {
-                  accessibility: "granted",
-                  screenCapture: "granted",
-                  input: "granted",
+        const { broker, history, policy, toolkit } = yield* makeHarness;
+        const operations: string[] = [];
+        const events = yield* broker.connect(host);
+        yield* Stream.runForEach(events, (event) => {
+          if (event.type !== "request") return Effect.void;
+          operations.push(event.request.operation);
+          const correlation = {
+            connectionId: event.connectionId,
+            leaseId: event.request.leaseId,
+            requestId: event.request.requestId,
+          };
+          switch (event.request.operation) {
+            case "status":
+              return respondTo(broker, {
+                ...correlation,
+                ok: true,
+                result: {
+                  locked: false,
+                  permissions: {
+                    accessibility: "granted",
+                    screenCapture: "granted",
+                    input: "granted",
+                  },
                 },
-              },
-            });
-          case "listTargets":
-            return respondTo(broker, {
-              ...correlation,
-              ok: true,
-              result: { targets: [target] },
-            });
-          case "observe":
-            return respondTo(broker, { ...correlation, ok: true, result: observation });
-          case "act":
-            return respondTo(broker, {
-              ...correlation,
-              ok: true,
-              result: { completedActions: event.request.input.actions.length, observation },
-            });
-        }
-      }).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
+              });
+            case "listTargets":
+              return respondTo(broker, {
+                ...correlation,
+                ok: true,
+                result: { targets: [target] },
+              });
+            case "observe":
+              return respondTo(broker, { ...correlation, ok: true, result: observation });
+            case "act":
+              return respondTo(broker, {
+                ...correlation,
+                ok: true,
+                result: { completedActions: event.request.input.actions.length, observation },
+              });
+          }
+        }).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
 
-      expect(yield* toolkit.status({ scope: invocationScope })).toEqual({
-        host,
-        status: {
-          locked: false,
-          permissions: {
-            accessibility: "granted",
-            screenCapture: "granted",
-            input: "granted",
+        expect(yield* toolkit.status({ scope: providerScope })).toEqual({
+          host,
+          status: {
+            locked: false,
+            permissions: {
+              accessibility: "granted",
+              screenCapture: "granted",
+              input: "granted",
+            },
           },
-        },
-      });
-      expect(yield* toolkit.listTargets({ scope: invocationScope })).toEqual({ targets: [target] });
+        });
+        expect(yield* toolkit.listTargets({ scope: providerScope })).toEqual({ targets: [target] });
 
-      expect(
-        yield* toolkit.observe({
-          scope: invocationScope,
-          target,
-          runtimeMode: "full-access",
-        }),
-      ).toMatchObject({
-        _tag: "policy",
-        approvalId: "computer-use-approval-0",
-        decision: { _tag: "request-app-grant", access: "observe" },
-      });
-      expect(operations).toEqual(["status", "listTargets"]);
-      expect((yield* history.list(environmentId)).map((entry) => entry.state)).toEqual([
-        "waiting-approval",
-        "requested",
-        "completed",
-        "requested",
-        "completed",
-        "requested",
-      ]);
+        expect(
+          yield* toolkit.observe({
+            scope: providerScope,
+            target,
+            runtimeMode: "full-access",
+          }),
+        ).toMatchObject({
+          _tag: "policy",
+          approvalId: "computer-use-approval-0",
+          decision: { _tag: "request-app-grant", access: "observe" },
+        });
+        expect(operations).toEqual(["status", "listTargets"]);
+        expect((yield* history.list(environmentId)).map((entry) => entry.state)).toEqual([
+          "waiting-approval",
+          "requested",
+          "completed",
+          "requested",
+          "completed",
+          "requested",
+        ]);
 
-      yield* policy.grant({
-        scope: { ...invocationScope, hostId: host.hostId },
-        target,
-        access: "operate",
-        duration: "turn",
-      });
-      expect(
-        yield* toolkit.observe({
-          scope: invocationScope,
+        yield* policy.grant({
+          scope: { ...providerScope, hostId: host.hostId },
           target,
-          runtimeMode: "full-access",
-        }),
-      ).toEqual({ _tag: "success", value: observation });
-      expect(
-        yield* toolkit.act({
-          scope: invocationScope,
-          target,
-          observationId: observation.observationId,
-          batch: { actions: [{ _tag: "text-entry", text: "typed-secret" }] },
-          risk: "reversible-local",
-          runtimeMode: "full-access",
-        }),
-      ).toEqual({
-        _tag: "success",
-        value: { completedActions: 1, observation },
-      });
-      const persistedMetadata = (yield* history.list(environmentId))
-        .flatMap((entry) => [
-          entry.summary,
-          entry.resultTag ?? "",
-          entry.target?.displayName ?? "",
-          entry.target?.applicationId ?? "",
-          entry.target?.stableIdentity ?? "",
-        ])
-        .join("\n");
-      expect(persistedMetadata).not.toContain("typed-secret");
-      expect(persistedMetadata).not.toContain("field-1");
-      expect(
-        yield* toolkit.act({
-          scope: invocationScope,
-          target,
-          observationId: observation.observationId,
-          batch: { actions: [{ _tag: "click", x: 30, y: 40 }] },
-          risk: "external-side-effect",
-          runtimeMode: "full-access",
-        }),
-      ).toMatchObject({
-        _tag: "policy",
-        approvalId: "computer-use-approval-1",
-        decision: { _tag: "request-action-confirmation", risk: "external-side-effect" },
-      });
-      expect(operations).toEqual(["status", "listTargets", "observe", "act"]);
-    }),
-  ),
-);
+          access: "operate",
+          duration: "turn",
+        });
+        expect(
+          yield* toolkit.observe({
+            scope: providerScope,
+            target,
+            runtimeMode: "full-access",
+          }),
+        ).toEqual({ _tag: "success", value: observation });
+        expect(
+          yield* toolkit.act({
+            scope: providerScope,
+            target,
+            observationId: observation.observationId,
+            batch: { actions: [{ _tag: "text-entry", text: "typed-secret" }] },
+            risk: "reversible-local",
+            runtimeMode: "full-access",
+          }),
+        ).toEqual({
+          _tag: "success",
+          value: { completedActions: 1, observation },
+        });
+        const persistedMetadata = (yield* history.list(environmentId))
+          .flatMap((entry) => [
+            entry.summary,
+            entry.resultTag ?? "",
+            entry.target?.displayName ?? "",
+            entry.target?.applicationId ?? "",
+            entry.target?.stableIdentity ?? "",
+          ])
+          .join("\n");
+        expect(persistedMetadata).not.toContain("typed-secret");
+        expect(persistedMetadata).not.toContain("field-1");
+        expect(
+          yield* toolkit.act({
+            scope: providerScope,
+            target,
+            observationId: observation.observationId,
+            batch: { actions: [{ _tag: "click", x: 30, y: 40 }] },
+            risk: "external-side-effect",
+            runtimeMode: "full-access",
+          }),
+        ).toMatchObject({
+          _tag: "policy",
+          approvalId: "computer-use-approval-1",
+          decision: { _tag: "request-action-confirmation", risk: "external-side-effect" },
+        });
+        expect(operations).toEqual(["status", "listTargets", "observe", "act"]);
+        expect(
+          (yield* history.list(environmentId)).every(
+            (entry) => entry.providerInstanceId === providerInstance,
+          ),
+        ).toBe(true);
+      }),
+    ),
+  );
+}
 
 it.effect("maps malformed helper results to the broker's typed failure", () =>
   Effect.scoped(

@@ -94,9 +94,27 @@ type PendingUiRequest =
       readonly atomicRequestId: string;
       readonly approvalId: ComputerUseApprovalId;
       readonly labels: Readonly<Partial<Record<ProviderApprovalDecision, string>>>;
+    }
+  | {
+      readonly _tag: "workflow-input";
+      readonly runId: string;
+      readonly stageId: string;
+      readonly promptId: string;
+      readonly promptKind: string;
+      readonly questionId: string;
+      readonly submittedAnswers?: Readonly<Record<string, string | ReadonlyArray<string>>>;
     };
 
 const COMPUTER_USE_APPROVAL_TITLE = /^T3 Computer Use \[([^\]]+)]\s+(.+) :: ([a-z-]+)$/;
+const T3_WORKFLOW_ACTION_CUSTOM_TYPE = "t3:workflow-action";
+
+function workflowActionCommand(
+  actionId: string,
+  request: Readonly<Record<string, unknown>>,
+): string {
+  const encoded = Buffer.from(JSON.stringify({ actionId, request }), "utf8").toString("base64url");
+  return `/t3-workflow-action ${encoded}`;
+}
 
 const computerUseApprovalDetail = (appName: string, kind: string): string => {
   switch (kind) {
@@ -132,14 +150,17 @@ const computerUseApprovalDecision = (label: string): ProviderApprovalDecision | 
 interface AtomicWorkflowStageContext {
   readonly id: string;
   readonly index: number;
+  readonly kind: "stage" | "tool";
   name: string;
   parentIds: ReadonlyArray<string>;
   awaitingInput: boolean;
+  status?: string;
 }
 
 interface AtomicWorkflowRunContext {
   name: string;
   scriptPath: string | undefined;
+  status?: string;
   readonly stages: Map<string, AtomicWorkflowStageContext>;
 }
 
@@ -285,6 +306,50 @@ function workflowStageDepth(
     );
   depths.set(stage.id, depth);
   return depth;
+}
+
+function workflowTerminalTaskStatus(
+  status: string | undefined,
+): "completed" | "failed" | "stopped" | undefined {
+  if (status === "completed") return "completed";
+  if (status === "failed" || status === "blocked") return "failed";
+  if (
+    status === "cancelled" ||
+    status === "interrupted" ||
+    status === "quit" ||
+    status === "stopped"
+  ) {
+    return "stopped";
+  }
+  return undefined;
+}
+
+function workflowStageLinkage(
+  runId: string,
+  run: AtomicWorkflowRunContext,
+  stage: AtomicWorkflowStageContext,
+) {
+  const phaseIndex = workflowStageDepth(run, stage);
+  return {
+    taskType: "local_agent" as const,
+    workflowName: run.name,
+    workflowStageId: stage.id,
+    title: stage.name,
+    role:
+      stage.kind === "tool"
+        ? "workflow tool"
+        : stage.awaitingInput
+          ? "human input"
+          : "workflow stage",
+    parentAgentId: runId,
+    dependsOnTaskIds: stage.parentIds.map((parentId) =>
+      RuntimeTaskId.make(workflowStageTaskId(runId, parentId)),
+    ),
+    agentIndex: stage.index,
+    phaseIndex,
+    phaseTitle: `Stage ${phaseIndex + 1}`,
+    timelineBypass: true,
+  } as const;
 }
 
 function dataText(value: unknown): string | undefined {
@@ -611,9 +676,13 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       return turnId;
     });
 
-  const resolveAbandonedUiRequests = (context: AtomicSessionContext) =>
+  const resolveAbandonedUiRequests = (
+    context: AtomicSessionContext,
+    includeWorkflowInputs = false,
+  ) =>
     Effect.gen(function* () {
       for (const [requestId, pending] of context.pendingUi) {
+        if (pending._tag === "workflow-input" && !includeWorkflowInputs) continue;
         if (pending._tag === "computer-approval") {
           yield* ComputerUsePolicy.resolveActiveComputerUseApproval(pending.approvalId, "cancel");
           yield* publish({
@@ -638,8 +707,336 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             payload: { answers: {} },
           });
         }
+        context.pendingUi.delete(requestId);
       }
-      context.pendingUi.clear();
+    });
+
+  const openWorkflowPrompt = (
+    context: AtomicSessionContext,
+    input: {
+      readonly runId: string;
+      readonly workflowName: string;
+      readonly stageId: string;
+      readonly stageName: string;
+      readonly prompt: Readonly<Record<string, unknown>>;
+    },
+    event: AtomicRpcEvent,
+  ) =>
+    Effect.gen(function* () {
+      const promptId = field(input.prompt, "id");
+      if (!promptId) return;
+      const requestId = ApprovalRequestId.make(`workflow:${input.runId}:${promptId}`);
+      if (context.pendingUi.has(requestId)) return;
+      const promptKind = field(input.prompt, "kind") ?? "input";
+      const questionId = `${requestId}:answer`;
+      const options = isStringArray(input.prompt.options)
+        ? input.prompt.options.map((label) => ({ label, description: `Choose ${label}.` }))
+        : promptKind === "confirm"
+          ? [
+              { label: "Yes", description: "Continue the workflow." },
+              { label: "No", description: "Decline and stop this workflow path." },
+            ]
+          : [
+              {
+                label: "Enter a custom answer",
+                description: "Provide the value this workflow stage needs.",
+              },
+            ];
+      context.pendingUi.set(requestId, {
+        _tag: "workflow-input",
+        runId: input.runId,
+        stageId: input.stageId,
+        promptId,
+        promptKind,
+        questionId,
+      });
+      yield* publish({
+        type: "user-input.requested",
+        ...(yield* eventStamp()),
+        provider: PROVIDER,
+        providerInstanceId: boundInstanceId,
+        threadId: context.threadId,
+        ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+        requestId: RuntimeRequestId.make(requestId),
+        payload: {
+          questions: [
+            {
+              id: questionId,
+              header: input.workflowName,
+              question:
+                field(input.prompt, "message") ??
+                `${input.stageName} is waiting for your response.`,
+              options,
+              multiSelect: false,
+            },
+          ],
+        },
+        raw: raw(event, T3_WORKFLOW_ACTION_CUSTOM_TYPE),
+      });
+    });
+
+  const resolveWorkflowPrompt = (
+    context: AtomicSessionContext,
+    runId: string,
+    stageId: string | undefined,
+    answers: Readonly<Record<string, string | ReadonlyArray<string>>> = {},
+  ) =>
+    Effect.gen(function* () {
+      for (const [requestId, pending] of context.pendingUi) {
+        if (
+          pending._tag !== "workflow-input" ||
+          pending.runId !== runId ||
+          (stageId !== undefined && pending.stageId !== stageId)
+        ) {
+          continue;
+        }
+        context.pendingUi.delete(requestId);
+        yield* publish({
+          type: "user-input.resolved",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          requestId: RuntimeRequestId.make(requestId),
+          payload: { answers },
+        });
+      }
+    });
+
+  const syncWorkflowToolStatus = (
+    context: AtomicSessionContext,
+    runId: string,
+    workflowName: string,
+    runStatus: string | undefined,
+    tools: ReadonlyArray<unknown>,
+    event: AtomicRpcEvent,
+  ) =>
+    Effect.gen(function* () {
+      let workflowRun = context.workflowRuns.get(runId);
+      if (!workflowRun) {
+        workflowRun = { name: workflowName, scriptPath: undefined, stages: new Map() };
+        context.workflowRuns.set(runId, workflowRun);
+      } else {
+        workflowRun.name = workflowName;
+      }
+      if (runStatus) workflowRun.status = runStatus;
+      const source = raw(event, T3_WORKFLOW_ACTION_CUSTOM_TYPE);
+      for (const candidate of tools) {
+        if (!isRecord(candidate) || field(candidate, "kind") !== "tool") continue;
+        const toolId = field(candidate, "id");
+        const toolName = field(candidate, "name");
+        const status = field(candidate, "status");
+        if (!toolId || !toolName || !status) continue;
+        const parentIds = isStringArray(candidate.parentIds) ? candidate.parentIds : [];
+        let tool = workflowRun.stages.get(toolId);
+        if (!tool) {
+          const executionOrder = nonNegativeNumber(candidate.executionOrder);
+          tool = {
+            id: toolId,
+            index: executionOrder === undefined ? workflowRun.stages.size : executionOrder - 1,
+            kind: "tool",
+            name: toolName,
+            parentIds,
+            awaitingInput: false,
+          };
+          workflowRun.stages.set(toolId, tool);
+        } else {
+          tool.name = toolName;
+          tool.parentIds = parentIds;
+        }
+        if (tool.status === status) continue;
+        const previousStatus = tool.status;
+        tool.status = status;
+        const taskId = RuntimeTaskId.make(workflowStageTaskId(runId, tool.id));
+        const linkage = workflowStageLinkage(runId, workflowRun, tool);
+        if (previousStatus === undefined) {
+          yield* publish({
+            type: "task.started",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              taskId,
+              description: `Running ${tool.name}`,
+              ...linkage,
+            },
+            raw: source,
+          });
+        }
+        const terminalStatus = workflowTerminalTaskStatus(status);
+        if (terminalStatus) {
+          yield* publish({
+            type: "task.completed",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              taskId,
+              status: terminalStatus,
+              ...(field(candidate, "resultSummary")
+                ? { summary: field(candidate, "resultSummary") }
+                : {}),
+              ...linkage,
+            },
+            raw: source,
+          });
+          continue;
+        }
+        yield* publish({
+          type: "task.updated",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId,
+            status:
+              status === "awaiting_input" ? "waiting" : status === "paused" ? "idle" : "running",
+            description: `${tool.name} ${status.replaceAll("_", " ")}`,
+            ...linkage,
+          },
+          raw: source,
+        });
+      }
+    });
+
+  const handleWorkflowActionResult = (context: AtomicSessionContext, event: AtomicRpcEvent) =>
+    Effect.gen(function* () {
+      const message = isRecord(event.message) ? event.message : undefined;
+      if (!message || field(message, "customType") !== T3_WORKFLOW_ACTION_CUSTOM_TYPE) return false;
+      const envelope = isRecord(message.details) ? message.details : undefined;
+      const request = envelope && isRecord(envelope.request) ? envelope.request : undefined;
+      const result = envelope && isRecord(envelope.result) ? envelope.result : undefined;
+      if (!request || !result) return true;
+      const action = field(request, "action");
+      if (action === "status") {
+        const detail = isRecord(result.detail) ? result.detail : undefined;
+        const runId = detail ? field(detail, "runId") : undefined;
+        const workflowName = detail ? field(detail, "name") : undefined;
+        const stages = detail && Array.isArray(detail.stages) ? detail.stages : [];
+        if (runId && workflowName) {
+          yield* syncWorkflowToolStatus(
+            context,
+            runId,
+            workflowName,
+            field(detail!, "status"),
+            detail && Array.isArray(detail.tools) ? detail.tools : [],
+            event,
+          );
+          for (const candidate of stages) {
+            if (!isRecord(candidate) || !isRecord(candidate.pendingPrompt)) continue;
+            const stageId = field(candidate, "id");
+            if (!stageId) continue;
+            yield* openWorkflowPrompt(
+              context,
+              {
+                runId,
+                workflowName,
+                stageId,
+                stageName: field(candidate, "name") ?? stageId,
+                prompt: candidate.pendingPrompt,
+              },
+              event,
+            );
+          }
+        }
+        return true;
+      }
+      if (action === "send") {
+        const runId = field(request, "runId");
+        const stageId = field(request, "stageId");
+        const promptId = field(request, "promptId");
+        if (!runId || !stageId || !promptId) return true;
+        const pending = Array.from(context.pendingUi.values()).find(
+          (entry) =>
+            entry._tag === "workflow-input" &&
+            entry.runId === runId &&
+            entry.stageId === stageId &&
+            entry.promptId === promptId,
+        );
+        if (field(result, "status") === "ok") {
+          yield* resolveWorkflowPrompt(
+            context,
+            runId,
+            stageId,
+            pending?._tag === "workflow-input" ? pending.submittedAnswers : {},
+          );
+        } else {
+          yield* publish({
+            type: "runtime.warning",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              message:
+                field(result, "error") ??
+                field(result, "message") ??
+                `${definition.displayName} could not answer the workflow prompt.`,
+              detail: { kind: "workflow_control" },
+            },
+            raw: raw(event, T3_WORKFLOW_ACTION_CUSTOM_TYPE),
+          });
+        }
+        return true;
+      }
+      if (field(result, "status") === "failed") {
+        yield* publish({
+          type: "runtime.warning",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            message: field(result, "error") ?? `${definition.displayName} workflow control failed.`,
+            detail: { kind: "workflow_control" },
+          },
+          raw: raw(event, T3_WORKFLOW_ACTION_CUSTOM_TYPE),
+        });
+      }
+      return true;
+    });
+
+  const requestWorkflowStatus = (context: AtomicSessionContext, runId: string) =>
+    Effect.gen(function* () {
+      if (PROVIDER !== "atomic") return;
+      const actionId = yield* randomId;
+      yield* context.rpc
+        .request(
+          {
+            type: "prompt",
+            message: workflowActionCommand(actionId, { action: "status", runId }),
+          },
+          Duration.seconds(30),
+        )
+        .pipe(
+          Effect.catch((cause) =>
+            eventStamp().pipe(
+              Effect.flatMap((stamp) =>
+                publish({
+                  type: "runtime.warning",
+                  ...stamp,
+                  provider: PROVIDER,
+                  providerInstanceId: boundInstanceId,
+                  threadId: context.threadId,
+                  ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+                  payload: {
+                    message: `${definition.displayName} workflow details could not be refreshed: ${cause.message}`,
+                    detail: { kind: "workflow_control" },
+                  },
+                }),
+              ),
+            ),
+          ),
+        );
     });
 
   const handleWorkflowEntry = (context: AtomicSessionContext, event: AtomicRpcEvent) =>
@@ -730,6 +1127,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           stage = {
             id: stageId,
             index: workflowRun.stages.size,
+            kind: "stage",
             name: eventStageName ?? stageId,
             parentIds: eventParentIds ?? [],
             awaitingInput:
@@ -750,23 +1148,10 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       const stageName = stage?.name;
       const source = raw(event, field(event, "type") ?? "workflow_lifecycle");
       const taskId = RuntimeTaskId.make(stage ? workflowStageTaskId(runId, stage.id) : runId);
-      const phaseIndex = stage ? workflowStageDepth(workflowRun, stage) : undefined;
       const linkage = stage
         ? ({
-            taskType: "local_agent",
-            workflowName,
-            workflowStageId: stage.id,
-            title: stage.name,
-            role: stage.awaitingInput ? "human input" : "workflow stage",
+            ...workflowStageLinkage(runId, workflowRun, stage),
             ...(field(data, "model") ? { model: field(data, "model") } : {}),
-            parentAgentId: runId,
-            dependsOnTaskIds: stage.parentIds.map((parentId) =>
-              RuntimeTaskId.make(workflowStageTaskId(runId, parentId)),
-            ),
-            agentIndex: stage.index,
-            phaseIndex,
-            phaseTitle: `Stage ${phaseIndex! + 1}`,
-            timelineBypass: true,
           } as const)
         : ({
             taskType: "local_workflow",
@@ -779,6 +1164,10 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           } as const);
 
       if (entryType === "workflow.run.start" || entryType === "workflow.stage.start") {
+        if (entryType === "workflow.run.start") workflowRun.status = "running";
+        if (entryType === "workflow.stage.start" && stage) {
+          stage.status = stage.awaitingInput ? "awaiting_input" : "running";
+        }
         yield* publish({
           type: "task.started",
           ...(yield* eventStamp()),
@@ -812,18 +1201,21 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             },
             raw: source,
           });
+          yield* requestWorkflowStatus(context, runId);
         }
         return true;
       }
 
       if (entryType === "workflow.stage.end" || entryType === "workflow.run.end") {
+        yield* resolveWorkflowPrompt(
+          context,
+          runId,
+          entryType === "workflow.stage.end" ? stageId : undefined,
+        );
         const status = field(data, "status");
-        const terminalStatus =
-          status === "failed" || status === "blocked"
-            ? "failed"
-            : status === "cancelled" || status === "interrupted" || status === "quit"
-              ? "stopped"
-              : "completed";
+        const terminalStatus = workflowTerminalTaskStatus(status) ?? "completed";
+        if (entryType === "workflow.run.end") workflowRun.status = terminalStatus;
+        if (entryType === "workflow.stage.end" && stage) stage.status = terminalStatus;
         const summary =
           dataText(data.result) ?? field(data, "summary") ?? field(data, "error") ?? undefined;
         yield* publish({
@@ -841,11 +1233,37 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           },
           raw: source,
         });
+        if (entryType === "workflow.run.end") {
+          yield* requestWorkflowStatus(context, runId);
+        }
         return true;
       }
       if (entryType === "workflow.stage.waiting" || entryType === "workflow.run.waiting") {
+        if (stage) stage.status = "awaiting_input";
+        if (entryType === "workflow.run.waiting") workflowRun.status = "awaiting_input";
         const prompt =
           field(data, "promptMessage") ?? `Awaiting input for ${stage?.name ?? workflowName}`;
+        const promptId = field(data, "promptId");
+        if (stage && promptId) {
+          yield* openWorkflowPrompt(
+            context,
+            {
+              runId,
+              workflowName,
+              stageId: stage.id,
+              stageName: stage.name,
+              prompt: {
+                id: promptId,
+                kind: field(data, "promptKind") ?? "input",
+                message: prompt,
+                ...(isStringArray(data.promptOptions) ? { options: data.promptOptions } : {}),
+              },
+            },
+            event,
+          );
+        } else if (stage) {
+          yield* requestWorkflowStatus(context, runId);
+        }
         yield* publish({
           type: "task.progress",
           ...(yield* eventStamp()),
@@ -871,6 +1289,8 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         entryType === "workflow.run.resumed"
       ) {
         const resumed = entryType.endsWith(".resumed");
+        if (stage) stage.status = resumed ? "running" : "paused";
+        if (!stage) workflowRun.status = resumed ? "running" : "paused";
         yield* publish({
           type: "task.updated",
           ...(yield* eventStamp()),
@@ -902,6 +1322,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         if (context.suppressAgentEventsUntilNextTurn) return;
         return yield* handleExtensionUi(context, event);
       }
+      if (type === "message_end" && (yield* handleWorkflowActionResult(context, event))) return;
       if (type === "entry_appended" && (yield* handleWorkflowEntry(context, event))) return;
       if (type === "message_end") {
         yield* handleWorkflowEntry(context, event);
@@ -1283,12 +1704,59 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       }
     });
 
+  const stopActiveWorkflowTasks = (context: AtomicSessionContext) =>
+    Effect.gen(function* () {
+      for (const [runId, workflowRun] of context.workflowRuns) {
+        for (const stage of workflowRun.stages.values()) {
+          if (workflowTerminalTaskStatus(stage.status)) continue;
+          stage.status = "stopped";
+          yield* publish({
+            type: "task.completed",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              taskId: RuntimeTaskId.make(workflowStageTaskId(runId, stage.id)),
+              status: "stopped",
+              summary: "Provider session closed.",
+              ...workflowStageLinkage(runId, workflowRun, stage),
+            },
+          });
+        }
+        if (workflowTerminalTaskStatus(workflowRun.status)) continue;
+        workflowRun.status = "stopped";
+        yield* publish({
+          type: "task.completed",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(runId),
+            status: "stopped",
+            summary: "Provider session closed.",
+            taskType: "local_workflow",
+            workflowName: workflowRun.name,
+            title: workflowRun.name,
+            runHandles: {
+              runId,
+              ...(workflowRun.scriptPath ? { scriptPath: workflowRun.scriptPath } : {}),
+            },
+          },
+        });
+      }
+    });
+
   const stopSessionInternal = (context: AtomicSessionContext, emitExit: boolean) =>
     Effect.gen(function* () {
       if (context.stopped) return;
       context.stopped = true;
       yield* context.rpc.kill;
-      yield* resolveAbandonedUiRequests(context);
+      yield* resolveAbandonedUiRequests(context, true);
+      yield* stopActiveWorkflowTasks(context);
       yield* completeActiveTurn(context, "interrupted", "Session stopped.");
       yield* Effect.ignore(Scope.close(context.scope, Exit.void));
       const ownsSession = sessions.get(context.threadId) === context;
@@ -1843,6 +2311,61 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           method: "extension_ui_response",
           detail: `Unknown ${definition.displayName} UI request: ${requestId}`,
         });
+      }
+      if (pending._tag === "workflow-input") {
+        const answer = answers[pending.questionId];
+        const submittedAnswer = isString(answer)
+          ? answer
+          : isStringArray(answer)
+            ? answer
+            : undefined;
+        const value = isString(submittedAnswer) ? submittedAnswer : submittedAnswer?.[0];
+        if (submittedAnswer === undefined || value === undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "respondToUserInput",
+            issue: "Atomic workflow responses require an answer.",
+          });
+        }
+        const response = pending.promptKind === "confirm" ? value.toLowerCase() === "yes" : value;
+        const submittedAnswers = { [pending.questionId]: submittedAnswer };
+        context.pendingUi.set(requestId, { ...pending, submittedAnswers });
+        const actionId = yield* randomId;
+        const workflowResponse = yield* context.rpc
+          .request(
+            {
+              type: "prompt",
+              message: workflowActionCommand(actionId, {
+                action: "send",
+                runId: pending.runId,
+                stageId: pending.stageId,
+                promptId: pending.promptId,
+                response,
+                delivery: "answer",
+              }),
+            },
+            Duration.seconds(30),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "workflow/send",
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          );
+        yield* awaitMappedEvents(context, workflowResponse.precedingEventSequence);
+        if (context.pendingUi.has(requestId)) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "workflow/send",
+            detail: `${definition.displayName} did not accept the workflow response.`,
+          });
+        }
+        return;
       }
       if (pending._tag !== "input") {
         return yield* new ProviderAdapterRequestError({

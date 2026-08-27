@@ -20,6 +20,17 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("Computer Use settings", () => {
+  it("defaults agent computer access off until the user enables it", () => {
+    expect(decodeServerSettings({}).enableComputerUse).toBe(false);
+  });
+
+  it("accepts an explicit Computer Use toggle in settings and patches", () => {
+    expect(decodeServerSettings({ enableComputerUse: true }).enableComputerUse).toBe(true);
+    expect(decodeServerSettingsPatch({ enableComputerUse: true }).enableComputerUse).toBe(true);
+  });
+});
+
 describe("ClaudeSettings auto-compaction", () => {
   it("uses Claude's default threshold when no override is configured", () => {
     expect(decodeClaudeSettings({}).autoCompactWindow).toBe("");

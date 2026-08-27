@@ -521,3 +521,32 @@ export const ComputerUseBrokerError = Schema.Union([
   ComputerUseTimeoutError,
 ]);
 export type ComputerUseBrokerError = typeof ComputerUseBrokerError.Type;
+
+export class ComputerUseCapabilityUnavailableError extends Schema.TaggedErrorClass<ComputerUseCapabilityUnavailableError>()(
+  "ComputerUseCapabilityUnavailableError",
+  {
+    capability: Schema.Literal("computer"),
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    providerSessionId: TrimmedNonEmptyString,
+    providerInstanceId: ProviderInstanceId,
+  },
+) {
+  override get message(): string {
+    return "MCP credential does not grant the computer capability.";
+  }
+}
+
+export class ComputerUseTurnUnavailableError extends Schema.TaggedErrorClass<ComputerUseTurnUnavailableError>()(
+  "ComputerUseTurnUnavailableError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    providerSessionId: TrimmedNonEmptyString,
+    providerInstanceId: ProviderInstanceId,
+  },
+) {
+  override get message(): string {
+    return "Computer Use requires an active provider turn.";
+  }
+}

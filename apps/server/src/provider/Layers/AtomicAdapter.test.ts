@@ -9,7 +9,9 @@ import { it } from "@effect/vitest";
 import {
   ApprovalRequestId,
   AtomicSettings,
+  EnvironmentId,
   ProviderDriverKind,
+  ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
@@ -22,7 +24,8 @@ import * as Stream from "effect/Stream";
 import { assert, describe } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
-import { makeAtomicAdapter } from "./AtomicAdapter.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { makeAtomicAdapter, sanitizePiComputerUseEvent } from "./AtomicAdapter.ts";
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockPeer = NodePath.join(__dirname, "../testFixtures/piRpcMockPeer.mjs");
@@ -34,6 +37,18 @@ function writeMockWrapper(): string {
   NodeFS.writeFileSync(
     wrapper,
     `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"\n`,
+    "utf8",
+  );
+  NodeFS.chmodSync(wrapper, 0o755);
+  return wrapper;
+}
+
+function writeCapturingMockWrapper(capturePath: string): string {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "atomic-adapter-mcp-test-"));
+  const wrapper = NodePath.join(dir, "mock-atomic.sh");
+  NodeFS.writeFileSync(
+    wrapper,
+    `#!/bin/sh\nprintf '%s\\n' "$T3CODE_MCP_ENDPOINT" "$T3CODE_MCP_AUTHORIZATION" > ${JSON.stringify(capturePath)}\nprintf '%s\\n' "$@" >> ${JSON.stringify(capturePath)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"\n`,
     "utf8",
   );
   NodeFS.chmodSync(wrapper, 0o755);
@@ -54,6 +69,78 @@ function makeAdapter(options?: { readonly requestTimeout?: Duration.Input }) {
 }
 
 describe("AtomicAdapter", () => {
+  it("removes screenshots from persisted Pi/Atomic tool events", () => {
+    const sanitized = sanitizePiComputerUseEvent({
+      type: "tool_execution_end",
+      toolName: "computer_observe",
+      args: { targetId: "target-1" },
+      result: {
+        content: [{ type: "image", mimeType: "image/png", data: "SCREENSHOT_SENTINEL" }],
+        details: {
+          observationId: "observation-1",
+          screenshot: { mimeType: "image/png", base64: "SCREENSHOT_SENTINEL" },
+        },
+      },
+    });
+
+    assert.notInclude(JSON.stringify(sanitized), "SCREENSHOT_SENTINEL");
+    assert.equal(sanitized.toolName, "computer_observe");
+    assert.deepEqual(sanitized.args, { targetId: "target-1" });
+    assert.equal(
+      (sanitized.result as { details?: { observationId?: string } }).details?.observationId,
+      "observation-1",
+    );
+  });
+
+  it.live("attaches the private T3 Computer Use extension to Pi-compatible sessions", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("atomic-computer-use-extension");
+      const capturePath = NodePath.join(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "atomic-adapter-mcp-capture-")),
+        "launch.txt",
+      );
+      const binaryPath = writeCapturingMockWrapper(capturePath);
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-1"),
+        threadId,
+        providerSessionId: "provider-session-1",
+        providerInstanceId: ProviderInstanceId.make("atomic"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer test-session-token",
+      });
+
+      const adapter = yield* makeAtomicAdapter(
+        decodeAtomicSettings({ enabled: true, binaryPath }),
+      ).pipe(
+        Effect.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "atomic-adapter-mcp-test-" }).pipe(
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const launch = NodeFS.readFileSync(capturePath, "utf8").trim().split("\n");
+      assert.equal(launch[0], "http://127.0.0.1:43123/mcp");
+      assert.equal(launch[1], "Bearer test-session-token");
+      const extensionFlag = launch.indexOf("--extension");
+      assert.isAtLeast(extensionFlag, 2);
+      const extensionPath = launch[extensionFlag + 1];
+      assert.isString(extensionPath);
+      assert.isTrue(NodeFS.existsSync(extensionPath!));
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "computer_status");
+
+      yield* adapter.stopSession(threadId);
+      assert.isFalse(NodeFS.existsSync(extensionPath!));
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("keeps the Pi-derived process alive and completes only after agent_settled", () =>
     Effect.gen(function* () {
       const adapter = yield* makeAdapter();

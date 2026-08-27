@@ -11,6 +11,7 @@ import type {
   ProviderTurnStartResult,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  ComputerUseStopReason,
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
@@ -49,7 +50,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
-import { makeProviderServiceLive } from "./ProviderService.ts";
+import { makeProviderServiceLive, type ProviderServiceLiveOptions } from "./ProviderService.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -60,6 +61,7 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import type * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 
@@ -283,7 +285,7 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
-function makeProviderServiceLayer() {
+function makeProviderServiceLayer(options?: ProviderServiceLiveOptions) {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
@@ -304,7 +306,7 @@ function makeProviderServiceLayer() {
 
   const layer = it.layer(
     Layer.mergeAll(
-      makeProviderServiceLive().pipe(
+      makeProviderServiceLive(options).pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(defaultServerSettingsLayer),
@@ -1714,7 +1716,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
   );
 });
 
-const fanout = makeProviderServiceLayer();
+const releasedComputerUseTurns: Array<{
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+  readonly reason: ComputerUseStopReason;
+}> = [];
+const fanout = makeProviderServiceLayer({
+  finishComputerUseTurn: (threadId, turnId, reason) =>
+    Effect.sync(() => void releasedComputerUseTurns.push({ threadId, turnId, reason })),
+});
 fanout.layer("ProviderServiceLive fanout", (it) => {
   it.effect("fans out adapter turn completion events", () =>
     Effect.gen(function* () {
@@ -1759,6 +1769,11 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         ),
         true,
       );
+      assert.deepEqual(releasedComputerUseTurns.at(-1), {
+        threadId: session.threadId,
+        turnId: asTurnId("turn-1"),
+        reason: "turn-completed",
+      });
     }),
   );
 
@@ -2122,9 +2137,13 @@ validation.layer("ProviderServiceLive validation", (it) => {
 describe("agent browser access", () => {
   const revokedThreads: Array<ThreadId> = [];
 
-  const startSessionWith = (enableAgentBrowserAccess: boolean, threadId: ThreadId) =>
+  const startSessionWith = (
+    enableAgentBrowserAccess: boolean,
+    threadId: ThreadId,
+    enableComputerUse = false,
+  ) =>
     Effect.gen(function* () {
-      const issued: Array<ThreadId> = [];
+      const issued: Array<McpSessionRegistry.McpCredentialRequest> = [];
       const codex = makeFakeCodexAdapter();
       const providerAdapterLayer = Layer.succeed(
         ProviderAdapterRegistry.ProviderAdapterRegistry,
@@ -2139,14 +2158,19 @@ describe("agent browser access", () => {
       const providerLayer = makeProviderServiceLive({
         issueMcpCredential: (request) =>
           Effect.sync(() => {
-            issued.push(request.threadId);
+            issued.push(request);
             return undefined;
           }),
         revokeMcpCredential: (revoked) => Effect.sync(() => void revokedThreads.push(revoked)),
       }).pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
-        Layer.provide(ServerSettings.ServerSettingsService.layerTest({ enableAgentBrowserAccess })),
+        Layer.provide(
+          ServerSettings.ServerSettingsService.layerTest({
+            enableAgentBrowserAccess,
+            enableComputerUse,
+          }),
+        ),
         Layer.provide(serverConfigTestLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(
@@ -2201,7 +2225,25 @@ describe("agent browser access", () => {
 
       const issued = yield* startSessionWith(true, threadId);
 
-      assert.deepEqual(issued, [threadId]);
+      assert.deepEqual(
+        issued.map((request) => request.threadId),
+        [threadId],
+      );
+      assert.deepEqual(issued[0]?.capabilities, new Set(["preview"]));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("issues only the Computer Use capability when browser access is off", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-computer-on");
+
+      const issued = yield* startSessionWith(false, threadId, true);
+
+      assert.deepEqual(
+        issued.map((request) => request.threadId),
+        [threadId],
+      );
+      assert.deepEqual(issued[0]?.capabilities, new Set(["computer"]));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

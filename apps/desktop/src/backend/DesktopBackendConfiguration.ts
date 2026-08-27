@@ -192,12 +192,12 @@ const resolveComputerUseHelperPath = Effect.fn(
     ? [
         environment.path.join(
           environment.rootDir,
-          "native/computer-use-macos/.build/release",
+          "native/computer-use-macos/.build/debug",
           binaryName,
         ),
         environment.path.join(
           environment.rootDir,
-          "native/computer-use-macos/.build/debug",
+          "native/computer-use-macos/.build/release",
           binaryName,
         ),
       ]
@@ -431,7 +431,10 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       }),
       ...Option.match(input.computerUseHelperPath, {
         onNone: () => ({}),
-        onSome: (computerUseHelperPath) => ({ computerUseHelperPath }),
+        onSome: (computerUseHelperPath) => ({
+          computerUseHelperPath,
+          ...(environment.isDevelopment ? { computerUseHelperDevelopment: true } : {}),
+        }),
       }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };

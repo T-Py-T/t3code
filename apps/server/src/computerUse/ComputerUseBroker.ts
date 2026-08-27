@@ -58,6 +58,12 @@ export interface ComputerUseStopInput {
   readonly reason: ComputerUseStopReason;
 }
 
+export interface ComputerUseStopTurnInput {
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+  readonly reason: ComputerUseStopReason;
+}
+
 export class ComputerUseBroker extends Context.Service<
   ComputerUseBroker,
   {
@@ -73,6 +79,7 @@ export class ComputerUseBroker extends Context.Service<
       resultSchema?: Schema.ConstraintDecoder<A, never>,
     ) => Effect.Effect<A, ComputerUseBrokerError>;
     readonly stop: (input: ComputerUseStopInput) => Effect.Effect<void>;
+    readonly stopTurn: (input: ComputerUseStopTurnInput) => Effect.Effect<void>;
   }
 >()("t3/computerUse/ComputerUseBroker") {}
 
@@ -459,63 +466,107 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     });
   });
 
-  const stop: ComputerUseBroker["Service"]["stop"] = Effect.fn("ComputerUseBroker.stop")(
-    function* ({ scope, reason }) {
-      const stopped = yield* SynchronizedRef.modify(
-        state,
-        (
-          current,
-        ): readonly [
-          (
-            | { readonly lease: ControlLease; readonly requests: ReadonlyArray<PendingRequest> }
-            | undefined
-          ),
-          BrokerState,
-        ] => {
-          const activeLease = current.leases.get(scope.environmentId);
-          if (!activeLease || !sameScope(activeLease.scope, scope)) {
-            return [undefined, current];
-          }
-          const leases = new Map(current.leases);
-          leases.delete(scope.environmentId);
-          const pending = new Map(current.pending);
-          const stopped: PendingRequest[] = [];
+  const stopMatching = Effect.fn("ComputerUseBroker.stopMatching")(function* (
+    matches: (lease: ControlLease) => boolean,
+    reason: ComputerUseStopReason,
+  ) {
+    const stoppedLeases = yield* SynchronizedRef.modify(
+      state,
+      (
+        current,
+      ): readonly [
+        ReadonlyArray<{
+          readonly lease: ControlLease;
+          readonly requests: ReadonlyArray<PendingRequest>;
+        }>,
+        BrokerState,
+      ] => {
+        const leases = new Map(current.leases);
+        const pending = new Map(current.pending);
+        const stopped: Array<{
+          lease: ControlLease;
+          requests: ReadonlyArray<PendingRequest>;
+        }> = [];
+        for (const [environmentId, activeLease] of current.leases) {
+          if (!matches(activeLease)) continue;
+          leases.delete(environmentId);
+          const requests: PendingRequest[] = [];
           for (const [requestId, request] of pending) {
             if (request.lease.leaseId !== activeLease.leaseId) continue;
             pending.delete(requestId);
-            stopped.push(request);
+            requests.push(request);
           }
-          return [
-            { lease: activeLease, requests: stopped },
-            { ...current, leases, pending },
-          ] as const;
-        },
-      );
-      if (!stopped) return;
-      yield* Queue.offer(stopped.lease.connection.queue, {
-        type: "cancel",
-        connectionId: stopped.lease.connection.connectionId,
-        leaseId: stopped.lease.leaseId,
-        reason,
-      });
-      yield* Effect.forEach(
-        stopped.requests,
-        (request) =>
-          Deferred.fail(
-            request.deferred,
-            new ComputerUseStoppedError({
-              operation: request.operation,
-              ...request.lease.scope,
-              leaseId: request.lease.leaseId,
-              reason,
-            }),
-          ),
-        { discard: true },
-      );
-    },
+          stopped.push({ lease: activeLease, requests });
+        }
+        return stopped.length === 0 ? [[], current] : [stopped, { ...current, leases, pending }];
+      },
+    );
+    yield* Effect.forEach(
+      stoppedLeases,
+      (stopped) =>
+        Effect.gen(function* () {
+          yield* Queue.offer(stopped.lease.connection.queue, {
+            type: "cancel",
+            connectionId: stopped.lease.connection.connectionId,
+            leaseId: stopped.lease.leaseId,
+            reason,
+          });
+          yield* Effect.forEach(
+            stopped.requests,
+            (request) =>
+              Deferred.fail(
+                request.deferred,
+                new ComputerUseStoppedError({
+                  operation: request.operation,
+                  ...request.lease.scope,
+                  leaseId: request.lease.leaseId,
+                  reason,
+                }),
+              ),
+            { discard: true },
+          );
+        }),
+      { discard: true },
+    );
+  });
+
+  const stop: ComputerUseBroker["Service"]["stop"] = Effect.fn("ComputerUseBroker.stop")(
+    ({ scope, reason }) => stopMatching((lease) => sameScope(lease.scope, scope), reason),
   );
 
-  return ComputerUseBroker.of({ connect, respond, hostFor, invoke, stop });
+  const stopTurn: ComputerUseBroker["Service"]["stopTurn"] = Effect.fn(
+    "ComputerUseBroker.stopTurn",
+  )(({ threadId, turnId, reason }) =>
+    stopMatching(
+      (lease) => lease.scope.threadId === threadId && lease.scope.turnId === turnId,
+      reason,
+    ),
+  );
+
+  return ComputerUseBroker.of({ connect, respond, hostFor, invoke, stop, stopTurn });
 }).pipe(Effect.withSpan("ComputerUseBroker.make"));
 
-export const layer = Layer.effect(ComputerUseBroker, make);
+let activeComputerUseBroker: ComputerUseBroker["Service"] | undefined;
+
+const makeActive = Effect.acquireRelease(
+  make.pipe(
+    Effect.tap((broker) =>
+      Effect.sync(() => {
+        activeComputerUseBroker = broker;
+      }),
+    ),
+  ),
+  (broker) =>
+    Effect.sync(() => {
+      if (activeComputerUseBroker === broker) activeComputerUseBroker = undefined;
+    }),
+);
+
+export const stopActiveComputerUseTurn = (
+  threadId: ThreadId,
+  turnId: TurnId,
+  reason: ComputerUseStopReason,
+): Effect.Effect<void> =>
+  activeComputerUseBroker?.stopTurn({ threadId, turnId, reason }) ?? Effect.void;
+
+export const layer = Layer.effect(ComputerUseBroker, makeActive);

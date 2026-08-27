@@ -17,6 +17,8 @@ import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
 } from "./toolkits/preview/handlers.ts";
+import { ComputerToolkitHandlersLive } from "./toolkits/computer/handlers.ts";
+import { ComputerToolkit } from "./toolkits/computer/tools.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -216,6 +218,15 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+export const ComputerToolkitRegistrationLive = McpServer.toolkit(ComputerToolkit).pipe(
+  Layer.provide(ComputerToolkitHandlersLive),
+);
+
+export const ProviderToolkitRegistrationLive = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  ComputerToolkitRegistrationLive,
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -223,4 +234,4 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = ProviderToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));

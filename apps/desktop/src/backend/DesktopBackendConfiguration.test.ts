@@ -922,6 +922,7 @@ describe("DesktopBackendConfiguration", () => {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
         const config = yield* configuration.resolvePrimary;
         assert.equal(config.bootstrap.computerUseHelperPath, helperPath);
+        assert.notProperty(config.bootstrap, "computerUseHelperDevelopment");
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
@@ -936,6 +937,55 @@ describe("DesktopBackendConfiguration", () => {
                 isPackaged: true,
                 platform: "darwin",
                 resourcesPath,
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("marks the debug macOS Computer Use helper as development-only", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-computer-use-helper-dev-test-",
+      });
+      const dirname = path.join(baseDir, "apps/desktop/src");
+      const debugHelperPath = path.join(
+        baseDir,
+        "native/computer-use-macos/.build/debug/T3CodeComputerUse",
+      );
+      const releaseHelperPath = path.join(
+        baseDir,
+        "native/computer-use-macos/.build/release/T3CodeComputerUse",
+      );
+      yield* fileSystem.makeDirectory(path.dirname(debugHelperPath), { recursive: true });
+      yield* fileSystem.makeDirectory(path.dirname(releaseHelperPath), { recursive: true });
+      yield* fileSystem.writeFileString(debugHelperPath, "debug");
+      yield* fileSystem.writeFileString(releaseHelperPath, "release");
+      yield* fileSystem.chmod(debugHelperPath, 0o755);
+      yield* fileSystem.chmod(releaseHelperPath, 0o755);
+
+      yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        assert.equal(config.bootstrap.computerUseHelperPath, debugHelperPath);
+        assert.equal(config.bootstrap.computerUseHelperDevelopment, true);
+      }).pipe(
+        Effect.provide(
+          DesktopBackendConfiguration.layer.pipe(
+            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(DesktopWslServerTree.layerTest()),
+            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+            Layer.provideMerge(
+              makeEnvironmentLayer(baseDir, {
+                dirname,
+                devServerUrl: "http://127.0.0.1:5733",
+                isPackaged: false,
+                platform: "darwin",
               }),
             ),
           ),

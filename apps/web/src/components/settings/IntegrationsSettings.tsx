@@ -1,8 +1,8 @@
 /**
  * Integrations settings - preferences for surfaces T3 Code embeds rather than
- * owns. Browser is the first section: the defaults a preview tab opens at,
- * applied to both hand-opened tabs and agent `preview_open` calls that don't
- * state their own size.
+ * owns. Computer Use governs access to native applications; Browser controls
+ * the defaults a preview tab opens at, applied to both hand-opened tabs and
+ * agent `preview_open` calls that don't state their own size.
  *
  * @module IntegrationsSettings
  */
@@ -393,6 +393,42 @@ function AgentBrowserAccessSetting() {
   );
 }
 
+function AgentComputerUseSetting() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsRow
+      {...searchableSetting("agent-computer-use")}
+      description="Let agents observe and operate approved applications on this computer. T3 Code itself, terminals, and unapproved actions remain blocked by policy."
+      status={
+        settings.enableComputerUse
+          ? "Applies to sessions started from now on. Sensitive actions still require an approval."
+          : "Computer tools are withheld from provider sessions."
+      }
+      resetAction={
+        settings.enableComputerUse !== DEFAULT_UNIFIED_SETTINGS.enableComputerUse ? (
+          <SettingResetButton
+            label="agent computer use"
+            onClick={() =>
+              updateSettings({
+                enableComputerUse: DEFAULT_UNIFIED_SETTINGS.enableComputerUse,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          checked={settings.enableComputerUse}
+          onCheckedChange={(checked) => updateSettings({ enableComputerUse: Boolean(checked) })}
+          aria-label="Allow agent computer use"
+        />
+      }
+    />
+  );
+}
+
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdatePrimarySettings();
@@ -467,6 +503,9 @@ export function IntegrationsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsSection id="computer-use" title="Computer Use">
+        <AgentComputerUseSetting />
+      </SettingsSection>
       <SettingsSection id="browser" title="Browser">
         {/* Server-authoritative, so it stays editable on every client and sits
             outside the block covering the desktop-only defaults. */}

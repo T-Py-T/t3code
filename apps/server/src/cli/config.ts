@@ -387,6 +387,9 @@ export const resolveServerConfig = (
       desktopTelemetryControlFd,
       resourceMonitorPath,
       computerUseHelperPath: env.computerUseHelperPath ?? bootstrap?.computerUseHelperPath,
+      ...(bootstrap?.computerUseHelperDevelopment === true
+        ? { computerUseHelperDevelopment: true }
+        : {}),
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,

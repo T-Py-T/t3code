@@ -83,6 +83,7 @@ export class ServerConfig extends Context.Service<
     readonly desktopTelemetryControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
     readonly computerUseHelperPath?: string | undefined;
+    readonly computerUseHelperDevelopment?: boolean | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
@@ -204,6 +205,8 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     desktopTelemetryFd: undefined,
     desktopTelemetryControlFd: undefined,
     resourceMonitorPath: undefined,
+    computerUseHelperPath: undefined,
+    computerUseHelperDevelopment: undefined,
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],

@@ -87,6 +87,15 @@ export const macOsComputerUseHelperPathCandidates = (
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
+export const shouldHashDevelopmentHelper = (
+  config: Pick<
+    ServerConfig.ServerConfig["Service"],
+    "computerUseHelperDevelopment" | "computerUseHelperPath" | "devUrl"
+  >,
+): boolean =>
+  config.computerUseHelperDevelopment === true ||
+  (config.devUrl !== undefined && config.computerUseHelperPath === undefined);
+
 const verifyHelper = Effect.fn("MacOsComputerUseHost.verifyHelper")(function* (
   config: ServerConfig.ServerConfig["Service"],
 ) {
@@ -125,7 +134,7 @@ const verifyHelper = Effect.fn("MacOsComputerUseHost.verifyHelper")(function* (
     });
   }
 
-  if (config.devUrl !== undefined && config.computerUseHelperPath === undefined) {
+  if (shouldHashDevelopmentHelper(config)) {
     const bytes = yield* fileSystem.readFile(path).pipe(
       Effect.mapError(
         (cause) =>
@@ -218,6 +227,12 @@ const encodeJsonLine = (value: unknown) =>
   );
 
 const decodeHostResponseLine = Schema.decodeUnknownEffect(Schema.fromJsonString(LocalHostResponse));
+
+export const runMacOsComputerUseTransport = <E, R>(
+  pumps: Iterable<Effect.Effect<void, E, R>>,
+  exit: Effect.Effect<void, E, R>,
+): Effect.Effect<void, E, R> =>
+  Effect.raceFirst(Effect.all(pumps, { discard: true, concurrency: "unbounded" }), exit);
 
 const run = Effect.scoped(
   Effect.gen(function* () {
@@ -357,10 +372,7 @@ const run = Effect.scoped(
       ),
     );
 
-    yield* Effect.raceFirst(
-      Effect.all([requests, writer, responses, stderr], { discard: true }),
-      exit,
-    );
+    yield* runMacOsComputerUseTransport([requests, writer, responses, stderr], exit);
   }),
 ).pipe(
   Effect.catch((cause) =>

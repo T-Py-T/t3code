@@ -34,6 +34,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import {
   ProviderAdapterProcessError,
@@ -49,6 +50,7 @@ import {
   makeAtomicRpcProcess,
 } from "../atomic/AtomicRpcProcess.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import { T3_COMPUTER_USE_PI_EXTENSION_SOURCE } from "../pi/PiComputerUseExtension.ts";
 
 const RESUME_VERSION = 1 as const;
 const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown);
@@ -164,6 +166,29 @@ function field(record: Readonly<Record<string, unknown>>, name: string): string 
 function stringField(record: Readonly<Record<string, unknown>>, name: string): string | undefined {
   const value = record[name];
   return isString(value) ? value : undefined;
+}
+
+function omitComputerUseScreenshotBytes(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitComputerUseScreenshotBytes);
+  if (!isRecord(value)) return value;
+  if (value.type === "image") {
+    const { data: _data, base64: _base64, ...metadata } = value;
+    return metadata;
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (key === "base64") continue;
+    sanitized[key] = omitComputerUseScreenshotBytes(nested);
+  }
+  return sanitized;
+}
+
+/** Screenshot bytes belong only on the live provider transport, never in T3's event log. */
+export function sanitizePiComputerUseEvent(event: AtomicRpcEvent): AtomicRpcEvent {
+  const type = field(event, "type");
+  const toolName = field(event, "toolName");
+  if (!type?.startsWith("tool_execution_") || !toolName?.startsWith("computer_")) return event;
+  return omitComputerUseScreenshotBytes(event) as AtomicRpcEvent;
 }
 
 function workflowStageTaskId(runId: string, stageId: string): string {
@@ -1068,17 +1093,20 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         type === "tool_execution_update" ||
         type === "tool_execution_end"
       ) {
-        const toolCallId = field(event, "toolCallId") ?? field(event, "id") ?? `${turnId}:tool`;
+        const persistedEvent = sanitizePiComputerUseEvent(event);
+        const toolCallId =
+          field(persistedEvent, "toolCallId") ?? field(persistedEvent, "id") ?? `${turnId}:tool`;
         const itemId = RuntimeItemId.make(toolCallId);
-        const toolName = field(event, "toolName") ?? `${definition.displayName} tool`;
+        const toolName = field(persistedEvent, "toolName") ?? `${definition.displayName} tool`;
         const lifecycle =
           type === "tool_execution_start"
             ? "item.started"
             : type === "tool_execution_update"
               ? "item.updated"
               : "item.completed";
-        const isError = isBoolean(event.isError) ? event.isError : false;
-        const detail = dataText(event.partialResult ?? event.result);
+        const isError = isBoolean(persistedEvent.isError) ? persistedEvent.isError : false;
+        const detail = dataText(persistedEvent.partialResult ?? persistedEvent.result);
+        const persistedSource = raw(persistedEvent, type);
         yield* publish({
           type: lifecycle,
           ...(yield* eventStamp()),
@@ -1094,9 +1122,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
               lifecycle === "item.completed" ? (isError ? "failed" : "completed") : "inProgress",
             title: toolName,
             ...(detail ? { detail } : {}),
-            data: event,
+            data: persistedEvent,
           },
-          raw: source,
+          raw: persistedSource,
         });
         return;
       }
@@ -1207,12 +1235,41 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         let transferred = false;
         return yield* Effect.gen(function* () {
           const cwd = input.cwd ?? serverConfig.cwd;
+          const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const processLaunch = yield* Effect.gen(function* () {
+            if (mcpSession === undefined) {
+              return { args: sessionArgs(settings, input.title), environment };
+            }
+            const extensionPath = yield* fileSystem
+              .makeTempFileScoped({ prefix: "t3-computer-use-", suffix: ".mjs" })
+              .pipe(Effect.provideService(Scope.Scope, sessionScope));
+            yield* fileSystem.writeFileString(extensionPath, T3_COMPUTER_USE_PI_EXTENSION_SOURCE);
+            yield* fileSystem.chmod(extensionPath, 0o600);
+            return {
+              args: [...sessionArgs(settings, input.title), "--extension", extensionPath],
+              environment: {
+                ...environment,
+                T3CODE_MCP_ENDPOINT: mcpSession.endpoint,
+                T3CODE_MCP_AUTHORIZATION: mcpSession.authorizationHeader,
+              },
+            };
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterProcessError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  detail: `Failed to prepare the private ${definition.displayName} Computer Use extension.`,
+                  cause,
+                }),
+            ),
+          );
           const rpc = yield* makeAtomicRpcProcess({
             binaryPath: settings.binaryPath,
             runtimeName: definition.displayName,
-            args: sessionArgs(settings, input.title),
+            args: processLaunch.args,
             cwd,
-            environment,
+            environment: processLaunch.environment,
             ...(options?.startupTimeout === undefined
               ? {}
               : { startupTimeout: options.startupTimeout }),

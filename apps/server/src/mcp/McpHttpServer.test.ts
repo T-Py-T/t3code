@@ -23,6 +23,7 @@ const invocation = {
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
+  runtimeMode: "full-access" as const,
 };
 const client = McpSchema.McpServerClient.of({
   clientId: 1,

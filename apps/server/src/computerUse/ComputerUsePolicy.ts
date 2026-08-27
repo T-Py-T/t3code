@@ -50,14 +50,23 @@ interface GrantRecord extends ComputerUseGrantInput {}
 
 const FORBIDDEN_APPLICATION_IDS = new Set([
   "com.apple.terminal",
-  "com.t3tools.t3code",
-  "com.t3tools.t3code.dev",
   "cmd.exe",
   "microsoft.windowsterminal_8wekyb3d8bbwe",
   "powershell.exe",
   "pwsh.exe",
   "wt.exe",
 ]);
+const FORBIDDEN_APPLICATION_PREFIXES = ["com.t3tools.t3code"];
+
+const isForbiddenApplicationId = (applicationId: string): boolean => {
+  const normalized = applicationId.toLowerCase();
+  return (
+    FORBIDDEN_APPLICATION_IDS.has(normalized) ||
+    FORBIDDEN_APPLICATION_PREFIXES.some(
+      (prefix) => normalized === prefix || normalized.startsWith(`${prefix}.`),
+    )
+  );
+};
 
 export class ComputerUsePolicy extends Context.Service<
   ComputerUsePolicy,
@@ -91,7 +100,7 @@ export const make = Effect.gen(function* ComputerUsePolicyMake() {
   const evaluate: ComputerUsePolicy["Service"]["evaluate"] = Effect.fn(
     "ComputerUsePolicy.evaluate",
   )(function* (input) {
-    if (FORBIDDEN_APPLICATION_IDS.has(input.target.applicationId.toLowerCase())) {
+    if (isForbiddenApplicationId(input.target.applicationId)) {
       return { _tag: "deny", reason: "forbidden-target" } as const;
     }
     if (input.risk === "forbidden") {

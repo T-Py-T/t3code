@@ -7,6 +7,7 @@ import {
   AuthComputerHostScope,
   AuthComputerOperateScope,
   AuthComputerReadScope,
+  AuthDesktopClientScopes,
   AuthEnvironmentScope,
   AuthStandardClientScopes,
 } from "./auth.ts";
@@ -34,5 +35,15 @@ describe("Computer Use authorization scopes", () => {
       expect(AuthStandardClientScopes).not.toContain(scope);
       expect(AuthAdministrativeScopes).not.toContain(scope);
     }
+  });
+
+  it("grants only the local desktop control surface the user-facing computer scopes", () => {
+    expect(AuthDesktopClientScopes).toEqual([
+      ...AuthAdministrativeScopes,
+      AuthComputerReadScope,
+      AuthComputerOperateScope,
+      AuthComputerApproveScope,
+    ]);
+    expect(AuthDesktopClientScopes).not.toContain(AuthComputerHostScope);
   });
 });

@@ -35,6 +35,13 @@ const terminalTarget: ComputerUseTarget = {
   applicationId: "com.apple.Terminal",
   stableIdentity: "macos:com.apple.Terminal:APPLE",
 };
+const developmentT3Target: ComputerUseTarget = {
+  targetId: ComputerUseTargetId.make("target-t3-development"),
+  kind: "application",
+  displayName: "T3 Code (Dev)",
+  applicationId: "com.t3tools.t3code.dev.t3codecomputeruse",
+  stableIdentity: "macos:com.t3tools.t3code.dev.t3codecomputeruse:development",
+};
 
 it.effect("denies forbidden targets even when the provider is in full-access mode", () =>
   Effect.gen(function* () {
@@ -106,6 +113,28 @@ it.effect("denies terminal targets even when the caller understates the action r
     });
 
     expect(decision).toEqual({ _tag: "deny", reason: "forbidden-target" });
+  }),
+);
+
+it.effect("denies every T3 bundle variant, including development builds", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+    yield* policy.grant({
+      scope,
+      target: developmentT3Target,
+      access: "operate",
+      duration: "persistent",
+    });
+
+    expect(
+      yield* policy.evaluate({
+        scope,
+        target: developmentT3Target,
+        access: "operate",
+        risk: "reversible-local",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual({ _tag: "deny", reason: "forbidden-target" });
   }),
 );
 

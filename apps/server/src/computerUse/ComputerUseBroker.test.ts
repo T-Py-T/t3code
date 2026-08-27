@@ -161,6 +161,46 @@ it.effect("rejects a competing turn until the active lease is stopped", () =>
   ),
 );
 
+it.effect("releases a completed turn so the next provider can acquire control", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(host));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          hostId: host.hostId,
+          connectionId: request.connectionId,
+          leaseId: request.leaseId,
+          requestId: request.requestId,
+          ok: true,
+          result: "observed",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke({ scope, operation: "observe", targetId, input: {} })).toBe(
+        "observed",
+      );
+
+      yield* broker.stopTurn({
+        threadId: scope.threadId,
+        turnId: scope.turnId,
+        reason: "turn-completed",
+      });
+
+      const nextScope: ComputerUseBroker.ComputerUseInvocationScope = {
+        ...scope,
+        threadId: ThreadId.make("thread-next-provider"),
+        turnId: TurnId.make("turn-next-provider"),
+        providerSessionId: "provider-session-next-provider",
+      };
+      expect(
+        yield* broker.invoke({ scope: nextScope, operation: "observe", targetId, input: {} }),
+      ).toBe("observed");
+    }),
+  ),
+);
+
 it.effect("rejects malformed calls before they can capture a control lease", () =>
   Effect.scoped(
     Effect.gen(function* () {

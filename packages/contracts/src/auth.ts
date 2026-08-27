@@ -116,6 +116,19 @@ export const AuthAdministrativeScopes = [
   AuthAccessWriteScope,
   AuthRelayWriteScope,
 ] as const;
+/**
+ * Scopes granted only to the trusted desktop bootstrap credential.
+ *
+ * Existing paired and administrative clients deliberately keep their prior
+ * scope sets. Remote control therefore remains an explicit grant while the
+ * local desktop can expose Computer Use settings and approvals.
+ */
+export const AuthDesktopClientScopes = [
+  ...AuthAdministrativeScopes,
+  AuthComputerReadScope,
+  AuthComputerOperateScope,
+  AuthComputerApproveScope,
+] as const;
 
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;

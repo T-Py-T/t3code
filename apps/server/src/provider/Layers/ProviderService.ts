@@ -24,6 +24,7 @@ import {
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
@@ -57,8 +58,10 @@ import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as ComputerUseBroker from "../../computerUse/ComputerUseBroker.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -77,6 +80,9 @@ export interface ProviderServiceLiveOptions {
   readonly issueMcpCredential?: typeof McpSessionRegistry.issueActiveMcpCredential;
   /** Same seam as `issueMcpCredential`, for observing the deny path's revoke. */
   readonly revokeMcpCredential?: typeof McpSessionRegistry.revokeActiveMcpThread;
+  readonly startMcpTurn?: typeof McpSessionRegistry.startActiveMcpTurn;
+  readonly finishMcpTurn?: typeof McpSessionRegistry.finishActiveMcpTurn;
+  readonly finishComputerUseTurn?: typeof ComputerUseBroker.stopActiveComputerUseTurn;
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
@@ -231,6 +237,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const revokeMcpCredential =
     options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
+  const startMcpTurn = options?.startMcpTurn ?? McpSessionRegistry.startActiveMcpTurn;
+  const finishMcpTurn = options?.finishMcpTurn ?? McpSessionRegistry.finishActiveMcpTurn;
+  const finishComputerUseTurn =
+    options?.finishComputerUseTurn ?? ComputerUseBroker.stopActiveComputerUseTurn;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**
@@ -249,19 +259,29 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
    * "off" silently becoming "on" would violate the user's stated choice,
    * whereas the reverse costs an agent one toolset and is visible immediately.
    */
-  const agentBrowserAccessEnabled = serverSettings.getSettings.pipe(
-    Effect.map((settings) => settings.enableAgentBrowserAccess),
+  const enabledMcpCapabilities = serverSettings.getSettings.pipe(
+    Effect.map((settings) => {
+      const capabilities = new Set<McpInvocationContext.McpCapability>();
+      if (settings.enableAgentBrowserAccess) capabilities.add("preview");
+      if (settings.enableComputerUse) capabilities.add("computer");
+      return capabilities;
+    }),
     Effect.catch((cause) =>
       Effect.logWarning(
-        "Could not read server settings; withholding agent browser access for this session.",
+        "Could not read server settings; withholding agent tool access for this session.",
         { cause },
-      ).pipe(Effect.as(false)),
+      ).pipe(Effect.as(new Set<McpInvocationContext.McpCapability>())),
     ),
   );
 
-  const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
+  const prepareMcpSession = (
+    threadId: ThreadId,
+    providerInstanceId: ProviderInstanceId,
+    runtimeMode: RuntimeMode,
+  ) =>
     Effect.gen(function* () {
-      if (!(yield* agentBrowserAccessEnabled)) {
+      const capabilities = yield* enabledMcpCapabilities;
+      if (capabilities.size === 0) {
         // Revoke as well as clear. Every other prepare path reaches
         // `issueActiveMcpCredential`, which revokes the thread first, so
         // skipping it here would leave a previously issued bearer token valid
@@ -272,7 +292,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId));
         return undefined;
       }
-      const credential = yield* issueMcpCredential({ threadId, providerInstanceId });
+      const credential = yield* issueMcpCredential({
+        threadId,
+        providerInstanceId,
+        capabilities,
+        runtimeMode,
+      });
       if (credential) {
         yield* Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config));
       }
@@ -346,10 +371,28 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   ): Effect.Effect<void> =>
     Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
       Effect.flatMap((canonicalEvent) =>
-        increment(providerRuntimeEventsTotal, {
-          provider: canonicalEvent.provider,
-          eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
+        Effect.gen(function* () {
+          if (canonicalEvent.turnId !== undefined) {
+            if (canonicalEvent.type === "turn.started") {
+              yield* startMcpTurn(canonicalEvent.threadId, canonicalEvent.turnId);
+            } else if (
+              canonicalEvent.type === "turn.completed" ||
+              canonicalEvent.type === "turn.aborted"
+            ) {
+              yield* finishMcpTurn(canonicalEvent.threadId, canonicalEvent.turnId);
+              yield* finishComputerUseTurn(
+                canonicalEvent.threadId,
+                canonicalEvent.turnId,
+                canonicalEvent.type === "turn.completed" ? "turn-completed" : "interrupted",
+              );
+            }
+          }
+          yield* increment(providerRuntimeEventsTotal, {
+            provider: canonicalEvent.provider,
+            eventType: canonicalEvent.type,
+          });
+          yield* publishRuntimeEvent(canonicalEvent);
+        }),
       ),
     );
 
@@ -453,7 +496,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
-      yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      yield* prepareMcpSession(
+        input.binding.threadId,
+        bindingInstanceId,
+        input.binding.runtimeMode ?? "full-access",
+      );
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -649,7 +696,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        yield* prepareMcpSession(threadId, resolvedInstanceId);
+        yield* prepareMcpSession(threadId, resolvedInstanceId, input.runtimeMode);
         const session = yield* adapter
           .startSession({
             ...input,

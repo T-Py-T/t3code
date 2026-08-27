@@ -268,6 +268,29 @@ metadata. Screenshot bytes and raw trees remain ephemeral.
 - The UI must explain that foreground input is taken over on the active desktop.
 - Windows persistent app grants must be stored and revoked by T3, not in a provider's config file.
 
+### Windows validation environments
+
+The available UTM Windows guest is the primary Windows development and end-to-end test host. The
+T3 desktop app, provider process, Computer Use helper, Windows UI Automation, capture, and input
+drivers must all run inside the guest; the macOS host must not supply UI actions on their behalf.
+
+The repeatable UTM suite must:
+
+- record the Windows version and architecture, UTM version, display resolution, scaling, and input
+  configuration with each run;
+- start from named clean and persistent-grant snapshots;
+- test a local T3 client inside the guest and an authorized remote T3 client outside the guest;
+- cover target discovery, observation, pointer and keyboard input, clipboard behavior, app grants,
+  confirmations, stop, takeover, screen lock, helper crash, app exit, and server reconnect;
+- prove actions originate from the signed Windows helper by running with host-side Computer Use
+  services stopped and recording the in-guest process and signing identity;
+- retain bounded logs and screenshots as test evidence without placing them in product event logs.
+
+UTM acceptance proves the Windows application path and is required for every Windows Computer Use
+change. It does not replace a final signed smoke test on physical Windows hardware for native input
+latency, multiple displays, device sleep/wake, signing reputation, and hardware-specific security
+behavior. T3 must fail closed on UAC secure-desktop and other privileged prompts in both environments.
+
 ### CLI-only environments
 
 A CLI-launched T3 server must report native Computer Use unavailable unless a signed same-machine
@@ -554,7 +577,7 @@ The feature is complete only when every required row passes on a signed release 
 | Atomic workflows     | Computer actions remain correlated with workflow and stage status                                             |
 | Browser              | Built-in semantic browser and external signed-in browser integration pass security and action suites          |
 | Office               | Excel and PowerPoint add-ins pass structured-operation and approval suites                                    |
-| Windows              | Foreground UIA/capture/input, target identity, grants, stop, and takeover pass                                |
+| Windows              | UTM suite plus physical signed smoke: UIA/capture/input, identity, grants, stop, takeover, and recovery       |
 | macOS locked use     | Trusted active-turn unlock, display cover, human-input relock, disable, and uninstall pass                    |
 | History and privacy  | Metadata history, revocation audit, redaction, retention, and deletion pass                                   |
 | Recovery             | App exit, helper crash, server reconnect, provider interrupt, lock, and competing lease all settle            |
@@ -591,6 +614,9 @@ Use clean OS accounts and signed release candidates:
 - app update preserving permission identity and persistent grants;
 - ChatGPT/Codex helper absent;
 - Windows foreground takeover and recovery;
+- clean-snapshot UTM Windows run controlled locally and from a remote T3 client, with macOS host
+  automation stopped;
+- physical Windows signed-artifact smoke test for hardware-only behavior;
 - macOS locked use including human-input relock;
 - Excel and PowerPoint structured operations.
 

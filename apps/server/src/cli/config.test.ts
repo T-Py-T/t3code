@@ -292,6 +292,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           desktopBootstrapToken: "desktop-token",
           desktopTelemetryFd: 4,
           desktopTelemetryControlFd: 5,
+          computerUseHelperPath:
+            "/Applications/T3 Code.app/Contents/Resources/computer-use/T3CodeComputerUse",
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           otlpTracesUrl: "http://localhost:4318/v1/traces",
@@ -350,6 +352,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         desktopTelemetryFd: 4,
         desktopTelemetryControlFd: 5,
         resourceMonitorPath: undefined,
+        computerUseHelperPath:
+          "/Applications/T3 Code.app/Contents/Resources/computer-use/T3CodeComputerUse",
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,

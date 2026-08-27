@@ -180,6 +180,42 @@ const resolveResourceMonitorPath = Effect.fn(
   return Option.none<string>();
 });
 
+const resolveComputerUseHelperPath = Effect.fn(
+  "desktop.backendConfiguration.resolveComputerUseHelperPath",
+)(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  if (environment.platform !== "darwin") return Option.none<string>();
+
+  const binaryName = "T3CodeComputerUse";
+  const candidates = environment.isDevelopment
+    ? [
+        environment.path.join(
+          environment.rootDir,
+          "native/computer-use-macos/.build/release",
+          binaryName,
+        ),
+        environment.path.join(
+          environment.rootDir,
+          "native/computer-use-macos/.build/debug",
+          binaryName,
+        ),
+      ]
+    : environment.isPackaged
+      ? [environment.path.join(environment.resourcesPath, "computer-use", binaryName)]
+      : environment.resolveResourcePathCandidates(
+          environment.path.join("computer-use", binaryName),
+        );
+
+  for (const candidate of candidates) {
+    if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+      return Option.some(candidate);
+    }
+  }
+
+  return Option.none<string>();
+});
+
 const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -367,6 +403,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   function* (
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
+      readonly computerUseHelperPath: Option.Option<string>;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -391,6 +428,10 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       ...Option.match(input.resourceMonitorPath, {
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
+      }),
+      ...Option.match(input.computerUseHelperPath, {
+        onNone: () => ({}),
+        onSome: (computerUseHelperPath) => ({ computerUseHelperPath }),
       }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
@@ -680,7 +721,15 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
+    const computerUseHelperPath = yield* resolveComputerUseHelperPath().pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+    );
+    return yield* resolvePrimaryStartConfig({
+      ...shared,
+      resourceMonitorPath,
+      computerUseHelperPath,
+    }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
     );

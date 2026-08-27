@@ -300,6 +300,19 @@ export class ResourceMonitorBuildOutputMissingError extends Schema.TaggedErrorCl
   }
 }
 
+export class ComputerUseHelperBuildOutputMissingError extends Schema.TaggedErrorClass<ComputerUseHelperBuildOutputMissingError>()(
+  "ComputerUseHelperBuildOutputMissingError",
+  {
+    binaryPath: Schema.String,
+    swiftArchitecture: Schema.String,
+    arch: BuildArch,
+  },
+) {
+  override get message(): string {
+    return `Computer Use helper build for ${this.swiftArchitecture} did not produce ${this.binaryPath}.`;
+  }
+}
+
 const desktopIconPlatformNames = {
   mac: "macOS",
   linux: "Linux",
@@ -856,6 +869,12 @@ export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
+  },
+] as const;
+export const MAC_COMPUTER_USE_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/computer-use",
+    to: "computer-use",
   },
 ] as const;
 
@@ -1759,6 +1778,93 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
   }
 });
 
+export function resolveMacComputerUseSwiftArchitectures(
+  arch: typeof BuildArch.Type,
+): ReadonlyArray<"arm64" | "x86_64"> {
+  if (arch === "universal") return ["arm64", "x86_64"];
+  return [arch === "arm64" ? "arm64" : "x86_64"];
+}
+
+export const stageMacComputerUseHelper = Effect.fn("stageMacComputerUseHelper")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const packagePath = path.join(input.repoRoot, "native/computer-use-macos");
+  const binaryName = "T3CodeComputerUse";
+  const swiftArchitectures = resolveMacComputerUseSwiftArchitectures(input.arch);
+  const reuseHelper = yield* Config.boolean("T3CODE_DESKTOP_REUSE_COMPUTER_USE_HELPER").pipe(
+    Config.withDefault(false),
+  );
+  const builtBinaries: string[] = [];
+
+  for (const swiftArchitecture of swiftArchitectures) {
+    if (!reuseHelper) {
+      const spawnCommand = yield* resolveSpawnCommand("swift", [
+        "build",
+        "--configuration",
+        "release",
+        "--package-path",
+        packagePath,
+        "--arch",
+        swiftArchitecture,
+      ]);
+      yield* runCommand(
+        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          cwd: input.repoRoot,
+          shell: spawnCommand.shell,
+        }),
+        {
+          label: `swift build Computer Use helper (${swiftArchitecture})`,
+          verbose: input.verbose,
+        },
+      );
+    }
+
+    const binaryPath = path.join(
+      packagePath,
+      ".build",
+      `${swiftArchitecture}-apple-macosx`,
+      "release",
+      binaryName,
+    );
+    if (!(yield* fs.exists(binaryPath))) {
+      return yield* new ComputerUseHelperBuildOutputMissingError({
+        binaryPath,
+        swiftArchitecture,
+        arch: input.arch,
+      });
+    }
+    if (reuseHelper) {
+      yield* Effect.log(
+        `[desktop-artifact] Reusing cached Computer Use helper (${swiftArchitecture}).`,
+      );
+    }
+    builtBinaries.push(binaryPath);
+  }
+
+  const destinationDirectory = path.join(input.stageResourcesDir, "computer-use");
+  const destinationPath = path.join(destinationDirectory, binaryName);
+  yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
+  yield* fs.makeDirectory(destinationDirectory, { recursive: true });
+
+  if (builtBinaries.length === 1) {
+    yield* fs.copyFile(builtBinaries[0]!, destinationPath);
+  } else {
+    yield* runCommand(
+      ChildProcess.make("lipo", ["-create", ...builtBinaries, "-output", destinationPath]),
+      {
+        label: "lipo Computer Use helper universal binary",
+        verbose: input.verbose,
+      },
+    );
+  }
+  yield* fs.chmod(destinationPath, 0o755);
+});
+
 function generateMacIconSet(
   sourcePng: string,
   targetIcns: string,
@@ -2093,6 +2199,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "mac" ? MAC_COMPUTER_USE_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
     ],
   };
@@ -2880,6 +2987,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     arch: options.arch,
     verbose: options.verbose,
   });
+  if (options.platform === "mac") {
+    yield* stageMacComputerUseHelper({
+      repoRoot,
+      stageResourcesDir,
+      arch: options.arch,
+      verbose: options.verbose,
+    });
+  }
 
   yield* assertPlatformBuildResources(
     options.platform,

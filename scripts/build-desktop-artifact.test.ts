@@ -21,6 +21,7 @@ import {
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
   MAC_FILE_EXCLUSIONS,
+  MAC_COMPUTER_USE_EXTRA_RESOURCES,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -42,6 +43,7 @@ import {
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
+  resolveMacComputerUseSwiftArchitectures,
   resolveWindowsServerAsarIgnoreGlobs,
   resourceMonitorExecutableName,
   resolveGitHubPublishConfig,
@@ -51,6 +53,7 @@ import {
   stageLinuxIconSize,
   stageDesktopDmgBackground,
   stageResourceMonitor,
+  stageMacComputerUseHelper,
   STAGE_INSTALL_ARGS,
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
@@ -525,6 +528,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
       ]);
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
+      assert.deepStrictEqual(mac.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        ...MAC_COMPUTER_USE_EXTRA_RESOURCES,
+      ]);
       assert.notProperty(mac.mac as Record<string, unknown>, "sign");
       for (const config of [linux, win]) {
         assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
@@ -680,6 +687,45 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             path.join(stageResourcesDir, "resource-monitor/t3-resource-monitor"),
           ),
           "cached monitor",
+        );
+      }),
+    ),
+  );
+
+  it.effect("stages a cached macOS Computer Use helper without invoking Swift", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-computer-use-helper-cache-test-",
+        });
+        const binaryPath = path.join(
+          repoRoot,
+          "native/computer-use-macos/.build/arm64-apple-macosx/release/T3CodeComputerUse",
+        );
+        const stageResourcesDir = path.join(repoRoot, "stage");
+        yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+        yield* fs.writeFileString(binaryPath, "cached helper");
+
+        yield* stageMacComputerUseHelper({
+          repoRoot,
+          stageResourcesDir,
+          arch: "arm64",
+          verbose: false,
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { T3CODE_DESKTOP_REUSE_COMPUTER_USE_HELPER: "true" },
+              }),
+            ),
+          ),
+        );
+
+        assert.equal(
+          yield* fs.readFileString(path.join(stageResourcesDir, "computer-use/T3CodeComputerUse")),
+          "cached helper",
         );
       }),
     ),
@@ -1256,6 +1302,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+  });
+  it("stages the macOS Computer Use helper as an external executable resource", () => {
+    assert.deepStrictEqual(MAC_COMPUTER_USE_EXTRA_RESOURCES, [
+      {
+        from: "apps/desktop/prod-resources/computer-use",
+        to: "computer-use",
+      },
+    ]);
+    assert.deepStrictEqual(resolveMacComputerUseSwiftArchitectures("universal"), [
+      "arm64",
+      "x86_64",
+    ]);
+    assert.deepStrictEqual(resolveMacComputerUseSwiftArchitectures("arm64"), ["arm64"]);
+    assert.deepStrictEqual(resolveMacComputerUseSwiftArchitectures("x64"), ["x86_64"]);
   });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {

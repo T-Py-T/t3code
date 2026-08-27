@@ -514,6 +514,7 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.bootstrap.tailscaleServeEnabled, false);
           assert.notProperty(config.bootstrap, "desktopTelemetryFd");
           assert.notProperty(config.bootstrap, "resourceMonitorPath");
+          assert.notProperty(config.bootstrap, "computerUseHelperPath");
           // httpBaseUrl uses the resolved distro IP from the test stub,
           // not localhost — the renderer reaches the backend directly to
           // avoid relying on wslhost forwarding.
@@ -897,6 +898,44 @@ describe("DesktopBackendConfiguration", () => {
                 dirname,
                 devServerUrl: "http://127.0.0.1:5733",
                 isPackaged: false,
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("passes the packaged macOS Computer Use helper to the local backend", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-computer-use-helper-test-",
+      });
+      const resourcesPath = `${baseDir}/resources`;
+      const helperPath = `${resourcesPath}/computer-use/T3CodeComputerUse`;
+      yield* fileSystem.makeDirectory(`${resourcesPath}/computer-use`, { recursive: true });
+      yield* fileSystem.writeFileString(helperPath, "helper");
+      yield* fileSystem.chmod(helperPath, 0o755);
+
+      yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        assert.equal(config.bootstrap.computerUseHelperPath, helperPath);
+      }).pipe(
+        Effect.provide(
+          DesktopBackendConfiguration.layer.pipe(
+            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(DesktopWslServerTree.layerTest()),
+            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+            Layer.provideMerge(
+              makeEnvironmentLayer(baseDir, {
+                appPath: `${resourcesPath}/app.asar`,
+                dirname: `${resourcesPath}/app.asar/apps/desktop/dist-electron`,
+                isPackaged: true,
+                platform: "darwin",
+                resourcesPath,
               }),
             ),
           ),

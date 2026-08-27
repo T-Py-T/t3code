@@ -88,7 +88,7 @@ describe("CodexComputerUse", () => {
       );
 
       expect(warning.status).toBe("warning");
-      expect(warning.message).toContain("Computer Use client was not found");
+      expect(warning.message).toContain("Computer Use bridge is enabled");
       expect(providerError).toMatchObject({ status: "error", message: "Codex is unavailable." });
     }).pipe(Effect.provide(NodeServices.layer)),
   );

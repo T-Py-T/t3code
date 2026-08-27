@@ -46,7 +46,9 @@ Pi and Atomic share a Pi-RPC lifecycle adapter, while Atomic adds workflow lifec
 workflow source inspection. See [Pi and Atomic providers](./providers-pi-atomic.md) for the protocol
 contract, event mappings, extension UI behavior, and known boundaries.
 
-Codex can optionally attach the signed macOS Computer Use MCP client from its shared `CODEX_HOME`.
+Codex can optionally bridge to OpenAI's signed macOS Computer Use MCP client from its shared
+`CODEX_HOME`. The OpenAI helper, not T3 Code, owns the host's Accessibility and Screen Recording
+permissions.
 See [Codex Computer Use](./providers-codex-computer-use.md) for discovery, session configuration,
 approval routing, remote semantics, and current provider boundaries.
 

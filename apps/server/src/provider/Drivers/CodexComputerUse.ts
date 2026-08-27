@@ -61,6 +61,6 @@ export function annotateCodexComputerUseAvailability(
     ...provider,
     status: "warning",
     message:
-      "T3-managed Computer Use is enabled, but the Codex Computer Use client was not found in this provider's CODEX_HOME.",
+      "The OpenAI Computer Use bridge is enabled, but its client was not found in this provider's CODEX_HOME.",
   };
 }

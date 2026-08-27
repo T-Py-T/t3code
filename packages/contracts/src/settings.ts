@@ -364,9 +364,9 @@ export const CodexSettings = makeProviderSettingsSchema(
     enableComputerUse: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(false)),
       Schema.annotateKey({
-        title: "T3-managed Computer Use",
+        title: "OpenAI Computer Use bridge",
         description:
-          "Attach the Codex Computer Use client installed in CODEX_HOME to this provider's sessions on macOS.",
+          "Attach the OpenAI Computer Use client installed in CODEX_HOME. Requires its desktop service and macOS permissions.",
         providerSettingsForm: { control: "switch", clearWhenEmpty: "omit" },
       }),
     ),

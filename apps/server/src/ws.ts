@@ -69,6 +69,8 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -462,6 +464,8 @@ const makeWsRpcLayer = (
         }
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+      const computerUseBroker = yield* ComputerUseBroker.ComputerUseBroker;
+      const computerUsePolicy = yield* ComputerUsePolicy.ComputerUsePolicy;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
@@ -1761,6 +1765,47 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.computerUseGetControlState]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseGetControlState,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const [host, activeControl, persistentGrants] = yield* Effect.all([
+                computerUseBroker.hostFor(environmentId).pipe(Effect.map(Option.getOrUndefined)),
+                computerUseBroker.activeControlFor(environmentId),
+                computerUsePolicy.listPersistent(environmentId),
+              ]);
+              return {
+                environmentId,
+                ...(host === undefined ? {} : { host }),
+                ...(activeControl === undefined ? {} : { activeControl }),
+                persistentGrants,
+              };
+            }),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseRevokePersistentGrant]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseRevokePersistentGrant,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUsePolicy.revoke({ environmentId, ...input }),
+              ),
+              Effect.map((removed) => ({ removed })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseStop]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseStop,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUseBroker.stopEnvironment(environmentId, "user"),
+              ),
+              Effect.map((stopped) => ({ stopped })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
             const next = new Set(clientIds);

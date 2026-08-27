@@ -138,6 +138,7 @@ it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
         }),
       ).toMatchObject({
         _tag: "policy",
+        approvalId: "computer-use-approval-0",
         decision: { _tag: "request-app-grant", access: "observe" },
       });
       expect(operations).toEqual(["status", "listTargets"]);
@@ -179,6 +180,7 @@ it.effect("exposes one policy-governed toolkit over a verified fake host", () =>
         }),
       ).toMatchObject({
         _tag: "policy",
+        approvalId: "computer-use-approval-1",
         decision: { _tag: "request-action-confirmation", risk: "external-side-effect" },
       });
       expect(operations).toEqual(["status", "listTargets", "observe", "act"]);

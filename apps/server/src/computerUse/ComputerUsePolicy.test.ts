@@ -178,6 +178,23 @@ it.effect("revokes a persistent target grant without affecting other identities"
   }),
 );
 
+it.effect("lists only persistent grants as user-visible summaries", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+    yield* policy.grant({ scope, target, access: "observe", duration: "session" });
+    yield* policy.grant({ scope, target, access: "operate", duration: "persistent" });
+
+    expect(yield* policy.listPersistent(scope.environmentId)).toEqual([
+      {
+        environmentId: scope.environmentId,
+        hostId: scope.hostId,
+        target,
+        access: "operate",
+      },
+    ]);
+  }),
+);
+
 it.effect("does not let an app grant satisfy action confirmation or takeover", () =>
   Effect.gen(function* () {
     const policy = yield* ComputerUsePolicy.make;
@@ -271,5 +288,58 @@ it.effect("binds persistent grants to the verified host and stable target identi
         runtimeMode: "full-access",
       }),
     ).toEqual({ _tag: "request-app-grant", access: "operate" });
+  }),
+);
+
+it.effect("turns an approved app-access request into the selected grant duration", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+    const input: ComputerUsePolicy.ComputerUsePolicyInput = {
+      scope,
+      target,
+      access: "operate",
+      risk: "reversible-local",
+      runtimeMode: "full-access",
+    };
+
+    const approvalId = yield* policy.requestApproval({
+      input,
+      decision: { _tag: "request-app-grant", access: "operate" },
+    });
+    expect(yield* policy.resolveApproval({ approvalId, decision: "acceptForSession" })).toBe(true);
+    expect(yield* policy.evaluate(input)).toEqual({ _tag: "allow" });
+    expect(
+      yield* policy.evaluate({
+        ...input,
+        scope: { ...scope, providerSessionId: "another-provider-session" },
+      }),
+    ).toEqual({ _tag: "request-app-grant", access: "operate" });
+  }),
+);
+
+it.effect("consumes a user-confirmed external side effect exactly once", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+    yield* policy.grant({ scope, target, access: "operate", duration: "turn" });
+    const input: ComputerUsePolicy.ComputerUsePolicyInput = {
+      scope,
+      target,
+      access: "operate",
+      risk: "external-side-effect",
+      runtimeMode: "full-access",
+    };
+    const decision = yield* policy.evaluate(input);
+    expect(decision).toEqual({
+      _tag: "request-action-confirmation",
+      risk: "external-side-effect",
+    });
+
+    const approvalId = yield* policy.requestApproval({
+      input,
+      decision: { _tag: "request-action-confirmation", risk: "external-side-effect" },
+    });
+    expect(yield* policy.resolveApproval({ approvalId, decision: "accept" })).toBe(true);
+    expect(yield* policy.evaluate(input)).toEqual({ _tag: "allow" });
+    expect(yield* policy.evaluate(input)).toEqual(decision);
   }),
 );

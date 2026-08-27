@@ -11,6 +11,7 @@ import {
   ComputerUseStoppedError,
   ComputerUseTimeoutError,
   type ComputerUseBrokerError,
+  type ComputerUseActiveControl,
   type ComputerUseHostResponse,
   type ComputerUseHostFailureReason,
   type ComputerUseHostFailureTag,
@@ -80,6 +81,13 @@ export class ComputerUseBroker extends Context.Service<
     ) => Effect.Effect<A, ComputerUseBrokerError>;
     readonly stop: (input: ComputerUseStopInput) => Effect.Effect<void>;
     readonly stopTurn: (input: ComputerUseStopTurnInput) => Effect.Effect<void>;
+    readonly activeControlFor: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<ComputerUseActiveControl | undefined>;
+    readonly stopEnvironment: (
+      environmentId: EnvironmentId,
+      reason: ComputerUseStopReason,
+    ) => Effect.Effect<number>;
   }
 >()("t3/computerUse/ComputerUseBroker") {}
 
@@ -528,10 +536,12 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
         }),
       { discard: true },
     );
+    return stoppedLeases.length;
   });
 
   const stop: ComputerUseBroker["Service"]["stop"] = Effect.fn("ComputerUseBroker.stop")(
-    ({ scope, reason }) => stopMatching((lease) => sameScope(lease.scope, scope), reason),
+    ({ scope, reason }) =>
+      stopMatching((lease) => sameScope(lease.scope, scope), reason).pipe(Effect.asVoid),
   );
 
   const stopTurn: ComputerUseBroker["Service"]["stopTurn"] = Effect.fn(
@@ -540,10 +550,42 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     stopMatching(
       (lease) => lease.scope.threadId === threadId && lease.scope.turnId === turnId,
       reason,
+    ).pipe(Effect.asVoid),
+  );
+
+  const activeControlFor: ComputerUseBroker["Service"]["activeControlFor"] = Effect.fn(
+    "ComputerUseBroker.activeControlFor",
+  )((environmentId) =>
+    SynchronizedRef.get(state).pipe(
+      Effect.map((current) => {
+        const active = current.leases.get(environmentId)?.scope;
+        return active === undefined
+          ? undefined
+          : {
+              threadId: active.threadId,
+              turnId: active.turnId,
+              providerInstanceId: active.providerInstanceId,
+            };
+      }),
     ),
   );
 
-  return ComputerUseBroker.of({ connect, respond, hostFor, invoke, stop, stopTurn });
+  const stopEnvironment: ComputerUseBroker["Service"]["stopEnvironment"] = Effect.fn(
+    "ComputerUseBroker.stopEnvironment",
+  )((environmentId, reason) =>
+    stopMatching((lease) => lease.scope.environmentId === environmentId, reason),
+  );
+
+  return ComputerUseBroker.of({
+    connect,
+    respond,
+    hostFor,
+    invoke,
+    stop,
+    stopTurn,
+    activeControlFor,
+    stopEnvironment,
+  });
 }).pipe(Effect.withSpan("ComputerUseBroker.make"));
 
 let activeComputerUseBroker: ComputerUseBroker["Service"] | undefined;

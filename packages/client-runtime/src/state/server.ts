@@ -693,12 +693,28 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
     ),
   );
+  const computerUseControlState = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:computer-use:control-state",
+    tag: WS_METHODS.computerUseGetControlState,
+    staleTimeMs: 1_000,
+    refreshIntervalMs: 2_000,
+  });
+  const refreshComputerUseControlState = (
+    environmentId: EnvironmentId,
+    registry: Parameters<
+      NonNullable<Parameters<typeof createEnvironmentRpcCommand>[1]["onSuccess"]>
+    >[1],
+  ) =>
+    Effect.sync(() => {
+      registry.refresh(computerUseControlState({ environmentId, input: {} }));
+    });
 
   return {
     configValueAtom,
     updateStateAtom,
     settingsValueAtom,
     providersValueAtom,
+    computerUseControlState,
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
@@ -781,6 +797,18 @@ export function createServerEnvironmentAtoms<R, E>(
         mode: "singleFlight",
         key: ({ environmentId }) => environmentId,
       },
+    }),
+    revokeComputerUsePersistentGrant: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer-use:revoke-persistent-grant",
+      tag: WS_METHODS.computerUseRevokePersistentGrant,
+      onSuccess: ({ environmentId }, registry) =>
+        refreshComputerUseControlState(environmentId, registry),
+    }),
+    stopComputerUse: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:computer-use:stop",
+      tag: WS_METHODS.computerUseStop,
+      onSuccess: ({ environmentId }, registry) =>
+        refreshComputerUseControlState(environmentId, registry),
     }),
   };
 }

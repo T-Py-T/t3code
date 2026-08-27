@@ -7,6 +7,7 @@ import {
   ComputerUseTargetList,
   type ComputerUseActionBatch,
   type ComputerUseActionRisk,
+  type ComputerUseApprovalId,
   type ComputerUseBrokerError,
   type ComputerUseObservationId,
   type ComputerUsePolicyDecision,
@@ -31,6 +32,7 @@ import { ComputerUsePolicy } from "./ComputerUsePolicy.ts";
 
 export interface ComputerUsePolicyBoundary {
   readonly _tag: "policy";
+  readonly approvalId?: ComputerUseApprovalId;
   readonly decision: ComputerUsePolicyDecision;
   readonly target: ComputerUseTarget;
   readonly risk: ComputerUseActionRisk;
@@ -139,7 +141,26 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
         runtimeMode: input.runtimeMode,
       });
       if (decision._tag !== "allow") {
-        return { _tag: "policy", decision, target: input.target, risk: "inspect" } as const;
+        const approvalId =
+          decision._tag === "request-app-grant"
+            ? yield* policy.requestApproval({
+                input: {
+                  scope: { ...input.scope, hostId: host.hostId },
+                  target: input.target,
+                  access: "observe",
+                  risk: "inspect",
+                  runtimeMode: input.runtimeMode,
+                },
+                decision,
+              })
+            : undefined;
+        return {
+          _tag: "policy",
+          ...(approvalId === undefined ? {} : { approvalId }),
+          decision,
+          target: input.target,
+          risk: "inspect",
+        } as const;
       }
       const value = yield* broker.invoke(
         {
@@ -180,8 +201,22 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
         runtimeMode: input.runtimeMode,
       });
       if (decision._tag !== "allow") {
+        const approvalId =
+          decision._tag === "request-app-grant" || decision._tag === "request-action-confirmation"
+            ? yield* policy.requestApproval({
+                input: {
+                  scope: { ...input.scope, hostId: host.hostId },
+                  target: input.target,
+                  access: "operate",
+                  risk: input.risk,
+                  runtimeMode: input.runtimeMode,
+                },
+                decision,
+              })
+            : undefined;
         return {
           _tag: "policy",
+          ...(approvalId === undefined ? {} : { approvalId }),
           decision,
           target: input.target,
           risk: input.risk,

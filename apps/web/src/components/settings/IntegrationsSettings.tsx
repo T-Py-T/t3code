@@ -21,11 +21,15 @@ import {
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
-import { InfoIcon } from "lucide-react";
+import { InfoIcon, RefreshCwIcon, ShieldCheckIcon, SquareIcon, XIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
 import { isElectron } from "../../env";
+import { usePrimaryEnvironment } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 
 import { Button } from "../ui/button";
 import { NumberField, NumberFieldGroup, NumberFieldInput } from "../ui/number-field";
@@ -429,6 +433,118 @@ function AgentComputerUseSetting() {
   );
 }
 
+export function ComputerUseAccessControls() {
+  const primaryEnvironment = usePrimaryEnvironment();
+  const environmentId = primaryEnvironment?.environmentId ?? null;
+  const controlState = useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : serverEnvironment.computerUseControlState({ environmentId, input: {} }),
+  );
+  const revokePersistentGrant = useAtomCommand(
+    serverEnvironment.revokeComputerUsePersistentGrant,
+    "remove Computer Use access",
+  );
+  const stopComputerUse = useAtomCommand(serverEnvironment.stopComputerUse, "stop Computer Use");
+  const state = controlState.data;
+  const status = state?.activeControl ? "active" : state?.host ? "connected" : "disconnected";
+  const statusText = state?.activeControl
+    ? `${state.activeControl.providerInstanceId} is controlling this computer.`
+    : state?.host
+      ? `${state.host.platform === "macos" ? "Mac" : "Windows"} host connected and ready.`
+      : controlState.isPending
+        ? "Checking the native host…"
+        : "Native computer host is not connected.";
+
+  return (
+    <div data-computer-use-status={status} className="space-y-1">
+      <SettingsRow
+        title="Host and current control"
+        description="Shows whether the signed native helper is available and which agent currently holds control."
+        status={
+          controlState.error ? (
+            <span className="text-destructive">{controlState.error}</span>
+          ) : (
+            statusText
+          )
+        }
+        control={
+          <div className="flex items-center gap-2">
+            {state?.activeControl && environmentId ? (
+              <Button
+                size="sm"
+                variant="destructive-outline"
+                aria-label="Stop computer control"
+                onClick={() => void stopComputerUse({ environmentId, input: {} })}
+              >
+                <SquareIcon className="size-3" />
+                Stop
+              </Button>
+            ) : null}
+            <Button
+              size="icon-sm"
+              variant="ghost-muted"
+              aria-label="Refresh computer use status"
+              disabled={controlState.isPending}
+              onClick={controlState.refresh}
+            >
+              <RefreshCwIcon
+                className={controlState.isPending ? "size-3 animate-spin" : "size-3"}
+              />
+            </Button>
+          </div>
+        }
+      />
+
+      <SettingsRow
+        title="Always allowed applications"
+        description="Persistent approvals are tied to this verified computer and application identity. Removing one makes the next agent ask again."
+        status={
+          state && state.persistentGrants.length === 0
+            ? "No applications have permanent access."
+            : undefined
+        }
+      >
+        {state?.persistentGrants.map((grant) => (
+          <div
+            key={`${grant.hostId}:${grant.target.stableIdentity}:${grant.access}`}
+            data-computer-use-grant={`${grant.target.displayName}:${grant.access}`}
+            className="mt-2 flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
+          >
+            <div className="flex min-w-0 items-center gap-2.5">
+              <ShieldCheckIcon className="size-4 shrink-0 text-success" />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{grant.target.displayName}</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {grant.access === "operate" ? "Observe and operate" : "Observe only"}
+                </div>
+              </div>
+            </div>
+            {environmentId ? (
+              <Button
+                size="icon-sm"
+                variant="ghost-muted"
+                aria-label={`Remove ${grant.target.displayName} computer access`}
+                onClick={() =>
+                  void revokePersistentGrant({
+                    environmentId,
+                    input: {
+                      hostId: grant.hostId,
+                      stableIdentity: grant.target.stableIdentity,
+                    },
+                  })
+                }
+              >
+                <XIcon className="size-3" />
+              </Button>
+            ) : null}
+          </div>
+        ))}
+      </SettingsRow>
+    </div>
+  );
+}
+
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdatePrimarySettings();
@@ -505,6 +621,7 @@ export function IntegrationsSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="computer-use" title="Computer Use">
         <AgentComputerUseSetting />
+        <ComputerUseAccessControls />
       </SettingsSection>
       <SettingsSection id="browser" title="Browser">
         {/* Server-authoritative, so it stays editable on every client and sits

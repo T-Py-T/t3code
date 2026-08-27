@@ -24,6 +24,8 @@ export const ComputerUseTargetId = makeComputerUseId("ComputerUseTargetId");
 export type ComputerUseTargetId = typeof ComputerUseTargetId.Type;
 export const ComputerUseObservationId = makeComputerUseId("ComputerUseObservationId");
 export type ComputerUseObservationId = typeof ComputerUseObservationId.Type;
+export const ComputerUseApprovalId = makeComputerUseId("ComputerUseApprovalId");
+export type ComputerUseApprovalId = typeof ComputerUseApprovalId.Type;
 
 export const ComputerUseTargetKind = Schema.Literals([
   "application",
@@ -287,6 +289,73 @@ export const ComputerUseStatus = Schema.Struct({
   status: ComputerUseHostStatus,
 });
 export type ComputerUseStatus = typeof ComputerUseStatus.Type;
+
+export const ComputerUsePersistentGrant = Schema.Struct({
+  scope: Schema.Struct({
+    environmentId: EnvironmentId,
+    hostId: ComputerUseHostId,
+    threadId: ThreadId,
+    turnId: TurnId,
+    providerSessionId: TrimmedNonEmptyString,
+    providerInstanceId: ProviderInstanceId,
+  }),
+  target: ComputerUseTarget,
+  access: ComputerUseAccessLevel,
+  duration: Schema.Literal("persistent"),
+});
+export type ComputerUsePersistentGrant = typeof ComputerUsePersistentGrant.Type;
+
+export const ComputerUsePersistentGrantList = Schema.Array(ComputerUsePersistentGrant).check(
+  Schema.isMaxLength(512),
+);
+export type ComputerUsePersistentGrantList = typeof ComputerUsePersistentGrantList.Type;
+
+export const ComputerUsePersistentGrantSummary = Schema.Struct({
+  environmentId: EnvironmentId,
+  hostId: ComputerUseHostId,
+  target: ComputerUseTarget,
+  access: ComputerUseAccessLevel,
+});
+export type ComputerUsePersistentGrantSummary = typeof ComputerUsePersistentGrantSummary.Type;
+
+export const ComputerUsePersistentGrantSummaryList = Schema.Array(
+  ComputerUsePersistentGrantSummary,
+).check(Schema.isMaxLength(512));
+export type ComputerUsePersistentGrantSummaryList =
+  typeof ComputerUsePersistentGrantSummaryList.Type;
+
+export const ComputerUseActiveControl = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  providerInstanceId: ProviderInstanceId,
+});
+export type ComputerUseActiveControl = typeof ComputerUseActiveControl.Type;
+
+export const ComputerUseControlState = Schema.Struct({
+  environmentId: EnvironmentId,
+  host: Schema.optional(ComputerUseVerifiedHost),
+  activeControl: Schema.optional(ComputerUseActiveControl),
+  persistentGrants: ComputerUsePersistentGrantSummaryList,
+});
+export type ComputerUseControlState = typeof ComputerUseControlState.Type;
+
+export const ComputerUseRevokePersistentGrantInput = Schema.Struct({
+  hostId: ComputerUseHostId,
+  stableIdentity: TrimmedNonEmptyString,
+});
+export type ComputerUseRevokePersistentGrantInput =
+  typeof ComputerUseRevokePersistentGrantInput.Type;
+
+export const ComputerUseRevokePersistentGrantResult = Schema.Struct({
+  removed: NonNegativeInt,
+});
+export type ComputerUseRevokePersistentGrantResult =
+  typeof ComputerUseRevokePersistentGrantResult.Type;
+
+export const ComputerUseStopResult = Schema.Struct({
+  stopped: NonNegativeInt,
+});
+export type ComputerUseStopResult = typeof ComputerUseStopResult.Type;
 
 const ComputerUseHostRequestFields = {
   requestId: ComputerUseRequestId,

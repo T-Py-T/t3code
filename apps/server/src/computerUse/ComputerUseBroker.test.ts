@@ -201,6 +201,39 @@ it.effect("releases a completed turn so the next provider can acquire control", 
   ),
 );
 
+it.effect("reports and stops the active controller for an environment", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(host));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          hostId: host.hostId,
+          connectionId: request.connectionId,
+          leaseId: request.leaseId,
+          requestId: request.requestId,
+          ok: true,
+          result: "observed",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.activeControlFor(environmentId)).toBeUndefined();
+      expect(yield* broker.invoke({ scope, operation: "observe", targetId, input: {} })).toBe(
+        "observed",
+      );
+      expect(yield* broker.activeControlFor(environmentId)).toEqual({
+        threadId: scope.threadId,
+        turnId: scope.turnId,
+        providerInstanceId: scope.providerInstanceId,
+      });
+
+      expect(yield* broker.stopEnvironment(environmentId, "user")).toBe(1);
+      expect(yield* broker.activeControlFor(environmentId)).toBeUndefined();
+    }),
+  ),
+);
+
 it.effect("rejects malformed calls before they can capture a control lease", () =>
   Effect.scoped(
     Effect.gen(function* () {

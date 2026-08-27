@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   type AtomicSettings,
+  ComputerUseApprovalId,
   EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
@@ -33,6 +34,7 @@ import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import * as ComputerUsePolicy from "../../computerUse/ComputerUsePolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -80,11 +82,52 @@ const AtomicResumeCursor = Schema.Struct({
 });
 const decodeResumeCursor = Schema.decodeUnknownOption(AtomicResumeCursor);
 
-interface PendingUiRequest {
-  readonly atomicRequestId: string;
-  readonly method: string;
-  readonly questionId: string;
-}
+type PendingUiRequest =
+  | {
+      readonly _tag: "input";
+      readonly atomicRequestId: string;
+      readonly method: string;
+      readonly questionId: string;
+    }
+  | {
+      readonly _tag: "computer-approval";
+      readonly atomicRequestId: string;
+      readonly approvalId: ComputerUseApprovalId;
+      readonly labels: Readonly<Partial<Record<ProviderApprovalDecision, string>>>;
+    };
+
+const COMPUTER_USE_APPROVAL_TITLE = /^T3 Computer Use \[([^\]]+)]\s+(.+) :: ([a-z-]+)$/;
+
+const computerUseApprovalDetail = (appName: string, kind: string): string => {
+  switch (kind) {
+    case "observe":
+      return `Allow T3 Computer Use to inspect ${appName}?`;
+    case "operate":
+      return `Allow T3 Computer Use to interact with ${appName}?`;
+    case "external-side-effect":
+      return `Confirm an external side effect in ${appName}.`;
+    case "sensitive-data":
+      return `Confirm sensitive data use in ${appName}.`;
+    default:
+      return `T3 Computer Use is requesting access to ${appName}.`;
+  }
+};
+
+const computerUseApprovalDecision = (label: string): ProviderApprovalDecision | undefined => {
+  switch (label) {
+    case "Allow once":
+    case "Confirm action":
+      return "accept";
+    case "Allow for this session":
+      return "acceptForSession";
+    case "Always allow on this computer":
+      return "acceptAlways";
+    case "Deny":
+      return "decline";
+    default:
+      return undefined;
+  }
+};
 
 interface AtomicWorkflowStageContext {
   readonly id: string;
@@ -463,11 +506,48 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       }
       if (!["select", "confirm", "input", "editor"].includes(method)) return;
       const requestId = ApprovalRequestId.make(atomicRequestId);
-      const questionId = `${atomicRequestId}:answer`;
       const title = field(event, "title") ?? `${definition.displayName} needs input`;
+      const selectOptions = isStringArray(event.options) ? event.options : [];
+      const computerUseApproval =
+        method === "select" ? title.match(COMPUTER_USE_APPROVAL_TITLE) : null;
+      if (computerUseApproval) {
+        const approvalId = ComputerUseApprovalId.make(computerUseApproval[1] ?? "");
+        const appName = computerUseApproval[2] ?? "Computer target";
+        const approvalKind = computerUseApproval[3] ?? "access";
+        const options = selectOptions.flatMap((label) => {
+          const decision = computerUseApprovalDecision(label);
+          return decision === undefined ? [] : [{ decision, label }];
+        });
+        const labels = Object.fromEntries(
+          options.map((option) => [option.decision, option.label]),
+        ) as Partial<Record<ProviderApprovalDecision, string>>;
+        context.pendingUi.set(requestId, {
+          _tag: "computer-approval",
+          atomicRequestId,
+          approvalId,
+          labels,
+        });
+        yield* publish({
+          type: "request.opened",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          requestId: RuntimeRequestId.make(requestId),
+          payload: {
+            requestType: "mcp_elicitation_approval",
+            appName,
+            detail: computerUseApprovalDetail(appName, approvalKind),
+            options,
+          },
+          raw: raw(event, "extension_ui_request"),
+        });
+        return;
+      }
+      const questionId = `${atomicRequestId}:answer`;
       const question = field(event, "message") ?? title;
       const defaultValue = stringField(event, "prefill") ?? stringField(event, "initialValue");
-      const selectOptions = isStringArray(event.options) ? event.options : [];
       const optionsForQuestion =
         method === "confirm"
           ? [
@@ -482,7 +562,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
                   description: "Use the custom response field for your answer.",
                 },
               ];
-      context.pendingUi.set(requestId, { atomicRequestId, method, questionId });
+      context.pendingUi.set(requestId, { _tag: "input", atomicRequestId, method, questionId });
       yield* publish({
         type: "user-input.requested",
         ...(yield* eventStamp()),
@@ -533,17 +613,31 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
 
   const resolveAbandonedUiRequests = (context: AtomicSessionContext) =>
     Effect.gen(function* () {
-      for (const requestId of context.pendingUi.keys()) {
-        yield* publish({
-          type: "user-input.resolved",
-          ...(yield* eventStamp()),
-          provider: PROVIDER,
-          providerInstanceId: boundInstanceId,
-          threadId: context.threadId,
-          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
-          requestId: RuntimeRequestId.make(requestId),
-          payload: { answers: {} },
-        });
+      for (const [requestId, pending] of context.pendingUi) {
+        if (pending._tag === "computer-approval") {
+          yield* ComputerUsePolicy.resolveActiveComputerUseApproval(pending.approvalId, "cancel");
+          yield* publish({
+            type: "request.resolved",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            requestId: RuntimeRequestId.make(requestId),
+            payload: { requestType: "mcp_elicitation_approval", decision: "cancel" },
+          });
+        } else {
+          yield* publish({
+            type: "user-input.resolved",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            requestId: RuntimeRequestId.make(requestId),
+            payload: { answers: {} },
+          });
+        }
       }
       context.pendingUi.clear();
     });
@@ -1678,18 +1772,62 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       yield* completeActiveTurn(context, "interrupted");
     });
 
-  const respondToRequest = (
-    _threadId: ThreadId,
-    _requestId: ApprovalRequestId,
-    _decision: ProviderApprovalDecision,
-  ): Effect.Effect<void, ProviderAdapterError> =>
-    Effect.fail(
-      new ProviderAdapterRequestError({
+  const respondToRequest: ProviderAdapterShape<ProviderAdapterError>["respondToRequest"] = (
+    threadId,
+    requestId,
+    decision,
+  ) =>
+    Effect.gen(function* () {
+      const context = yield* requireSession(threadId);
+      const pending = context.pendingUi.get(requestId);
+      if (!pending || pending._tag !== "computer-approval") {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "respondToRequest",
+          detail: `Unknown ${definition.displayName} Computer Use approval: ${requestId}`,
+        });
+      }
+      const resolved = yield* ComputerUsePolicy.resolveActiveComputerUseApproval(
+        pending.approvalId,
+        decision,
+      );
+      if (!resolved) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "respondToRequest",
+          detail: `Stale T3 Computer Use approval: ${pending.approvalId}`,
+        });
+      }
+      const value = pending.labels[decision];
+      yield* context.rpc
+        .notify({
+          type: "extension_ui_response",
+          id: pending.atomicRequestId,
+          ...(decision === "cancel" || value === undefined ? { cancelled: true } : { value }),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "extension_ui_response",
+                detail: cause.message,
+                cause,
+              }),
+          ),
+        );
+      context.pendingUi.delete(requestId);
+      yield* publish({
+        type: "request.resolved",
+        ...(yield* eventStamp()),
         provider: PROVIDER,
-        method: "respondToRequest",
-        detail: `${definition.displayName} RPC does not expose approval requests.`,
-      }),
-    );
+        providerInstanceId: boundInstanceId,
+        threadId,
+        ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+        requestId: RuntimeRequestId.make(requestId),
+        payload: { requestType: "mcp_elicitation_approval", decision },
+      });
+    });
 
   const respondToUserInput: ProviderAdapterShape<ProviderAdapterError>["respondToUserInput"] = (
     threadId,
@@ -1704,6 +1842,13 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           provider: PROVIDER,
           method: "extension_ui_response",
           detail: `Unknown ${definition.displayName} UI request: ${requestId}`,
+        });
+      }
+      if (pending._tag !== "input") {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "extension_ui_response",
+          detail: `Computer Use approvals must use the approval response controls: ${requestId}`,
         });
       }
       const answer = answers[pending.questionId];

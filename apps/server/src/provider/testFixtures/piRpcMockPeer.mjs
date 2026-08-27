@@ -1,6 +1,7 @@
 let buffer = "";
 let isStreaming = false;
 let pendingUiPrompt;
+let pendingComputerUseApproval;
 let abortableTurnActive = false;
 let pendingInterruptedPrompt;
 let failNextGetState = false;
@@ -413,6 +414,19 @@ const requestLongLivedUi = (command) => {
   });
 };
 
+const requestComputerUseApproval = (command) => {
+  isStreaming = true;
+  pendingComputerUseApproval = command;
+  write({ type: "agent_start" });
+  write({
+    type: "extension_ui_request",
+    id: "computer-approval-ui-1",
+    method: "select",
+    title: "T3 Computer Use [computer-use-approval-0] TextEdit :: observe",
+    options: ["Allow once", "Allow for this session", "Always allow on this computer", "Deny"],
+  });
+};
+
 const runAbortableTurn = (command) => {
   isStreaming = true;
   abortableTurnActive = true;
@@ -498,6 +512,8 @@ const handle = (command) => {
         runAbortableTurn(command);
       } else if (command.message === "/t3-ui-wait") {
         requestLongLivedUi(command);
+      } else if (command.message === "/t3-computer-approval") {
+        requestComputerUseApproval(command);
       } else if (String(command.message).startsWith("/workflow")) {
         runWorkflowCommand(command);
       } else {
@@ -587,6 +603,22 @@ const handle = (command) => {
         pendingUiPrompt = undefined;
         response(prompt);
         isStreaming = false;
+      }
+      if (pendingComputerUseApproval && command.id === "computer-approval-ui-1") {
+        const prompt = pendingComputerUseApproval;
+        pendingComputerUseApproval = undefined;
+        response(prompt);
+        write({
+          type: "message_start",
+          message: { role: "assistant", content: [{ type: "text", text: "COMPUTER_APPROVED" }] },
+        });
+        write({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "COMPUTER_APPROVED" }] },
+        });
+        write({ type: "agent_end", messages: [] });
+        isStreaming = false;
+        write({ type: "agent_settled" });
       }
       return;
     default:

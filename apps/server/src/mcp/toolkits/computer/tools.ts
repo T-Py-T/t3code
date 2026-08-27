@@ -2,6 +2,7 @@ import {
   ComputerUseActResult,
   ComputerUseActionBatch,
   ComputerUseActionRisk,
+  ComputerUseApprovalId,
   ComputerUseBrokerError,
   ComputerUseCapabilityUnavailableError,
   ComputerUseObservation,
@@ -32,6 +33,7 @@ const ComputerUseFailure = Schema.Union([
 ]);
 
 const ComputerUsePolicyBoundaryResult = Schema.TaggedStruct("policy", {
+  approvalId: Schema.optional(ComputerUseApprovalId),
   decision: ComputerUsePolicyDecision,
   target: ComputerUseTarget,
   risk: ComputerUseActionRisk,

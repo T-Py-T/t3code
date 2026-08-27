@@ -9,10 +9,13 @@ import { it } from "@effect/vitest";
 import {
   ApprovalRequestId,
   AtomicSettings,
+  ComputerUseHostId,
+  ComputerUseTargetId,
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -24,6 +27,7 @@ import * as Stream from "effect/Stream";
 import { assert, describe } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
+import * as ComputerUsePolicy from "../../computerUse/ComputerUsePolicy.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeAtomicAdapter, sanitizePiComputerUseEvent } from "./AtomicAdapter.ts";
 
@@ -491,6 +495,95 @@ describe("AtomicAdapter", () => {
       const completed = yield* Fiber.join(completedFiber).pipe(Effect.map(Option.getOrThrow));
       assert.equal(completed.type, "turn.completed");
     }).pipe(Effect.scoped),
+  );
+
+  it.live("projects T3 Computer Use access as an approval and resumes only after acceptance", () =>
+    Effect.gen(function* () {
+      const policy = yield* ComputerUsePolicy.ComputerUsePolicy;
+      const policyInput: ComputerUsePolicy.ComputerUsePolicyInput = {
+        scope: {
+          environmentId: EnvironmentId.make("environment-computer-approval"),
+          hostId: ComputerUseHostId.make("host-computer-approval"),
+          threadId: ThreadId.make("atomic-computer-approval"),
+          turnId: TurnId.make("turn-computer-approval"),
+          providerSessionId: "provider-session-computer-approval",
+          providerInstanceId: ProviderInstanceId.make("atomic"),
+        },
+        target: {
+          targetId: ComputerUseTargetId.make("target-textedit"),
+          kind: "application",
+          displayName: "TextEdit",
+          applicationId: "com.apple.TextEdit",
+          stableIdentity: "macos:com.apple.TextEdit:APPLE",
+        },
+        access: "observe",
+        risk: "inspect",
+        runtimeMode: "full-access",
+      };
+      const approvalId = yield* policy.requestApproval({
+        input: policyInput,
+        decision: { _tag: "request-app-grant", access: "observe" },
+      });
+      assert.equal(approvalId, "computer-use-approval-0");
+
+      const adapter = yield* makeAdapter();
+      const threadId = policyInput.scope.threadId;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const requestedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "request.opened"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "/t3-computer-approval", attachments: [] })
+        .pipe(Effect.forkChild);
+      const requested = yield* Fiber.join(requestedFiber).pipe(Effect.map(Option.getOrThrow));
+      assert.equal(requested.type, "request.opened");
+      if (requested.type !== "request.opened" || requested.requestId === undefined) {
+        return assert.fail("Expected a Computer Use approval request.");
+      }
+      assert.equal(requested.payload.requestType, "mcp_elicitation_approval");
+      assert.equal(requested.payload.appName, "TextEdit");
+      assert.deepEqual(requested.payload.options, [
+        { decision: "accept", label: "Allow once" },
+        { decision: "acceptForSession", label: "Allow for this session" },
+        { decision: "acceptAlways", label: "Always allow on this computer" },
+        { decision: "decline", label: "Deny" },
+      ]);
+
+      yield* adapter.respondToRequest(
+        threadId,
+        ApprovalRequestId.make(requested.requestId),
+        "accept",
+      );
+      yield* Fiber.join(sendFiber);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isDefined(
+        events.find(
+          (event) => event.type === "request.resolved" && event.payload.decision === "accept",
+        ),
+      );
+      assert.deepEqual(yield* policy.evaluate(policyInput), { _tag: "allow" });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ComputerUsePolicy.layer.pipe(
+          Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "computer-policy-test-" })),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    ),
   );
 
   it.live("stops a session while its prompt request is awaiting user input", () =>

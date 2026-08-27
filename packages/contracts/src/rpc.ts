@@ -205,6 +205,12 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  ComputerUseControlState,
+  ComputerUseRevokePersistentGrantInput,
+  ComputerUseRevokePersistentGrantResult,
+  ComputerUseStopResult,
+} from "./computerUse.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -291,6 +297,11 @@ export const WS_METHODS = {
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
+
+  // Computer Use controls
+  computerUseGetControlState: "computerUse.getControlState",
+  computerUseRevokePersistentGrant: "computerUse.revokePersistentGrant",
+  computerUseStop: "computerUse.stop",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -456,6 +467,27 @@ export const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSumm
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseGetControlStateRpc = Rpc.make(WS_METHODS.computerUseGetControlState, {
+  payload: Schema.Struct({}),
+  success: ComputerUseControlState,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseRevokePersistentGrantRpc = Rpc.make(
+  WS_METHODS.computerUseRevokePersistentGrant,
+  {
+    payload: ComputerUseRevokePersistentGrantInput,
+    success: ComputerUseRevokePersistentGrantResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsComputerUseStopRpc = Rpc.make(WS_METHODS.computerUseStop, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1036,6 +1068,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerSignalProcessRpc,
+  WsComputerUseGetControlStateRpc,
+  WsComputerUseRevokePersistentGrantRpc,
+  WsComputerUseStopRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

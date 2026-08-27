@@ -9,6 +9,8 @@ import {
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
   CommandId,
+  ComputerUseHostId,
+  ComputerUseTargetId,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   EventId,
@@ -29,6 +31,7 @@ import {
   ProviderInstanceId,
   ResolvedKeybindingRule,
   ThreadId,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
   EditorId,
@@ -101,6 +104,8 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 });
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
@@ -431,6 +436,8 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    computerUseBroker?: Partial<ComputerUseBroker.ComputerUseBroker["Service"]>;
+    computerUsePolicy?: Partial<ComputerUsePolicy.ComputerUsePolicy["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -938,6 +945,31 @@ const buildAppUnderTest = (options?: {
           getEnvironmentId: Effect.succeed(testEnvironmentDescriptor.environmentId),
           getDescriptor: Effect.succeed(testEnvironmentDescriptor),
           ...options?.layers?.serverEnvironment,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ComputerUseBroker.ComputerUseBroker)({
+          connect: () => Effect.succeed(Stream.empty),
+          respond: () => Effect.void,
+          hostFor: () => Effect.succeed(Option.none()),
+          invoke: () => Effect.die("Computer Use host invocation is not stubbed in this test"),
+          stop: () => Effect.void,
+          stopTurn: () => Effect.void,
+          activeControlFor: () => Effect.succeed(undefined),
+          stopEnvironment: () => Effect.succeed(0),
+          ...options?.layers?.computerUseBroker,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ComputerUsePolicy.ComputerUsePolicy)({
+          evaluate: () => Effect.die("Computer Use policy evaluation is not stubbed in this test"),
+          grant: () => Effect.void,
+          revoke: () => Effect.succeed(0),
+          listPersistent: () => Effect.succeed([]),
+          requestApproval: () =>
+            Effect.die("Computer Use approval requests are not stubbed in this test"),
+          resolveApproval: () => Effect.succeed(false),
+          ...options?.layers?.computerUsePolicy,
         }),
       ),
       Layer.provide(
@@ -4511,6 +4543,82 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.deepEqual(response.issues, []);
       assert.deepEqual(response.keybindings, [resolved]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes authenticated Computer Use status, revoke, and stop controls", () =>
+    Effect.gen(function* () {
+      const environmentId = testEnvironmentDescriptor.environmentId;
+      const hostId = ComputerUseHostId.make("signed-host-1");
+      const target = {
+        targetId: ComputerUseTargetId.make("target-textedit"),
+        kind: "application" as const,
+        displayName: "TextEdit",
+        applicationId: "com.apple.TextEdit",
+        stableIdentity: "macos:com.apple.TextEdit:APPLE",
+      };
+      const revoke = vi.fn<ComputerUsePolicy.ComputerUsePolicy["Service"]["revoke"]>(() =>
+        Effect.succeed(1),
+      );
+      const stopEnvironment = vi.fn<
+        ComputerUseBroker.ComputerUseBroker["Service"]["stopEnvironment"]
+      >(() => Effect.succeed(1));
+      yield* buildAppUnderTest({
+        layers: {
+          computerUseBroker: {
+            hostFor: () =>
+              Effect.succeed(
+                Option.some({
+                  hostId,
+                  environmentId,
+                  platform: "macos",
+                  protocolVersion: 1,
+                  supportedOperations: ["status", "listTargets", "observe", "act"],
+                  verifiedIdentity: { subject: "com.t3tools.t3code", publisher: "T3 Code" },
+                }),
+              ),
+            activeControlFor: () =>
+              Effect.succeed({
+                threadId: ThreadId.make("thread-computer-use"),
+                turnId: TurnId.make("turn-computer-use"),
+                providerInstanceId: ProviderInstanceId.make("atomic"),
+              }),
+            stopEnvironment,
+          },
+          computerUsePolicy: {
+            listPersistent: () =>
+              Effect.succeed([{ environmentId, hostId, target, access: "operate" }]),
+            revoke,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const state = yield* client[WS_METHODS.computerUseGetControlState]({});
+            assert.equal(state.host?.hostId, hostId);
+            assert.equal(state.activeControl?.providerInstanceId, "atomic");
+            assert.deepEqual(state.persistentGrants, [
+              { environmentId, hostId, target, access: "operate" },
+            ]);
+            assert.deepEqual(
+              yield* client[WS_METHODS.computerUseRevokePersistentGrant]({
+                hostId,
+                stableIdentity: target.stableIdentity,
+              }),
+              { removed: 1 },
+            );
+            assert.deepEqual(yield* client[WS_METHODS.computerUseStop]({}), { stopped: 1 });
+          }),
+        ),
+      );
+
+      assert.deepEqual(revoke.mock.calls, [
+        [{ environmentId, hostId, stableIdentity: target.stableIdentity }],
+      ]);
+      assert.deepEqual(stopEnvironment.mock.calls, [[environmentId, "user"]]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

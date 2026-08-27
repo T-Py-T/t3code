@@ -92,6 +92,27 @@ async function callTool(name, args, signal) {
   return await post({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args || {} } }, signal);
 }
 
+const approvalOptions = {
+  app: ["Allow once", "Allow for this session", "Always allow on this computer", "Deny"],
+  action: ["Confirm action", "Deny"],
+};
+
+async function approvePolicyBoundary(boundary, signal, ctx) {
+  if (!boundary || boundary._tag !== "policy" || !boundary.approvalId) return false;
+  if (!ctx || !ctx.hasUI || !ctx.ui || typeof ctx.ui.select !== "function") return false;
+  const isAppGrant = boundary.decision && boundary.decision._tag === "request-app-grant";
+  const isActionConfirmation = boundary.decision && boundary.decision._tag === "request-action-confirmation";
+  if (!isAppGrant && !isActionConfirmation) return false;
+  const displayName = boundary.target && boundary.target.displayName ? boundary.target.displayName : "this app";
+  const approvalKind = isAppGrant ? boundary.decision.access : boundary.decision.risk;
+  const selected = await ctx.ui.select(
+    "T3 Computer Use [" + boundary.approvalId + "] " + displayName + " :: " + approvalKind,
+    isAppGrant ? approvalOptions.app : approvalOptions.action,
+    { signal },
+  );
+  return selected !== undefined && selected !== "Deny";
+}
+
 const definitions = [
   { name: "computer_status", label: "Get computer status", description: "Report T3 native Computer Use host availability, lock state, and OS permissions.", parameters: emptyObject },
   { name: "computer_list_targets", label: "List computer targets", description: "List native application and window targets. T3 Code and terminal apps are forbidden.", parameters: { type: "object", additionalProperties: false, properties: { kind: { enum: ["application", "window", "browser-tab", "office-document"] } } } },
@@ -107,8 +128,12 @@ export default function t3ComputerUseExtension(pi) {
       ...definition,
       promptSnippet: "Use " + definition.name + " only for user-authorized native computer interaction through T3 Code.",
       executionMode: "sequential",
-      async execute(_toolCallId, args, signal) {
-        const result = await callTool(definition.name, args, signal);
+      async execute(_toolCallId, args, signal, _onUpdate, ctx) {
+        let result = await callTool(definition.name, args, signal);
+        const boundary = result && result.structuredContent;
+        if (await approvePolicyBoundary(boundary, signal, ctx)) {
+          result = await callTool(definition.name, args, signal);
+        }
         const content = Array.isArray(result && result.content)
           ? result.content
           : [{ type: "text", text: JSON.stringify(result && result.structuredContent ? result.structuredContent : {}) }];

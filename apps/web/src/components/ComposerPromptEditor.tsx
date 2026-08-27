@@ -901,6 +901,32 @@ interface ComposerPromptEditorProps {
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
 
+export interface ComposerEditorBootstrapState {
+  readonly value: string;
+  readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  readonly skills: ReadonlyArray<ServerProviderSkill>;
+}
+
+/**
+ * Lexical must be recreated when this module is hot-reloaded because custom
+ * node classes change identity. React preserves this component's refs across
+ * that reload, however, so the recreated editor must read the latest
+ * controlled props instead of the props from the component's first mount.
+ */
+export function refreshComposerEditorBootstrapState(
+  current: ComposerEditorBootstrapState,
+  latest: ComposerEditorBootstrapState,
+): ComposerEditorBootstrapState {
+  if (
+    current.value === latest.value &&
+    current.terminalContexts === latest.terminalContexts &&
+    current.skills === latest.skills
+  ) {
+    return current;
+  }
+  return latest;
+}
+
 function ComposerCommandKeyPlugin(props: {
   onCommandKeyDown?: (
     key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
@@ -1801,19 +1827,27 @@ export function ComposerPromptEditor({
   onPaste,
   editorRef,
 }: ComposerPromptEditorProps) {
-  const initialValueRef = useRef(value);
-  const initialTerminalContextsRef = useRef(terminalContexts);
-  const initialSkillMetadataRef = useRef(skillMetadataByName(skills));
+  const bootstrapStateRef = useRef<ComposerEditorBootstrapState>({
+    value,
+    terminalContexts,
+    skills,
+  });
+  bootstrapStateRef.current = refreshComposerEditorBootstrapState(bootstrapStateRef.current, {
+    value,
+    terminalContexts,
+    skills,
+  });
   const initialConfig = useMemo<InitialConfigType>(
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
       nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode],
       editorState: () => {
+        const bootstrapState = bootstrapStateRef.current;
         $setComposerEditorPrompt(
-          initialValueRef.current,
-          initialTerminalContextsRef.current,
-          initialSkillMetadataRef.current,
+          bootstrapState.value,
+          bootstrapState.terminalContexts,
+          skillMetadataByName(bootstrapState.skills),
         );
       },
       onError: (error) => {

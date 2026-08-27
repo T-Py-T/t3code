@@ -11,6 +11,24 @@ import {
 } from "lexical";
 
 import { registerComposerInlineTokenPaste } from "./composerInlineTokenPaste";
+import { refreshComposerEditorBootstrapState } from "./ComposerPromptEditor";
+
+describe("refreshComposerEditorBootstrapState", () => {
+  it("uses the latest controlled value when HMR recreates the Lexical editor", () => {
+    const initial = {
+      value: "",
+      terminalContexts: [],
+      skills: [],
+    };
+    const latest = {
+      value: "unsent draft",
+      terminalContexts: [],
+      skills: [],
+    };
+
+    expect(refreshComposerEditorBootstrapState(initial, latest)).toBe(latest);
+  });
+});
 
 class TestClipboardEvent extends Event {
   readonly clipboardData: DataTransfer;

@@ -65,8 +65,10 @@ sessions; a running Codex app-server retains the MCP catalog it started with.
 ## Boundaries
 
 - macOS only; the signed client is supplied by the Codex or ChatGPT desktop installation.
-- Codex only in this slice. Pi and Atomic have not been verified to forward the required MCP tools
-  and elicitation lifecycle.
+- Codex only in this slice. Pi does not expose an MCP transport, and Atomic 0.9.13's MCP client does
+  not advertise or handle the elicitation requests the signed client uses for new-app approval.
+  Attaching the client through either provider would therefore expose a partial, misleading
+  capability instead of the same approval lifecycle.
 - T3 shows provider tool lifecycle and app-access approvals, but does not duplicate the private
   Computer Use accessibility tree or screenshot stream in a separate panel.
 - T3 does not manage macOS Accessibility or Screen Recording permissions. The signed client owns
@@ -80,3 +82,8 @@ sessions; a running Codex app-server retains the MCP catalog it started with.
 - `CodexSessionRuntime.test.ts` ensures a Computer Use-only MCP configuration is not mistaken for
   T3's collaborative preview browser.
 - settings contract and provider form tests cover the default-off switch and its visible placement.
+
+An integrated macOS pass attached the signed client, observed its MCP startup transition to ready,
+used Calculator through the screenshot/action loop, and rendered every tool lifecycle item in the
+T3 thread before the final answer. The agent also recovered from Calculator's pre-existing dirty
+state rather than trusting the first screen.

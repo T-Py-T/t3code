@@ -59,8 +59,10 @@ home still uses the Computer Use installation from its shared home. If the clien
 provider stays usable for normal chat and shows a warning in Settings.
 
 This switch manages the Codex Computer Use client attached by T3. It does not rewrite
-`config.toml` or remove MCP servers that you configured separately. Pi and Atomic do not expose a
-verified Computer Use MCP transport in this integration yet.
+`config.toml` or remove MCP servers that you configured separately. Pi does not expose an MCP
+transport, and Atomic's current MCP transport does not support the new-app approval exchange used
+by this client, so this integration does not offer a partial Computer Use switch for those
+providers.
 
 ## I Want Work And Personal Codex Accounts
 

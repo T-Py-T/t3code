@@ -6,6 +6,12 @@
 export const T3_COMPUTER_USE_PI_EXTENSION_SOURCE = String.raw`
 const endpoint = process.env.T3CODE_MCP_ENDPOINT;
 const authorization = process.env.T3CODE_MCP_AUTHORIZATION;
+const enabledCapabilities = new Set(
+  (process.env.T3CODE_MCP_CAPABILITIES || "computer,preview")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
 let nextRequestId = 1;
 let mcpSessionId;
 let mcpProtocolVersion;
@@ -14,6 +20,18 @@ let initializePromise;
 const emptyObject = { type: "object", additionalProperties: false, properties: {} };
 const targetId = { type: "string", minLength: 1, description: "Exact targetId from computer_list_targets." };
 const observationId = { type: "string", minLength: 1, description: "Exact observationId from computer_observe or the preceding computer_act result." };
+const tabId = { type: "string", minLength: 1, maxLength: 128, description: "Exact collaborative browser tab ID. Omit to use this agent session's current tab." };
+const timeoutMs = { type: "integer", minimum: 1, maximum: 60000, description: "Maximum wait in milliseconds." };
+const locator = { type: "string", minLength: 1, description: "Prefer a semantic Playwright locator such as role=button[name='Send']." };
+const selector = { type: "string", minLength: 1, description: "Legacy CSS selector. Prefer locator." };
+const browserTabProperties = { tabId };
+const browserTargetProperties = { ...browserTabProperties, locator, selector };
+const objectParameters = (properties, required = []) => ({
+  type: "object",
+  additionalProperties: false,
+  ...(required.length > 0 ? { required } : {}),
+  properties,
+});
 const point = {
   type: "object",
   additionalProperties: false,
@@ -114,11 +132,25 @@ async function approvePolicyBoundary(boundary, signal, ctx) {
 }
 
 const definitions = [
-  { name: "computer_status", label: "Get computer status", description: "Report T3 native Computer Use host availability, lock state, and OS permissions.", parameters: emptyObject },
-  { name: "computer_list_targets", label: "List computer targets", description: "List native application and window targets. T3 Code and terminal apps are forbidden.", parameters: { type: "object", additionalProperties: false, properties: { kind: { enum: ["application", "window", "browser-tab", "office-document"] } } } },
-  { name: "computer_observe", label: "Observe computer target", description: "Observe one exact target before acting. Returns accessibility state, an observation ID, and optionally a screenshot. App access is governed by T3.", parameters: { type: "object", additionalProperties: false, required: ["targetId"], properties: { targetId, includeScreenshot: { type: "boolean" }, includeAccessibility: { type: "boolean" } } } },
-  { name: "computer_act", label: "Operate computer target", description: "Perform a bounded action batch against one exact target and fresh observation. T3 classifies risk and enforces grants and point-of-risk confirmation.", parameters: { type: "object", additionalProperties: false, required: ["targetId", "observationId", "actions"], properties: { targetId, observationId, actions: { type: "array", minItems: 1, maxItems: 64, items: action } } } },
-  { name: "computer_stop", label: "Stop computer use", description: "Immediately release this turn's Computer Use control lease.", parameters: emptyObject },
+  { capability: "computer", name: "computer_status", label: "Get computer status", description: "Report T3 native Computer Use host availability, lock state, and OS permissions.", parameters: emptyObject },
+  { capability: "computer", name: "computer_list_targets", label: "List computer targets", description: "List native application and window targets. T3 Code and terminal apps are forbidden.", parameters: objectParameters({ kind: { enum: ["application", "window", "browser-tab", "office-document"] } }) },
+  { capability: "computer", name: "computer_observe", label: "Observe computer target", description: "Observe one exact target before acting. Returns accessibility state, an observation ID, and optionally a screenshot. App access is governed by T3.", parameters: objectParameters({ targetId, includeScreenshot: { type: "boolean" }, includeAccessibility: { type: "boolean" } }, ["targetId"]) },
+  { capability: "computer", name: "computer_act", label: "Operate computer target", description: "Perform a bounded action batch against one exact target and fresh observation. T3 classifies risk and enforces grants and point-of-risk confirmation.", parameters: objectParameters({ targetId, observationId, actions: { type: "array", minItems: 1, maxItems: 64, items: action } }, ["targetId", "observationId", "actions"]) },
+  { capability: "computer", name: "computer_stop", label: "Stop computer use", description: "Immediately release this turn's Computer Use control lease.", parameters: emptyObject },
+  { capability: "preview", name: "preview_status", label: "Get browser status", description: "Report the current collaborative browser tab, URL, title, visibility, loading state, and viewport.", parameters: objectParameters(browserTabProperties) },
+  { capability: "preview", name: "preview_open", label: "Open browser preview", description: "Open or reuse a thread-bound semantic browser tab. The tab can be visible to the user or run in the background.", parameters: objectParameters({ ...browserTabProperties, url: { type: "string", maxLength: 2048 }, open: { type: "boolean" }, show: { type: "boolean" }, reuseExistingTab: { type: "boolean" } }) },
+  { capability: "preview", name: "preview_navigate", label: "Navigate browser preview", description: "Navigate the semantic browser to one public URL or an environment-relative development server.", parameters: objectParameters({ ...browserTabProperties, url: { type: "string", maxLength: 2048 }, target: { oneOf: [{ type: "object", additionalProperties: false, required: ["kind", "url"], properties: { kind: { const: "url" }, url: { type: "string", maxLength: 2048 } } }, { type: "object", additionalProperties: false, required: ["kind", "port"], properties: { kind: { const: "environment-port" }, port: { type: "integer", minimum: 1, maximum: 65535 }, protocol: { enum: ["http", "https"] }, path: { type: "string" } } }] }, readiness: { enum: ["load", "domContentLoaded", "none"] }, timeoutMs }) },
+  { capability: "preview", name: "preview_resize", label: "Resize browser viewport", description: "Resize the semantic browser using fill, freeform dimensions, or a named device preset.", parameters: objectParameters({ ...browserTabProperties, mode: { enum: ["fill", "freeform", "preset"] }, preset: { type: "string" }, width: { type: "integer", minimum: 240, maximum: 3840 }, height: { type: "integer", minimum: 240, maximum: 3840 }, orientation: { enum: ["portrait", "landscape"] }, timeoutMs }, ["mode"]) },
+  { capability: "preview", name: "preview_set_appearance", label: "Set browser appearance", description: "Emulate light, dark, or system color scheme in the semantic browser.", parameters: objectParameters({ ...browserTabProperties, colorScheme: { enum: ["system", "light", "dark"] } }, ["colorScheme"]) },
+  { capability: "preview", name: "preview_snapshot", label: "Inspect browser page", description: "Return a semantic page snapshot, diagnostics, action history, and screenshot before interacting.", parameters: objectParameters(browserTabProperties) },
+  { capability: "preview", name: "preview_click", label: "Click browser page", description: "Click one semantic locator, CSS selector, or viewport coordinate pair in the browser.", parameters: objectParameters({ ...browserTargetProperties, x: { type: "number" }, y: { type: "number" }, timeoutMs }) },
+  { capability: "preview", name: "preview_type", label: "Type into browser page", description: "Insert literal text into a semantic locator, CSS selector, or the focused browser element.", parameters: objectParameters({ ...browserTargetProperties, text: { type: "string" }, clear: { type: "boolean" }, timeoutMs }, ["text"]) },
+  { capability: "preview", name: "preview_press", label: "Press browser key", description: "Press one key with optional modifiers in the semantic browser.", parameters: objectParameters({ ...browserTabProperties, key: { type: "string", minLength: 1 }, modifiers: { type: "array", maxItems: 4, items: { enum: ["Alt", "Control", "Meta", "Shift"] } } }, ["key"]) },
+  { capability: "preview", name: "preview_scroll", label: "Scroll browser page", description: "Scroll the browser viewport or a semantic locator/selector container.", parameters: objectParameters({ ...browserTargetProperties, deltaX: { type: "number" }, deltaY: { type: "number" } }) },
+  { capability: "preview", name: "preview_evaluate", label: "Evaluate browser JavaScript", description: "Evaluate bounded JavaScript in the page when semantic actions cannot express the operation.", parameters: objectParameters({ ...browserTabProperties, expression: { type: "string", minLength: 1, maxLength: 64000 }, awaitPromise: { type: "boolean" }, returnByValue: { type: "boolean" } }, ["expression"]) },
+  { capability: "preview", name: "preview_wait_for", label: "Wait for browser page", description: "Wait until all supplied semantic locator, selector, text, and URL conditions match.", parameters: objectParameters({ ...browserTargetProperties, text: { type: "string", minLength: 1 }, urlIncludes: { type: "string", minLength: 1 }, timeoutMs }) },
+  { capability: "preview", name: "preview_recording_start", label: "Start browser recording", description: "Start recording the current collaborative browser tab for visible test evidence.", parameters: objectParameters(browserTabProperties) },
+  { capability: "preview", name: "preview_recording_stop", label: "Stop browser recording", description: "Stop browser recording and save the result as a local evidence artifact.", parameters: objectParameters(browserTabProperties) },
 ];
 
 const workflowControlActions = new Set([
@@ -242,9 +274,13 @@ export default function t3ComputerUseExtension(pi) {
   registerWorkflowControlBridge(pi);
   if (endpoint && authorization) {
     for (const definition of definitions) {
+      if (!enabledCapabilities.has(definition.capability)) continue;
+      const { capability, ...toolDefinition } = definition;
       pi.registerTool({
-        ...definition,
-        promptSnippet: "Use " + definition.name + " only for user-authorized native computer interaction through T3 Code.",
+        ...toolDefinition,
+        promptSnippet: capability === "preview"
+          ? "Use " + toolDefinition.name + " for user-authorized semantic browser interaction through T3 Code. Prefer this route over native coordinates for web pages."
+          : "Use " + toolDefinition.name + " only for user-authorized native computer interaction through T3 Code.",
         executionMode: "sequential",
         async execute(_toolCallId, args, signal, _onUpdate, ctx) {
           let result = await callTool(definition.name, args, signal);

@@ -1813,6 +1813,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
                 ...environment,
                 T3CODE_MCP_ENDPOINT: mcpSession.endpoint,
                 T3CODE_MCP_AUTHORIZATION: mcpSession.authorizationHeader,
+                T3CODE_MCP_CAPABILITIES: Array.from(mcpSession.capabilities).sort().join(","),
               },
             };
           }).pipe(

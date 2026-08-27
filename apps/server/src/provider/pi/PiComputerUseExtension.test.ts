@@ -4,6 +4,7 @@ import { T3_COMPUTER_USE_PI_EXTENSION_SOURCE } from "./PiComputerUseExtension.ts
 
 const originalEndpoint = process.env.T3CODE_MCP_ENDPOINT;
 const originalAuthorization = process.env.T3CODE_MCP_AUTHORIZATION;
+const originalCapabilities = process.env.T3CODE_MCP_CAPABILITIES;
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -11,11 +12,14 @@ afterEach(() => {
   else process.env.T3CODE_MCP_ENDPOINT = originalEndpoint;
   if (originalAuthorization === undefined) delete process.env.T3CODE_MCP_AUTHORIZATION;
   else process.env.T3CODE_MCP_AUTHORIZATION = originalAuthorization;
+  if (originalCapabilities === undefined) delete process.env.T3CODE_MCP_CAPABILITIES;
+  else process.env.T3CODE_MCP_CAPABILITIES = originalCapabilities;
 });
 
-it("registers the same governed Computer Use tools in bare Pi and forwards MCP credentials", async () => {
+it("registers governed native and semantic browser tools in bare Pi and forwards MCP credentials", async () => {
   process.env.T3CODE_MCP_ENDPOINT = "http://127.0.0.1:43123/mcp";
   process.env.T3CODE_MCP_AUTHORIZATION = "Bearer secret-test-token";
+  process.env.T3CODE_MCP_CAPABILITIES = "computer,preview";
   const requests: Array<{ readonly body: unknown; readonly headers: Headers }> = [];
   vi.stubGlobal(
     "fetch",
@@ -75,6 +79,20 @@ it("registers the same governed Computer Use tools in bare Pi and forwards MCP c
     "computer_observe",
     "computer_act",
     "computer_stop",
+    "preview_status",
+    "preview_open",
+    "preview_navigate",
+    "preview_resize",
+    "preview_set_appearance",
+    "preview_snapshot",
+    "preview_click",
+    "preview_type",
+    "preview_press",
+    "preview_scroll",
+    "preview_evaluate",
+    "preview_wait_for",
+    "preview_recording_start",
+    "preview_recording_stop",
   ]);
   const status = tools[0];
   expect(status).toBeDefined();
@@ -82,9 +100,18 @@ it("registers the same governed Computer Use tools in bare Pi and forwards MCP c
     content: [{ type: "text", text: "host ready" }],
     details: { status: "ready" },
   });
+  await expect(
+    tools
+      .find((tool) => tool.name === "preview_status")!
+      .execute("call-browser-status", {}, new AbortController().signal),
+  ).resolves.toMatchObject({
+    content: [{ type: "text", text: "host ready" }],
+    details: { status: "ready" },
+  });
   expect(requests.map((request) => (request.body as { method?: string }).method)).toEqual([
     "initialize",
     "notifications/initialized",
+    "tools/call",
     "tools/call",
   ]);
   expect(
@@ -93,13 +120,48 @@ it("registers the same governed Computer Use tools in bare Pi and forwards MCP c
     ),
   ).toBe(true);
   expect(requests[2]?.headers.get("mcp-session-id")).toBe("mcp-session-1");
+  expect(requests[3]?.body).toMatchObject({
+    method: "tools/call",
+    params: { name: "preview_status", arguments: {} },
+  });
   expect(requests[1]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
   expect(requests[2]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
+});
+
+it("registers only the semantic browser tools when native Computer Use is disabled", async () => {
+  process.env.T3CODE_MCP_ENDPOINT = "http://127.0.0.1:43123/mcp";
+  process.env.T3CODE_MCP_AUTHORIZATION = "Bearer browser-only-token";
+  process.env.T3CODE_MCP_CAPABILITIES = "preview";
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(T3_COMPUTER_USE_PI_EXTENSION_SOURCE).toString("base64")}#browser-only`;
+  const extension = (await import(moduleUrl)) as {
+    default: (pi: { registerTool: (tool: unknown) => void }) => void;
+  };
+  const tools: Array<{ readonly name: string }> = [];
+
+  extension.default({ registerTool: (tool) => tools.push(tool as (typeof tools)[number]) });
+
+  expect(tools.map((tool) => tool.name)).toEqual([
+    "preview_status",
+    "preview_open",
+    "preview_navigate",
+    "preview_resize",
+    "preview_set_appearance",
+    "preview_snapshot",
+    "preview_click",
+    "preview_type",
+    "preview_press",
+    "preview_scroll",
+    "preview_evaluate",
+    "preview_wait_for",
+    "preview_recording_start",
+    "preview_recording_stop",
+  ]);
 });
 
 it("pauses for a T3 approval and retries the governed call only after the user accepts", async () => {
   process.env.T3CODE_MCP_ENDPOINT = "http://127.0.0.1:43123/mcp";
   process.env.T3CODE_MCP_AUTHORIZATION = "Bearer approval-test-token";
+  process.env.T3CODE_MCP_CAPABILITIES = "computer";
   let toolCalls = 0;
   vi.stubGlobal(
     "fetch",

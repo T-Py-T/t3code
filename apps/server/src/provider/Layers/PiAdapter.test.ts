@@ -48,7 +48,7 @@ function writeCapturingMockWrapper(capturePath: string): string {
   NodeFS.writeFileSync(
     wrapper,
     `#!/bin/sh
-printf '%s\n' "$T3CODE_MCP_ENDPOINT" "$T3CODE_MCP_AUTHORIZATION" > ${JSON.stringify(capturePath)}
+printf '%s\n' "$T3CODE_MCP_ENDPOINT" "$T3CODE_MCP_AUTHORIZATION" "$T3CODE_MCP_CAPABILITIES" > ${JSON.stringify(capturePath)}
 printf '%s\n' "$@" >> ${JSON.stringify(capturePath)}
 exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"
 `,
@@ -71,6 +71,7 @@ describe("PiAdapter", () => {
         threadId,
         providerSessionId: "provider-session-1",
         providerInstanceId: ProviderInstanceId.make("pi"),
+        capabilities: new Set(["computer", "preview"]),
         endpoint: "http://127.0.0.1:43123/mcp",
         authorizationHeader: "Bearer test-session-token",
       });
@@ -94,12 +95,14 @@ describe("PiAdapter", () => {
       const launch = NodeFS.readFileSync(capturePath, "utf8").trim().split("\n");
       assert.equal(launch[0], "http://127.0.0.1:43123/mcp");
       assert.equal(launch[1], "Bearer test-session-token");
+      assert.equal(launch[2], "computer,preview");
       const extensionFlag = launch.indexOf("--extension");
-      assert.isAtLeast(extensionFlag, 2);
+      assert.isAtLeast(extensionFlag, 3);
       const extensionPath = launch[extensionFlag + 1];
       assert.isString(extensionPath);
       assert.isTrue(NodeFS.existsSync(extensionPath!));
       assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "computer_status");
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "preview_snapshot");
       assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "t3-workflow-action");
 
       yield* adapter.stopSession(threadId);

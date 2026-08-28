@@ -97,3 +97,4 @@ export const EXTERNAL_BROWSER_PRESS_CHANNEL = "desktop:external-browser-press";
 export const EXTERNAL_BROWSER_SCROLL_CHANNEL = "desktop:external-browser-scroll";
 export const EXTERNAL_BROWSER_EVALUATE_CHANNEL = "desktop:external-browser-evaluate";
 export const EXTERNAL_BROWSER_WAIT_FOR_CHANNEL = "desktop:external-browser-wait-for";
+export const EXTERNAL_BROWSER_CANCEL_CHANNEL = "desktop:external-browser-cancel";

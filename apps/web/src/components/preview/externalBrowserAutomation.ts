@@ -30,9 +30,10 @@ export async function routeExternalBrowserAutomationRequest(input: {
   readonly enabled: boolean;
   readonly environmentId: EnvironmentId;
   readonly request: PreviewAutomationRequest;
+  readonly signal: AbortSignal;
   readonly resolveNavigation: ResolveNavigation;
 }): Promise<unknown> {
-  const { bridge, enabled, request } = input;
+  const { bridge, enabled, request, signal } = input;
   if (!enabled) {
     throw new Error(
       "Signed-in external browser access is disabled. Enable it in Settings > Integrations > Browser.",
@@ -41,50 +42,92 @@ export async function routeExternalBrowserAutomationRequest(input: {
   if (!bridge) {
     throw new Error("Signed-in external browser control requires the T3 Code desktop app.");
   }
+  signal.throwIfAborted();
+  const cancel = () => {
+    void bridge.cancel(request.requestId);
+  };
+  signal.addEventListener("abort", cancel, { once: true });
   const tabId = request.tabId ?? null;
-  switch (request.operation) {
+  try {
+    switch (request.operation) {
     case "status":
-      return await bridge.status(tabId);
+      return await bridge.status(tabId, request.requestId);
     case "open": {
       const openInput = request.input as PreviewAutomationOpenInput;
-      if (!openInput.url) return await bridge.open(openInput, tabId);
+      if (!openInput.url) return await bridge.open(openInput, tabId, request.requestId);
       const resolvedUrl = input.resolveNavigation({
         browser: "external",
         url: openInput.url,
       });
-      return await bridge.open({ ...openInput, url: resolvedUrl }, tabId);
+      return await bridge.open({ ...openInput, url: resolvedUrl }, tabId, request.requestId);
     }
     case "navigate": {
       const navigateInput = request.input as PreviewAutomationNavigateInput;
       const resolvedUrl = input.resolveNavigation(navigateInput);
       const { target: _target, ...withoutTarget } = navigateInput;
-      return await bridge.navigate({ ...withoutTarget, url: resolvedUrl }, tabId);
+      return await bridge.navigate(
+        { ...withoutTarget, url: resolvedUrl },
+        tabId,
+        request.requestId,
+      );
     }
     case "resize":
-      return await bridge.resize(request.input as PreviewAutomationResizeInput, tabId);
+      return await bridge.resize(
+        request.input as PreviewAutomationResizeInput,
+        tabId,
+        request.requestId,
+      );
     case "setColorScheme":
       return await bridge.setColorScheme(
         request.input as PreviewAutomationSetColorSchemeInput,
         tabId,
+        request.requestId,
       );
     case "snapshot":
-      return await bridge.snapshot(tabId);
+      return await bridge.snapshot(tabId, request.requestId);
     case "click":
-      return await bridge.click(request.input as PreviewAutomationClickInput, tabId);
+      return await bridge.click(
+        request.input as PreviewAutomationClickInput,
+        tabId,
+        request.requestId,
+      );
     case "type":
-      return await bridge.type(request.input as PreviewAutomationTypeInput, tabId);
+      return await bridge.type(
+        request.input as PreviewAutomationTypeInput,
+        tabId,
+        request.requestId,
+      );
     case "press":
-      return await bridge.press(request.input as PreviewAutomationPressInput, tabId);
+      return await bridge.press(
+        request.input as PreviewAutomationPressInput,
+        tabId,
+        request.requestId,
+      );
     case "scroll":
-      return await bridge.scroll(request.input as PreviewAutomationScrollInput, tabId);
+      return await bridge.scroll(
+        request.input as PreviewAutomationScrollInput,
+        tabId,
+        request.requestId,
+      );
     case "evaluate":
-      return await bridge.evaluate(request.input as PreviewAutomationEvaluateInput, tabId);
+      return await bridge.evaluate(
+        request.input as PreviewAutomationEvaluateInput,
+        tabId,
+        request.requestId,
+      );
     case "waitFor":
-      return await bridge.waitFor(request.input as PreviewAutomationWaitForInput, tabId);
+      return await bridge.waitFor(
+        request.input as PreviewAutomationWaitForInput,
+        tabId,
+        request.requestId,
+      );
     case "recordingStart":
     case "recordingStop":
       throw new Error(
         "External browser recording is not available yet. Use browser='built-in' for recording.",
       );
+    }
+  } finally {
+    signal.removeEventListener("abort", cancel);
   }
 }

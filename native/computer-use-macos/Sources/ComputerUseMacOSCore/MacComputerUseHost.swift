@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -64,6 +65,7 @@ private enum HostFailure: Error {
     case policyDenied
     case targetClosed
     case lockStateChanged
+    case humanInputDetected
     case interrupted
     case malformedRequest(String)
 
@@ -111,6 +113,11 @@ private enum HostFailure: Error {
                 tag: "ComputerUseLockStateChangedError",
                 message: "The macOS desktop locked during Computer Use. Unlock it locally to continue."
             )
+        case .humanInputDetected:
+            return HostErrorPayload(
+                tag: "ComputerUseHumanInputDetectedError",
+                message: "Local keyboard or pointer input interrupted Computer Use."
+            )
         case .interrupted:
             return HostErrorPayload(
                 tag: "ComputerUseInterruptedError",
@@ -147,25 +154,36 @@ private func axValue(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? 
     return value
 }
 
-private func signingTeamId(executableURL: URL?) -> String {
-    guard let executableURL else { return "unsigned" }
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+func macOsExecutableIdentity(executableURL: URL?) -> String? {
+    guard let executableURL else { return nil }
+    let canonicalURL = executableURL.resolvingSymlinksInPath().standardizedFileURL
     var staticCode: SecStaticCode?
-    guard SecStaticCodeCreateWithPath(executableURL as CFURL, [], &staticCode) == errSecSuccess,
-          let staticCode,
-          SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess
-    else { return "unsigned" }
-    var information: CFDictionary?
-    let signingInformation = SecCSFlags(rawValue: UInt32(kSecCSSigningInformation))
-    guard SecCodeCopySigningInformation(staticCode, signingInformation, &information) == errSecSuccess,
-          let values = information as? [CFString: Any]
-    else { return "unsigned" }
-    if let team = values[kSecCodeInfoTeamIdentifier] as? String, !team.isEmpty {
-        return "team:\(team)"
+    let codeAvailable = SecStaticCodeCreateWithPath(canonicalURL as CFURL, [], &staticCode) == errSecSuccess
+    if codeAvailable, let staticCode,
+       SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess
+    {
+        var information: CFDictionary?
+        let signingInformation = SecCSFlags(rawValue: UInt32(kSecCSSigningInformation))
+        if SecCodeCopySigningInformation(staticCode, signingInformation, &information) == errSecSuccess,
+           let values = information as? [CFString: Any]
+        {
+            if let team = values[kSecCodeInfoTeamIdentifier] as? String, !team.isEmpty {
+                return "team:\(team)"
+            }
+            if let platform = values[kSecCodeInfoPlatformIdentifier] as? String, !platform.isEmpty {
+                return "platform:\(platform)"
+            }
+        }
     }
-    if let platform = values[kSecCodeInfoPlatformIdentifier] as? String, !platform.isEmpty {
-        return "platform:\(platform)"
+    guard let executableData = try? Data(contentsOf: canonicalURL, options: .mappedIfSafe) else {
+        return nil
     }
-    return "unsigned"
+    let pathDigest = sha256Hex(Data(canonicalURL.path.utf8))
+    return "unsigned:path-sha256:\(pathDigest):exe-sha256:\(sha256Hex(executableData))"
 }
 
 private func targetId(windowId: CGWindowID) -> String { "macos-window:\(windowId)" }
@@ -173,6 +191,106 @@ private func targetId(windowId: CGWindowID) -> String { "macos-window:\(windowId
 func macOsSessionIsLocked(_ session: [String: Any]?) -> Bool {
     guard let session else { return true }
     return session["CGSSessionScreenIsLocked"] as? Bool ?? false
+}
+
+private let syntheticEventMarker: Int64 = 0x543343554D41434
+
+private func markSynthetic(_ event: CGEvent) {
+    event.setIntegerValueField(.eventSourceUserData, value: syntheticEventMarker)
+}
+
+private let humanInputEventCallback: CGEventTapCallBack = { _, type, event, userInfo in
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
+    let monitor = Unmanaged<HumanInputMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        monitor.enableTap()
+    } else if event.getIntegerValueField(.eventSourceUserData) != syntheticEventMarker {
+        monitor.recordInput()
+    }
+    return Unmanaged.passUnretained(event)
+}
+
+private final class HumanInputMonitor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    private var available = false
+    private var tap: CFMachPort?
+    private var runLoop: CFRunLoop?
+    private var thread: Thread?
+
+    init() {
+        let ready = DispatchSemaphore(value: 0)
+        let thread = Thread { [weak self] in self?.run(ready: ready) }
+        thread.name = "T3 Computer Use input monitor"
+        self.thread = thread
+        thread.start()
+        _ = ready.wait(timeout: .now() + 2)
+    }
+
+    deinit {
+        lock.lock()
+        let activeRunLoop = runLoop
+        lock.unlock()
+        if let activeRunLoop { CFRunLoopStop(activeRunLoop) }
+    }
+
+    func snapshot() -> UInt64? {
+        lock.lock()
+        defer { lock.unlock() }
+        return available ? generation : nil
+    }
+
+    func recordInput() {
+        lock.lock()
+        generation &+= 1
+        lock.unlock()
+    }
+
+    func enableTap() {
+        lock.lock()
+        let activeTap = tap
+        lock.unlock()
+        if let activeTap { CGEvent.tapEnable(tap: activeTap, enable: true) }
+    }
+
+    private func run(ready: DispatchSemaphore) {
+        let eventTypes: [CGEventType] = [
+            .keyDown, .keyUp, .flagsChanged,
+            .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+            .otherMouseDown, .otherMouseUp, .mouseMoved,
+            .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel,
+        ]
+        let mask = eventTypes.reduce(CGEventMask(0)) {
+            $0 | (CGEventMask(1) << CGEventMask($1.rawValue))
+        }
+        guard let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: humanInputEventCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            ready.signal()
+            return
+        }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+        let activeRunLoop = CFRunLoopGetCurrent()
+        lock.lock()
+        tap = eventTap
+        runLoop = activeRunLoop
+        available = true
+        lock.unlock()
+        CFRunLoopAddSource(activeRunLoop, source, .commonModes)
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        ready.signal()
+        CFRunLoopRun()
+        lock.lock()
+        available = false
+        tap = nil
+        runLoop = nil
+        lock.unlock()
+    }
 }
 
 private func mouseEvent(
@@ -188,6 +306,7 @@ private func mouseEvent(
         mouseButton: button
     ) else { throw HostFailure.unsupportedOperation("pointer-event") }
     if let clickState { event.setIntegerValueField(.mouseEventClickState, value: clickState) }
+    markSynthetic(event)
     event.post(tap: .cghidEventTap)
 }
 
@@ -255,6 +374,7 @@ private func postKey(key: String, modifiers: [JSONValue], phase: String) throws 
             throw HostFailure.unsupportedOperation("keypress")
         }
         event.flags = flags
+        markSynthetic(event)
         event.post(tap: .cghidEventTap)
     }
     if phase == "press" || phase == "down" { try post(true) }
@@ -264,6 +384,7 @@ private func postKey(key: String, modifiers: [JSONValue], phase: String) throws 
 public actor MacComputerUseHost {
     private var observations: [String: ObservationRecord] = [:]
     private var cancellations = LeaseCancellationRegistry()
+    private let humanInputMonitor = HumanInputMonitor()
 
     public init() {}
 
@@ -290,7 +411,13 @@ public actor MacComputerUseHost {
                 guard let requestedTargetId = request.targetId else {
                     throw HostFailure.malformedRequest("targetId")
                 }
-                result = try await observe(targetId: requestedTargetId)
+                let includeScreenshot = request.input.object?["includeScreenshot"]?.bool ?? true
+                let includeAccessibility = request.input.object?["includeAccessibility"]?.bool ?? true
+                result = try await observe(
+                    targetId: requestedTargetId,
+                    includeScreenshot: includeScreenshot,
+                    includeAccessibility: includeAccessibility
+                )
             case "act": result = try await act(request)
             default: throw HostFailure.unsupportedOperation(request.operation)
             }
@@ -357,7 +484,9 @@ public actor MacComputerUseHost {
                 return nil
             }
             let applicationId = bundleId ?? application?.executableURL?.path ?? owner
-            let teamId = signingTeamId(executableURL: application?.executableURL)
+            guard let executableIdentity = macOsExecutableIdentity(
+                executableURL: application?.executableURL
+            ) else { return nil }
             let title = (window[kCGWindowName as String] as? String)?.trimmingCharacters(
                 in: .whitespacesAndNewlines
             )
@@ -371,7 +500,7 @@ public actor MacComputerUseHost {
                 targetId: targetId(windowId: windowId),
                 displayName: displayName,
                 applicationId: applicationId,
-                stableIdentity: "macos:\(applicationId):\(teamId)",
+                stableIdentity: "macos:\(applicationId):\(executableIdentity)",
                 processId: processId,
                 windowId: windowId,
                 bounds: bounds,
@@ -481,12 +610,18 @@ public actor MacComputerUseHost {
         return (encoded, indexed)
     }
 
-    private func observe(targetId requestedTargetId: String) async throws -> JSONValue {
+    private func observe(
+        targetId requestedTargetId: String,
+        includeScreenshot: Bool = true,
+        includeAccessibility: Bool = true
+    ) async throws -> JSONValue {
         if screenIsLocked() { throw HostFailure.lockStateChanged }
         let target = try requireTarget(requestedTargetId)
         let observationId = UUID().uuidString.lowercased()
-        let screenshot = try await capture(target)
-        let (elements, indexedElements) = accessibilityElements(for: target)
+        let screenshot = includeScreenshot ? try await capture(target) : nil
+        let (elements, indexedElements) = includeAccessibility
+            ? accessibilityElements(for: target)
+            : ([], [:])
         observations = observations.filter { $0.value.target.targetId != target.targetId }
         observations[observationId] = ObservationRecord(
             observationId: observationId,
@@ -495,20 +630,26 @@ public actor MacComputerUseHost {
         )
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return .object([
+        var result: [String: JSONValue] = [
             "observationId": .string(observationId),
             "target": target.json,
             "capturedAt": .string(formatter.string(from: Date())),
             "width": .number(Double(max(1, Int(target.bounds.width)))),
             "height": .number(Double(max(1, Int(target.bounds.height)))),
-            "screenshot": screenshot,
             "elements": .array(elements),
-        ])
+        ]
+        if let screenshot { result["screenshot"] = screenshot }
+        return .object(result)
     }
 
-    private func requireActive(_ leaseId: String) throws {
+    private func requireActive(_ leaseId: String, humanInputGeneration: UInt64? = nil) throws {
         if cancellations.contains(leaseId) { throw HostFailure.interrupted }
         if screenIsLocked() { throw HostFailure.lockStateChanged }
+        if let humanInputGeneration,
+           humanInputMonitor.snapshot() != humanInputGeneration
+        {
+            throw HostFailure.humanInputDetected
+        }
     }
 
     private func targetPoint(_ action: [String: JSONValue], target: TargetRecord) throws -> CGPoint {
@@ -519,6 +660,49 @@ public actor MacComputerUseHost {
             throw HostFailure.staleObservation
         }
         return CGPoint(x: target.bounds.minX + x, y: target.bounds.minY + y)
+    }
+
+    private func focus(_ target: TargetRecord) async throws {
+        guard let application = NSRunningApplication(processIdentifier: target.processId),
+              application.activate(options: [.activateAllWindows])
+        else { throw HostFailure.unsupportedOperation("foreground-input") }
+        let applicationElement = AXUIElementCreateApplication(target.processId)
+        guard let windows = axValue(applicationElement, kAXWindowsAttribute) as? [AXUIElement]
+        else { throw HostFailure.unsupportedOperation("foreground-window") }
+        let matchingWindow = windows.first { window in
+                guard let rawPosition = axValue(window, kAXPositionAttribute),
+                      CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+                      let rawSize = axValue(window, kAXSizeAttribute),
+                      CFGetTypeID(rawSize) == AXValueGetTypeID()
+                else { return false }
+                var position = CGPoint.zero
+                var size = CGSize.zero
+                guard AXValueGetValue(rawPosition as! AXValue, .cgPoint, &position),
+                      AXValueGetValue(rawSize as! AXValue, .cgSize, &size)
+                else { return false }
+                return abs(position.x - target.bounds.minX) <= 2 &&
+                    abs(position.y - target.bounds.minY) <= 2 &&
+                    abs(size.width - target.bounds.width) <= 2 &&
+                    abs(size.height - target.bounds.height) <= 2
+        }
+        guard let matchingWindow else { throw HostFailure.unsupportedOperation("foreground-window") }
+        _ = AXUIElementSetAttributeValue(
+            applicationElement,
+            kAXFocusedWindowAttribute as CFString,
+            matchingWindow
+        )
+        _ = AXUIElementSetAttributeValue(
+            matchingWindow,
+            kAXMainAttribute as CFString,
+            kCFBooleanTrue
+        )
+        _ = AXUIElementPerformAction(matchingWindow, kAXRaiseAction as CFString)
+        try await Task.sleep(for: .milliseconds(100))
+        let current = try requireTarget(target.targetId)
+        guard current.stableIdentity == target.stableIdentity,
+              current.bounds == target.bounds,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processId
+        else { throw HostFailure.targetIdentityChanged }
     }
 
     private func typeText(_ text: String) throws {
@@ -535,6 +719,8 @@ public actor MacComputerUseHost {
                 down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress!)
                 up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress!)
             }
+            markSynthetic(down)
+            markSynthetic(up)
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
             cursor = end
@@ -584,6 +770,7 @@ public actor MacComputerUseHost {
                     wheel3: 0
                   )
             else { throw HostFailure.malformedRequest("scroll") }
+            markSynthetic(event)
             event.post(tap: .cghidEventTap)
         case "text-entry":
             try typeText(action["text"]?.string ?? "")
@@ -666,14 +853,19 @@ public actor MacComputerUseHost {
               !actions.isEmpty,
               actions.count <= 64
         else { throw HostFailure.malformedRequest("actions") }
+        guard let humanInputGeneration = humanInputMonitor.snapshot() else {
+            throw HostFailure.permissionMissing("input-monitoring")
+        }
+        try await focus(target)
+        try requireActive(request.leaseId, humanInputGeneration: humanInputGeneration)
         var completed = 0
         for value in actions {
-            try requireActive(request.leaseId)
+            try requireActive(request.leaseId, humanInputGeneration: humanInputGeneration)
             guard let action = value.object else { throw HostFailure.malformedRequest("action") }
             try await perform(action, target: target, observation: observation)
             completed += 1
         }
-        try requireActive(request.leaseId)
+        try requireActive(request.leaseId, humanInputGeneration: humanInputGeneration)
         let fresh = try await observe(targetId: target.targetId)
         return .object([
             "completedActions": .number(Double(completed)),
@@ -687,9 +879,10 @@ public actor MacComputerUseHost {
         try? mouseEvent(type: .rightMouseUp, point: location, button: .right)
         for key in ["shift", "control", "alt", "meta"] {
             if let code = keyCodes[key] {
-                CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)?.post(
-                    tap: .cghidEventTap
-                )
+                if let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) {
+                    markSynthetic(event)
+                    event.post(tap: .cghidEventTap)
+                }
             }
         }
     }

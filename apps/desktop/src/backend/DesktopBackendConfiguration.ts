@@ -456,6 +456,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onNone: () => ({}),
         onSome: (computerUseHelperPath) => ({
           computerUseHelperPath,
+          computerUseHostExecutablePath: process.execPath,
           ...(environment.isDevelopment ? { computerUseHelperDevelopment: true } : {}),
         }),
       }),

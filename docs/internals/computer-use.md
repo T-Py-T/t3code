@@ -1,9 +1,8 @@
 # T3 Computer Use specification
 
-> Status: native implementation and product acceptance contract. T3-owned macOS and Windows hosts,
-> the shared Codex/Pi/Atomic toolkit, policy boundaries, lifecycle controls, history, and semantic
-> browser routes are implemented behind the Computer Use setting. Release signing and the remaining
-> parity gaps below still gate a feature-complete claim.
+> Status: experimental preview and product acceptance contract. The Computer Use setting is an
+> explicit containment boundary, not a general-availability or feature-complete claim. Release
+> signing and every remaining parity gate below must pass before that label is removed.
 
 This document defines the feature-complete T3 Code Computer Use capability. It converts the verified
 gaps against ChatGPT Computer Use into buildable product requirements, module seams, security rules,
@@ -40,6 +39,9 @@ separate comparison path documented in [Codex Computer Use](./providers-codex-co
 The settings and timeline must describe these distinctions directly. In particular,
 `office-accessibility` must not be presented as an Office add-in, and lock-transition safety must not
 be presented as unattended locked use.
+
+The preview must remain off by default and visibly labeled experimental on every settings surface.
+It must not be enabled in a production release channel until all release gates in this document pass.
 
 ## Product definition
 

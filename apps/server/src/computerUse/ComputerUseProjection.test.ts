@@ -61,7 +61,7 @@ it("does not project environment-only audit rows into an unrelated thread", () =
   );
 });
 
-it.effect("continues projecting after one history entry fails to dispatch", () =>
+it.effect("retries a persisted history entry before projecting the next entry", () =>
   Effect.gen(function* () {
     const attempted: string[] = [];
     yield* projectComputerUseHistoryChanges(
@@ -78,8 +78,9 @@ it.effect("continues projecting after one history entry fails to dispatch", () =
           ? Effect.fail("simulated dispatch failure" as const)
           : Effect.void;
       },
+      0,
     );
 
-    expect(attempted).toEqual(["Acting in TextEdit.", "Recovered."]);
+    expect(attempted).toEqual(["Acting in TextEdit.", "Acting in TextEdit.", "Recovered."]);
   }),
 );

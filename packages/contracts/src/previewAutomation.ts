@@ -88,6 +88,7 @@ export const PreviewAutomationStatus = Schema.Struct({
   browser: Schema.optional(PreviewAutomationBrowser),
   connectionState: Schema.optional(PreviewAutomationConnectionState),
   profileName: Schema.optional(Schema.String),
+  profileId: Schema.optional(TrimmedNonEmptyString),
   tabId: Schema.NullOr(PreviewTabId),
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
@@ -603,6 +604,7 @@ export const PreviewAutomationHost = Schema.Struct({
    * a newer server safely coexist with an older desktop during rollout.
    */
   supportedOperations: Schema.optional(Schema.Array(PreviewAutomationOperation)),
+  supportedBrowsers: Schema.optional(Schema.Array(PreviewAutomationBrowser)),
 });
 export type PreviewAutomationHost = typeof PreviewAutomationHost.Type;
 

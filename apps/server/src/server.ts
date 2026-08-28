@@ -10,6 +10,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
 import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ComputerUseProjection from "./computerUse/ComputerUseProjection.ts";
@@ -152,11 +153,14 @@ const PtyAdapterLive = Layer.unwrap(
 );
 
 const ComputerUseHistoryLive = ComputerUseHistory.layer;
+const ComputerUseControlLive = ComputerUseControl.layer;
 const ComputerUsePolicyLive = ComputerUsePolicy.layer.pipe(Layer.provide(ComputerUseHistoryLive));
 const ComputerUseDependenciesLive = Layer.mergeAll(
   ComputerUseBroker.layer,
+  ComputerUseControlLive,
   ComputerUseHistoryLive,
   ComputerUsePolicyLive,
+  PreviewAutomationBroker.layer,
 );
 const ComputerUseCoreLayerLive = Layer.mergeAll(
   ComputerUseDependenciesLive,
@@ -498,7 +502,6 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),

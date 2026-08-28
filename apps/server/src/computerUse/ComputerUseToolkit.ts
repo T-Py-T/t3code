@@ -36,6 +36,7 @@ import {
   type ComputerUseInvocationScope,
   type ComputerUseStopInput,
 } from "./ComputerUseBroker.ts";
+import { ComputerUseControl } from "./ComputerUseControl.ts";
 import { ComputerUsePolicy } from "./ComputerUsePolicy.ts";
 import { ComputerUseHistory } from "./ComputerUseHistory.ts";
 
@@ -174,6 +175,7 @@ const describeActionBatch = (batch: ComputerUseActionBatch): string =>
 
 export const make = Effect.gen(function* ComputerUseToolkitMake() {
   const broker = yield* ComputerUseBroker;
+  const control = yield* ComputerUseControl;
   const policy = yield* ComputerUsePolicy;
   const history = yield* ComputerUseHistory;
   const crypto = yield* Crypto.Crypto;
@@ -227,6 +229,37 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
       resultTag: "no-available-host",
     });
     return yield* new ComputerUseNoAvailableHostError({ operation, ...scope });
+  });
+
+  const claimControl = Effect.fn("ComputerUseToolkit.claimControl")(function* (
+    scope: ComputerUseInvocationScope,
+    input: {
+      readonly hostId: ComputerUseHostId;
+      readonly operation: ComputerUseHistoryOperation;
+      readonly target: ComputerUseTarget;
+      readonly risk: ComputerUseActionRisk;
+      readonly action?: ComputerUseActionDescriptor;
+    },
+  ) {
+    const occupied = yield* control.claim(scope);
+    if (occupied === undefined) return undefined;
+    const decision = { _tag: "require-takeover", risk: input.risk } as const;
+    yield* appendHistory(scope, {
+      hostId: input.hostId,
+      operation: input.operation,
+      target: input.target,
+      risk: input.risk,
+      state: "failed",
+      summary: `Computer Use is controlled by another agent turn.`,
+      resultTag: decision._tag,
+    });
+    return {
+      _tag: "policy",
+      decision,
+      target: input.target,
+      risk: input.risk,
+      ...(input.action === undefined ? {} : { action: input.action }),
+    } satisfies ComputerUsePolicyBoundary;
   });
 
   const status: ComputerUseToolkit["Service"]["status"] = Effect.fn("ComputerUseToolkit.status")(
@@ -362,6 +395,13 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
           risk: "inspect",
         } as const;
       }
+      const occupied = yield* claimControl(input.scope, {
+        hostId: host.hostId,
+        operation: "observe",
+        target: input.target,
+        risk: "inspect",
+      });
+      if (occupied !== undefined) return occupied;
       yield* appendHistory(input.scope, {
         hostId: host.hostId,
         operation: "observe",
@@ -487,6 +527,14 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
         ...(input.action === undefined ? {} : { action: input.action }),
       } as const;
     }
+    const occupied = yield* claimControl(input.scope, {
+      hostId: input.hostId,
+      operation: input.operation,
+      target: input.target,
+      risk: input.risk,
+      ...(input.action === undefined ? {} : { action: input.action }),
+    });
+    if (occupied !== undefined) return occupied;
     yield* appendHistory(input.scope, {
       hostId: input.hostId,
       operation: input.operation,
@@ -583,6 +631,14 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
           action,
         } as const;
       }
+      const occupied = yield* claimControl(input.scope, {
+        hostId: host.hostId,
+        operation: "act",
+        target: input.target,
+        risk: input.risk,
+        action,
+      });
+      if (occupied !== undefined) return occupied;
       yield* appendHistory(input.scope, {
         hostId: host.hostId,
         operation: "act",
@@ -657,7 +713,7 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
     listTargets,
     observe,
     act,
-    stop: broker.stop,
+    stop: (input) => broker.stop(input).pipe(Effect.ensuring(control.release(input.scope))),
     resolveApproval: (approvalId, decision) => policy.resolveApproval({ approvalId, decision }),
     executeGoverned,
   });

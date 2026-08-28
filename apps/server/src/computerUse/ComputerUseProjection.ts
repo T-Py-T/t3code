@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -61,6 +62,7 @@ export const historyEntryToActivityCommand = (
 export const projectComputerUseHistoryChanges = <E>(
   changes: Stream.Stream<ComputerUseHistoryEntry>,
   dispatch: (command: OrchestrationCommand) => Effect.Effect<unknown, E>,
+  retryDelayMs = 1_000,
 ): Effect.Effect<void> =>
   changes.pipe(
     Stream.runForEach((entry) => {
@@ -68,12 +70,13 @@ export const projectComputerUseHistoryChanges = <E>(
       if (command === null) return Effect.void;
       return dispatch(command).pipe(
         Effect.asVoid,
-        Effect.catchCause((cause) =>
+        Effect.tapErrorCause((cause) =>
           Effect.logError("Could not project a Computer Use history entry.", {
             historyEntryId: entry.entryId,
             cause,
           }),
         ),
+        Effect.retry(Schedule.spaced(retryDelayMs)),
       );
     }),
   );
@@ -81,7 +84,7 @@ export const projectComputerUseHistoryChanges = <E>(
 const run = Effect.gen(function* ComputerUseProjectionRun() {
   const history = yield* ComputerUseHistory;
   const orchestration = yield* OrchestrationEngineService;
-  yield* projectComputerUseHistoryChanges(history.changes, orchestration.dispatch).pipe(
+  yield* projectComputerUseHistoryChanges(history.projectionChanges, orchestration.dispatch).pipe(
     Effect.catchCause((cause) =>
       Effect.logError("Computer Use activity projection stopped.", { cause }),
     ),

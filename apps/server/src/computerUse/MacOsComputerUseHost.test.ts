@@ -7,7 +7,9 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
 import {
+  macOsComputerUseSigningIdentityMatches,
   macOsComputerUseHelperPathCandidates,
+  parseMacOsCodeSigningIdentity,
   runMacOsComputerUseTransport,
   shouldHashDevelopmentHelper,
 } from "./MacOsComputerUseHost.ts";
@@ -46,6 +48,32 @@ describe("macOsComputerUseHelperPathCandidates", () => {
         new URL("file:///repo/native/computer-use-macos/.build/debug/T3CodeComputerUse"),
       ),
     );
+  });
+});
+
+describe("macOS helper signing identity", () => {
+  it("pins the helper team to the installed T3 Code desktop app", () => {
+    const helper = parseMacOsCodeSigningIdentity(
+      "Identifier=T3CodeComputerUse\nTeamIdentifier=ABC1234567",
+    );
+    const host = parseMacOsCodeSigningIdentity(
+      "Identifier=com.t3tools.t3code\nTeamIdentifier=ABC1234567",
+    );
+    expect(helper).toBeDefined();
+    expect(host).toBeDefined();
+    expect(macOsComputerUseSigningIdentityMatches(helper!, host!)).toBe(true);
+    expect(
+      macOsComputerUseSigningIdentityMatches(
+        { identifier: "OtherHelper", teamId: "ABC1234567" },
+        host!,
+      ),
+    ).toBe(false);
+    expect(
+      macOsComputerUseSigningIdentityMatches(helper!, {
+        identifier: "com.t3tools.t3code",
+        teamId: "OTHERTEAM1",
+      }),
+    ).toBe(false);
   });
 });
 

@@ -729,6 +729,49 @@ it.effect("does not route new operations to legacy hosts that did not advertise 
   ),
 );
 
+it.effect("routes external-browser work only to a host that advertises that profile", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const builtInRequests = requestsFrom(
+        yield* broker.connect(makeHost({ clientId: "client-built-in" })),
+      );
+      const externalRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({ clientId: "client-external", supportedBrowsers: ["external"] }),
+        ),
+      );
+      yield* Stream.runForEach(builtInRequests, (request) =>
+        broker.respond({
+          clientId: "client-built-in",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "built-in",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Stream.runForEach(externalRequests, (request) =>
+        broker.respond({
+          clientId: "client-external",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "external",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(
+        yield* broker.invoke<string>({
+          scope,
+          operation: "status",
+          input: { browser: "external" },
+        }),
+      ).toBe("external");
+    }),
+  ),
+);
+
 it.effect("routes resize to a capable host instead of a newer legacy connection", () =>
   Effect.scoped(
     Effect.gen(function* () {

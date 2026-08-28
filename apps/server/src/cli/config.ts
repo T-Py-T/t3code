@@ -387,6 +387,7 @@ export const resolveServerConfig = (
       desktopTelemetryControlFd,
       resourceMonitorPath,
       computerUseHelperPath: env.computerUseHelperPath ?? bootstrap?.computerUseHelperPath,
+      computerUseHostExecutablePath: bootstrap?.computerUseHostExecutablePath,
       ...(bootstrap?.computerUseHelperDevelopment === true
         ? { computerUseHelperDevelopment: true }
         : {}),

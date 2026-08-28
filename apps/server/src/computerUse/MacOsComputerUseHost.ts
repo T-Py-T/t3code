@@ -43,6 +43,54 @@ export const macOsComputerUseHelperPathCandidates = (
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
+interface MacOsCodeSigningIdentity {
+  readonly identifier: string;
+  readonly teamId: string;
+}
+
+export function parseMacOsCodeSigningIdentity(output: string): MacOsCodeSigningIdentity | undefined {
+  const teamId = /^TeamIdentifier=(.+)$/m.exec(output)?.[1]?.trim();
+  const identifier = /^Identifier=(.+)$/m.exec(output)?.[1]?.trim();
+  return !teamId || teamId === "not set" || !identifier ? undefined : { identifier, teamId };
+}
+
+export function macOsComputerUseSigningIdentityMatches(
+  helper: MacOsCodeSigningIdentity,
+  host: MacOsCodeSigningIdentity,
+): boolean {
+  return (
+    host.identifier === "com.t3tools.t3code" &&
+    helper.identifier === "T3CodeComputerUse" &&
+    helper.teamId === host.teamId
+  );
+}
+
+const readCodeSigningIdentity = Effect.fn("MacOsComputerUseHost.readCodeSigningIdentity")(
+  function* (path: string) {
+    const processRunner = yield* ProcessRunner.ProcessRunner;
+    const description = yield* processRunner
+      .run({
+        command: "/usr/bin/codesign",
+        args: ["-d", "--verbose=4", path],
+        timeout: "10 seconds",
+        maxOutputBytes: 64 * 1_024,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new LocalComputerUseHostTransportError({
+              operation: "verify",
+              detail: "The macOS code signing identity could not be read.",
+              cause,
+            }),
+        ),
+      );
+    return description.code === 0
+      ? parseMacOsCodeSigningIdentity(`${description.stdout}\n${description.stderr}`)
+      : undefined;
+  },
+);
+
 const verifyHelper = Effect.fn("MacOsComputerUseHost.verifyHelper")(function* (
   config: ServerConfig.ServerConfig["Service"],
 ) {
@@ -123,39 +171,26 @@ const verifyHelper = Effect.fn("MacOsComputerUseHost.verifyHelper")(function* (
       detail: "The macOS helper has an invalid code signature.",
     });
   }
-  const description = yield* processRunner
-    .run({
-      command: "/usr/bin/codesign",
-      args: ["-d", "--verbose=4", path],
-      timeout: "10 seconds",
-      maxOutputBytes: 64 * 1_024,
-    })
-    .pipe(
-      Effect.mapError(
-        (cause) =>
-          new LocalComputerUseHostTransportError({
-            operation: "verify",
-            detail: "The macOS helper signing identity could not be read.",
-            cause,
-          }),
-      ),
-    );
-  if (description.code !== 0) {
+  const helperIdentity = yield* readCodeSigningIdentity(path);
+  const hostExecutablePath = config.computerUseHostExecutablePath;
+  if (!helperIdentity || !hostExecutablePath) {
     return yield* new LocalComputerUseHostTransportError({
       operation: "verify",
-      detail: "The macOS helper signing identity is unavailable.",
+      detail: "The macOS helper or desktop host signing identity is unavailable.",
     });
   }
-  const diagnostics = `${description.stdout}\n${description.stderr}`;
-  const teamId = /^TeamIdentifier=(.+)$/m.exec(diagnostics)?.[1]?.trim();
-  const identifier = /^Identifier=(.+)$/m.exec(diagnostics)?.[1]?.trim();
-  if (!teamId || teamId === "not set" || !identifier) {
+  const hostIdentity = yield* readCodeSigningIdentity(hostExecutablePath);
+  if (!hostIdentity || !macOsComputerUseSigningIdentityMatches(helperIdentity, hostIdentity)) {
     return yield* new LocalComputerUseHostTransportError({
       operation: "verify",
-      detail: "The release helper is not signed with a stable T3 Code identity.",
+      detail: "The macOS helper is not signed by the installed T3 Code desktop team.",
     });
   }
-  return { path, subject: identifier, publisher: teamId } satisfies VerifiedLocalComputerUseHelper;
+  return {
+    path,
+    subject: helperIdentity.identifier,
+    publisher: helperIdentity.teamId,
+  } satisfies VerifiedLocalComputerUseHelper;
 });
 
 export const runMacOsComputerUseTransport = runLocalComputerUseTransport;

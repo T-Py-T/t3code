@@ -34,9 +34,11 @@ actions still ask for approval. It does not change the thread to **Full access**
 Computer Use permissions are separate from the thread's permission mode. **Full access** never
 bypasses an app grant or a point-of-risk confirmation.
 
-On web or desktop, turn on **Settings** → **Integrations** → **Computer Use** before starting a new
-Codex, Pi, or Atomic session. The setting is off by default, and an existing session keeps the tools
-it started with. T3 Code asks separately before observing or operating an app. An app grant can last
+Computer Use is an experimental preview while native signing, physical-platform acceptance, Office
+add-in parity, and locked-use gates remain in progress. On web or desktop, turn on **Settings** →
+**Integrations** → **Computer Use (experimental)** before starting a new Codex, Pi, or Atomic
+session. The setting is off by default, and an existing session keeps the tools it started with. T3
+Code asks separately before observing or operating an app. An app grant can last
 for one action, the current turn, the provider session, or permanently on that verified computer.
 Actions that may have an external effect require another confirmation immediately before execution.
 
@@ -69,7 +71,7 @@ The desktop app can also open a dedicated, persistent T3 Code browser profile fo
 a sign-in. **Signed-in browser access** is off by default and never attaches to your
 everyday Chrome profile. Enable it under the same Browser settings, choose **Open browser**, and sign
 in only to the sites you want that profile to use. Disabling access closes the controlled browser;
-external-browser recording is not supported yet.
+external-browser recording is not supported yet and is part of the experimental preview.
 
 Both browser routes use the same app-grant, point-of-risk confirmation, lifecycle, and metadata
 history policy as native Computer Use. The browser settings and native **Computer Use** switch are

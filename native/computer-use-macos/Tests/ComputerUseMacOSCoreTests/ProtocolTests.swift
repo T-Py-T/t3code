@@ -94,3 +94,20 @@ import Testing
     #expect(macOsSessionIsLocked([:]) == false)
     #expect(macOsSessionIsLocked(["CGSSessionScreenIsLocked": true]))
 }
+
+@Test func unsignedExecutableIdentityBindsPathAndContent() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let first = directory.appendingPathComponent("first-helper")
+    let second = directory.appendingPathComponent("second-helper")
+    try Data("first".utf8).write(to: first)
+    try Data("first".utf8).write(to: second)
+    let firstIdentity = macOsExecutableIdentity(executableURL: first)
+    let secondIdentity = macOsExecutableIdentity(executableURL: second)
+    #expect(firstIdentity != nil)
+    #expect(firstIdentity != secondIdentity)
+    try Data("second".utf8).write(to: first)
+    #expect(macOsExecutableIdentity(executableURL: first) != firstIdentity)
+}

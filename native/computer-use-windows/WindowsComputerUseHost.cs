@@ -19,6 +19,7 @@ public sealed class WindowsComputerUseHost : IDisposable
     private const int MaximumAccessibilityElements = 5_000;
     private static readonly SyntheticInputTracker InputTracker = new();
     private readonly ConcurrentDictionary<string, byte> _cancelledLeases;
+    private readonly HumanInputMonitor _humanInputMonitor = new();
     private readonly Dictionary<string, ObservationRecord> _observations = new(
         StringComparer.Ordinal
     );
@@ -179,17 +180,20 @@ public sealed class WindowsComputerUseHost : IDisposable
             throw HostFailure.Malformed("actions");
         }
 
-        RequireActive(request.LeaseId);
+        var humanInputGeneration = _humanInputMonitor.Snapshot()
+            ?? throw HostFailure.Permission("input-monitoring");
         Focus(target);
+        RequireActive(request.LeaseId, humanInputGeneration);
         var completed = 0;
         try
         {
             foreach (var action in actions.EnumerateArray())
             {
-                RequireActive(request.LeaseId);
-                Perform(action, target, observation, request.LeaseId);
+                RequireActive(request.LeaseId, humanInputGeneration);
+                Perform(action, target, observation, request.LeaseId, humanInputGeneration);
                 completed++;
             }
+            RequireActive(request.LeaseId, humanInputGeneration);
         }
         finally
         {
@@ -214,7 +218,8 @@ public sealed class WindowsComputerUseHost : IDisposable
         JsonElement action,
         TargetRecord target,
         ObservationRecord observation,
-        string leaseId
+        string leaseId,
+        long humanInputGeneration
     )
     {
         var tag = RequiredString(action, "_tag");
@@ -250,7 +255,8 @@ public sealed class WindowsComputerUseHost : IDisposable
                         current,
                         TargetPoint(action, target),
                         OptionalInteger(action, "durationMs", 0),
-                        leaseId
+                        leaseId,
+                        humanInputGeneration
                     );
                     return;
                 }
@@ -268,7 +274,8 @@ public sealed class WindowsComputerUseHost : IDisposable
                             start,
                             end,
                             OptionalInteger(action, "durationMs", 0),
-                            leaseId
+                            leaseId,
+                            humanInputGeneration
                         );
                     }
                     finally
@@ -326,7 +333,7 @@ public sealed class WindowsComputerUseHost : IDisposable
                     var remaining = Math.Clamp(RequiredInteger(action, "durationMs"), 0, 60_000);
                     while (remaining > 0)
                     {
-                        RequireActive(leaseId);
+                        RequireActive(leaseId, humanInputGeneration);
                         var slice = Math.Min(remaining, 25);
                         Thread.Sleep(slice);
                         remaining -= slice;
@@ -718,7 +725,13 @@ public sealed class WindowsComputerUseHost : IDisposable
         }
     }
 
-    private void MoveCursor(NativePoint from, NativePoint to, int durationMs, string leaseId)
+    private void MoveCursor(
+        NativePoint from,
+        NativePoint to,
+        int durationMs,
+        string leaseId,
+        long humanInputGeneration
+    )
     {
         var points = HostMath.Interpolate(
             new Point(from.X, from.Y),
@@ -728,7 +741,7 @@ public sealed class WindowsComputerUseHost : IDisposable
         var delay = durationMs > 0 ? Math.Max(1, durationMs / points.Count) : 0;
         for (var index = 0; index < points.Count; index++)
         {
-            RequireActive(leaseId);
+            RequireActive(leaseId, humanInputGeneration);
             SetCursor(new NativePoint(points[index].X, points[index].Y));
             if (delay > 0 && index + 1 < points.Count)
             {
@@ -779,7 +792,7 @@ public sealed class WindowsComputerUseHost : IDisposable
         }
     }
 
-    private void RequireActive(string leaseId)
+    private void RequireActive(string leaseId, long humanInputGeneration)
     {
         if (DesktopIsLocked())
         {
@@ -789,6 +802,11 @@ public sealed class WindowsComputerUseHost : IDisposable
         if (_cancelledLeases.ContainsKey(leaseId))
         {
             throw HostFailure.Interrupted();
+        }
+
+        if (_humanInputMonitor.Snapshot() != humanInputGeneration)
+        {
+            throw HostFailure.HumanInputDetected();
         }
     }
 
@@ -993,15 +1011,26 @@ public sealed class WindowsComputerUseHost : IDisposable
 
     private static void SetCursor(NativePoint point)
     {
-        if (!NativeMethods.SetCursorPos(point.X, point.Y))
-        {
-            throw HostFailure.Permission("input");
-        }
+        var left = NativeMethods.GetSystemMetrics(76);
+        var top = NativeMethods.GetSystemMetrics(77);
+        var width = Math.Max(2, NativeMethods.GetSystemMetrics(78));
+        var height = Math.Max(2, NativeMethods.GetSystemMetrics(79));
+        var normalizedX = (int)Math.Clamp(
+            Math.Round((point.X - left) * 65_535d / (width - 1)),
+            0,
+            65_535
+        );
+        var normalizedY = (int)Math.Clamp(
+            Math.Round((point.Y - top) * 65_535d / (height - 1)),
+            0,
+            65_535
+        );
+        SendMouse(MouseEventFlags.Move | MouseEventFlags.Absolute | MouseEventFlags.VirtualDesk, 0, normalizedX, normalizedY);
     }
 
-    private static void SendMouse(MouseEventFlags flags, uint data)
+    private static void SendMouse(MouseEventFlags flags, uint data, int x = 0, int y = 0)
     {
-        var input = NativeInput.Mouse(flags, data);
+        var input = NativeInput.Mouse(flags, data, x, y);
         if (NativeMethods.SendInput(1, [input], Marshal.SizeOf<NativeInput>()) != 1)
         {
             throw HostFailure.Permission("input");
@@ -1217,6 +1246,7 @@ public sealed class WindowsComputerUseHost : IDisposable
 
         _disposed = true;
         ReleaseSyntheticInput();
+        _humanInputMonitor.Dispose();
         _observations.Clear();
     }
 
@@ -1327,6 +1357,101 @@ internal sealed record SyntheticInputSnapshot(
     IReadOnlyList<ushort> Keys
 );
 
+internal sealed class HumanInputMonitor : IDisposable
+{
+    private const int KeyboardHook = 13;
+    private const int MouseHook = 14;
+    private const uint QuitMessage = 0x0012;
+    private readonly NativeMethods.LowLevelHookCallback _keyboardCallback;
+    private readonly NativeMethods.LowLevelHookCallback _mouseCallback;
+    private readonly ManualResetEventSlim _ready = new(false);
+    private readonly Thread _thread;
+    private IntPtr _keyboardHook;
+    private IntPtr _mouseHook;
+    private long _generation;
+    private uint _threadId;
+    private bool _available;
+    private bool _disposed;
+
+    public HumanInputMonitor()
+    {
+        _keyboardCallback = KeyboardEvent;
+        _mouseCallback = MouseEvent;
+        _thread = new Thread(Run) { IsBackground = true, Name = "T3 Computer Use input monitor" };
+        _thread.Start();
+        _ready.Wait(TimeSpan.FromSeconds(2));
+    }
+
+    public long? Snapshot() =>
+        Volatile.Read(ref _available) ? Interlocked.Read(ref _generation) : null;
+
+    private IntPtr KeyboardEvent(int code, IntPtr message, IntPtr data)
+    {
+        if (code >= 0)
+        {
+            var input = Marshal.PtrToStructure<LowLevelKeyboardInput>(data);
+            if (input.ExtraInfo != NativeInputMetadata.Marker)
+            {
+                Interlocked.Increment(ref _generation);
+            }
+        }
+        return NativeMethods.CallNextHookEx(IntPtr.Zero, code, message, data);
+    }
+
+    private IntPtr MouseEvent(int code, IntPtr message, IntPtr data)
+    {
+        if (code >= 0)
+        {
+            var input = Marshal.PtrToStructure<LowLevelMouseInput>(data);
+            if (input.ExtraInfo != NativeInputMetadata.Marker)
+            {
+                Interlocked.Increment(ref _generation);
+            }
+        }
+        return NativeMethods.CallNextHookEx(IntPtr.Zero, code, message, data);
+    }
+
+    private void Run()
+    {
+        _threadId = NativeMethods.GetCurrentThreadId();
+        var module = NativeMethods.GetModuleHandle(null);
+        _keyboardHook = NativeMethods.SetWindowsHookEx(
+            KeyboardHook,
+            _keyboardCallback,
+            module,
+            0
+        );
+        _mouseHook = NativeMethods.SetWindowsHookEx(MouseHook, _mouseCallback, module, 0);
+        Volatile.Write(ref _available, _keyboardHook != IntPtr.Zero && _mouseHook != IntPtr.Zero);
+        _ready.Set();
+        if (_available)
+        {
+            while (NativeMethods.GetMessage(out var message, IntPtr.Zero, 0, 0) > 0)
+            {
+                NativeMethods.TranslateMessage(ref message);
+                NativeMethods.DispatchMessage(ref message);
+            }
+        }
+        if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
+        if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
+        Volatile.Write(ref _available, false);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_threadId != 0) NativeMethods.PostThreadMessage(_threadId, QuitMessage, IntPtr.Zero, IntPtr.Zero);
+        if (_thread.IsAlive) _thread.Join(TimeSpan.FromSeconds(1));
+        _ready.Dispose();
+    }
+}
+
+internal static class NativeInputMetadata
+{
+    public static readonly UIntPtr Marker = new(0x54334355u);
+}
+
 internal sealed class HostFailure : Exception
 {
     private HostFailure(HostErrorPayload payload)
@@ -1400,6 +1525,14 @@ internal sealed class HostFailure : Exception
             HostErrorPayload.Create(
                 "ComputerUseLockStateChangedError",
                 "The Windows desktop locked or changed during Computer Use."
+            )
+        );
+
+    public static HostFailure HumanInputDetected() =>
+        new(
+            HostErrorPayload.Create(
+                "ComputerUseHumanInputDetectedError",
+                "Local keyboard or pointer input interrupted Computer Use."
             )
         );
 
@@ -1519,12 +1652,15 @@ internal static class KeyMapping
 [Flags]
 internal enum MouseEventFlags : uint
 {
+    Move = 0x0001,
     LeftDown = 0x0002,
     LeftUp = 0x0004,
     RightDown = 0x0008,
     RightUp = 0x0010,
     Wheel = 0x0800,
     HorizontalWheel = 0x1000,
+    VirtualDesk = 0x4000,
+    Absolute = 0x8000,
 }
 
 [Flags]
@@ -1537,6 +1673,38 @@ internal enum KeyboardEventFlags : uint
 
 [StructLayout(LayoutKind.Sequential)]
 internal readonly record struct NativePoint(int X, int Y);
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct LowLevelKeyboardInput
+{
+    public uint VirtualKey;
+    public uint ScanCode;
+    public uint Flags;
+    public uint Time;
+    public UIntPtr ExtraInfo;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct LowLevelMouseInput
+{
+    public NativePoint Point;
+    public uint MouseData;
+    public uint Flags;
+    public uint Time;
+    public UIntPtr ExtraInfo;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeMessage
+{
+    public IntPtr Window;
+    public uint Message;
+    public UIntPtr WParam;
+    public IntPtr LParam;
+    public uint Time;
+    public NativePoint Point;
+    public uint Private;
+}
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct NativeRectangle
@@ -1631,13 +1799,20 @@ internal struct NativeInput
     public uint Type;
     public InputUnion Value;
 
-    public static NativeInput Mouse(MouseEventFlags flags, uint data) =>
+    public static NativeInput Mouse(MouseEventFlags flags, uint data, int x = 0, int y = 0) =>
         new()
         {
             Type = 0,
             Value = new InputUnion
             {
-                Mouse = new MouseInput { MouseData = data, Flags = flags },
+                Mouse = new MouseInput
+                {
+                    X = x,
+                    Y = y,
+                    MouseData = data,
+                    Flags = flags,
+                    ExtraInfo = NativeInputMetadata.Marker,
+                },
             },
         };
 
@@ -1656,6 +1831,7 @@ internal struct NativeInput
                     VirtualKey = virtualKey,
                     ScanCode = scanCode,
                     Flags = flags,
+                    ExtraInfo = NativeInputMetadata.Marker,
                 },
             },
         };
@@ -1664,6 +1840,57 @@ internal struct NativeInput
 internal static class NativeMethods
 {
     internal delegate bool EnumWindowsCallback(IntPtr handle, IntPtr parameter);
+    internal delegate IntPtr LowLevelHookCallback(int code, IntPtr message, IntPtr data);
+
+    [DllImport("user32.dll")]
+    internal static extern int GetSystemMetrics(int index);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    internal static extern IntPtr GetModuleHandle(string? moduleName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr SetWindowsHookEx(
+        int hook,
+        LowLevelHookCallback callback,
+        IntPtr module,
+        uint threadId
+    );
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr CallNextHookEx(
+        IntPtr hook,
+        int code,
+        IntPtr message,
+        IntPtr data
+    );
+
+    [DllImport("user32.dll")]
+    internal static extern int GetMessage(
+        out NativeMessage message,
+        IntPtr window,
+        uint minimum,
+        uint maximum
+    );
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool TranslateMessage(ref NativeMessage message);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr DispatchMessage(ref NativeMessage message);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PostThreadMessage(
+        uint threadId,
+        uint message,
+        IntPtr wParam,
+        IntPtr lParam
+    );
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

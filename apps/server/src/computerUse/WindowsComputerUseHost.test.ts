@@ -3,9 +3,11 @@ import * as NodeURL from "node:url";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  minimalWindowsComputerUseEnvironment,
   parseWindowsAuthenticodeIdentity,
   windowsAuthenticodeProbeInput,
   windowsComputerUseHelperPathCandidates,
+  windowsComputerUseSigningIdentityMatches,
 } from "./WindowsComputerUseHost.ts";
 
 describe("windowsComputerUseHelperPathCandidates", () => {
@@ -117,5 +119,31 @@ describe("windowsAuthenticodeProbeInput", () => {
       timeout: "10 seconds",
       maxOutputBytes: 64 * 1_024,
     });
+  });
+});
+
+describe("Windows helper process isolation", () => {
+  it("pins the helper to the installed desktop signer", () => {
+    const identity = {
+      subject: "authenticode:00AABB",
+      publisher: "CN=T3 Code, O=T3 Code",
+    };
+    expect(windowsComputerUseSigningIdentityMatches(identity, identity)).toBe(true);
+    expect(
+      windowsComputerUseSigningIdentityMatches(identity, {
+        subject: "authenticode:DEADBEEF",
+        publisher: identity.publisher,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not expose provider credentials to the helper", () => {
+    expect(
+      minimalWindowsComputerUseEnvironment({
+        SystemRoot: "C:\\Windows",
+        TEMP: "C:\\Temp",
+        OPENAI_API_KEY: "secret",
+      }),
+    ).toEqual({ SystemRoot: "C:\\Windows", TEMP: "C:\\Temp" });
   });
 });

@@ -14,6 +14,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ComputerUseHistory from "./ComputerUseHistory.ts";
@@ -103,4 +104,20 @@ it.effect("does not publish history that failed to persist", () =>
     expect(appendExit._tag).toBe("Failure");
     expect(yield* history.list(environmentId)).toEqual([]);
   }),
+);
+
+it.effect("replays restored history to the durable projection stream", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const source = yield* ComputerUseHistory.make;
+      const restoredEntry = yield* source.append(appendInput);
+      const restored = yield* ComputerUseHistory.makeWithPersistence({
+        load: Effect.succeed([restoredEntry]),
+        save: () => Effect.void,
+      });
+
+      const replayed = yield* restored.projectionChanges.pipe(Stream.take(1), Stream.runCollect);
+      expect([...replayed]).toEqual([restoredEntry]);
+    }),
+  ),
 );

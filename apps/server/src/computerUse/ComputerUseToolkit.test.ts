@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseBroker from "./ComputerUseBroker.ts";
+import * as ComputerUseControl from "./ComputerUseControl.ts";
 import * as ComputerUsePolicy from "./ComputerUsePolicy.ts";
 import * as ComputerUseHistory from "./ComputerUseHistory.ts";
 import * as ComputerUseToolkit from "./ComputerUseToolkit.ts";
@@ -59,10 +60,12 @@ const observation: ComputerUseObservation = {
 
 const makeHarness = Effect.gen(function* () {
   const broker = yield* ComputerUseBroker.make.pipe(Effect.provide(NodeServices.layer));
+  const control = yield* ComputerUseControl.make;
   const policy = yield* ComputerUsePolicy.make;
   const history = yield* ComputerUseHistory.make;
   const toolkit = yield* ComputerUseToolkit.make.pipe(
     Effect.provideService(ComputerUseBroker.ComputerUseBroker, broker),
+    Effect.provideService(ComputerUseControl.ComputerUseControl, control),
     Effect.provideService(ComputerUsePolicy.ComputerUsePolicy, policy),
     Effect.provideService(ComputerUseHistory.ComputerUseHistory, history),
     Effect.provide(NodeServices.layer),

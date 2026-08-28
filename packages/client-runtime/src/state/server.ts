@@ -697,13 +697,12 @@ export function createServerEnvironmentAtoms<R, E>(
     label: "environment-data:computer-use:control-state",
     tag: WS_METHODS.computerUseGetControlState,
     staleTimeMs: 1_000,
-    refreshIntervalMs: 2_000,
+    refreshIntervalMs: 30_000,
   });
   const computerUseHistory = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:computer-use:history",
     tag: WS_METHODS.computerUseGetHistory,
     staleTimeMs: 1_000,
-    refreshIntervalMs: 2_000,
   });
   const refreshComputerUseControlState = (
     environmentId: EnvironmentId,
@@ -713,6 +712,7 @@ export function createServerEnvironmentAtoms<R, E>(
   ) =>
     Effect.sync(() => {
       registry.refresh(computerUseControlState({ environmentId, input: {} }));
+      registry.refresh(computerUseHistory({ environmentId, input: { limit: 50 } }));
     });
 
   return {

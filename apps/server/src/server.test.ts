@@ -107,6 +107,7 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
 import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
@@ -441,6 +442,7 @@ const buildAppUnderTest = (options?: {
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
     computerUseBroker?: Partial<ComputerUseBroker.ComputerUseBroker["Service"]>;
+    computerUseControl?: Partial<ComputerUseControl.ComputerUseControl["Service"]>;
     computerUseHistory?: Partial<ComputerUseHistory.ComputerUseHistory["Service"]>;
     computerUsePolicy?: Partial<ComputerUsePolicy.ComputerUsePolicy["Service"]>;
     computerUseToolkit?: Partial<ComputerUseToolkit.ComputerUseToolkit["Service"]>;
@@ -967,6 +969,17 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
+        Layer.mock(ComputerUseControl.ComputerUseControl)({
+          claim: () => Effect.succeed(undefined),
+          activeFor: () => Effect.succeed(undefined),
+          release: () => Effect.void,
+          releaseTurn: () => Effect.void,
+          releaseThread: () => Effect.void,
+          releaseEnvironment: () => Effect.void,
+          ...options?.layers?.computerUseControl,
+        }),
+      ),
+      Layer.provide(
         Layer.mock(ComputerUsePolicy.ComputerUsePolicy)({
           evaluate: () => Effect.die("Computer Use policy evaluation is not stubbed in this test"),
           grant: () => Effect.void,
@@ -1003,6 +1016,7 @@ const buildAppUnderTest = (options?: {
             list: () => Effect.succeed([]),
             clear: () => Effect.succeed(0),
             changes: Stream.empty,
+            projectionChanges: Stream.empty,
             ...options?.layers?.computerUseHistory,
           }),
           Layer.mock(ComputerUseToolkit.ComputerUseToolkit)({
@@ -4669,6 +4683,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   providerInstanceId: ProviderInstanceId.make("atomic"),
                 }),
               stopEnvironment,
+            },
+            computerUseControl: {
+              activeFor: () =>
+                Effect.succeed({
+                  threadId: ThreadId.make("thread-computer-use"),
+                  turnId: TurnId.make("turn-computer-use"),
+                  providerInstanceId: ProviderInstanceId.make("atomic"),
+                }),
             },
             computerUsePolicy: {
               listPersistent: () =>

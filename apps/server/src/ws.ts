@@ -72,6 +72,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
 import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ServerConfig from "./config.ts";
@@ -468,6 +469,7 @@ const makeWsRpcLayer = (
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const computerUseBroker = yield* ComputerUseBroker.ComputerUseBroker;
+      const computerUseControl = yield* ComputerUseControl.ComputerUseControl;
       const computerUseHistory = yield* ComputerUseHistory.ComputerUseHistory;
       const computerUsePolicy = yield* ComputerUsePolicy.ComputerUsePolicy;
       const keybindings = yield* Keybindings.Keybindings;
@@ -1843,23 +1845,13 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUseGetControlState,
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
-              const [host, nativeControl, browserControl, persistentGrants, paused] =
+              const [host, activeControl, persistentGrants, paused] =
                 yield* Effect.all([
                   computerUseBroker.hostFor(environmentId).pipe(Effect.map(Option.getOrUndefined)),
-                  computerUseBroker.activeControlFor(environmentId),
-                  previewAutomationBroker.activeControlFor(environmentId),
+                  computerUseControl.activeFor(environmentId),
                   computerUsePolicy.listPersistent(environmentId),
                   computerUsePolicy.isPaused(environmentId),
                 ]);
-              const activeControl =
-                nativeControl ??
-                (browserControl?.turnId === undefined
-                  ? undefined
-                  : {
-                      threadId: browserControl.threadId,
-                      turnId: browserControl.turnId,
-                      providerInstanceId: browserControl.providerInstanceId,
-                    });
               return {
                 environmentId,
                 paused,
@@ -1912,6 +1904,7 @@ const makeWsRpcLayer = (
                   return yield* Effect.all([
                     computerUseBroker.stopEnvironment(environmentId, "user"),
                     previewAutomationBroker.stopEnvironment(environmentId),
+                    computerUseControl.releaseEnvironment(environmentId),
                   ]).pipe(Effect.map(([native, browser]) => native + browser));
                 }).pipe(
                   Effect.tap((stopped) =>
@@ -1942,6 +1935,7 @@ const makeWsRpcLayer = (
                   return yield* Effect.all([
                     computerUseBroker.stopEnvironment(environmentId, "takeover"),
                     previewAutomationBroker.stopEnvironment(environmentId),
+                    computerUseControl.releaseEnvironment(environmentId),
                   ]).pipe(Effect.map(([native, browser]) => native + browser));
                 }).pipe(
                   Effect.tap((stopped) =>
@@ -1972,6 +1966,7 @@ const makeWsRpcLayer = (
                   return yield* Effect.all([
                     computerUseBroker.stopEnvironment(environmentId, "interrupted"),
                     previewAutomationBroker.stopEnvironment(environmentId),
+                    computerUseControl.releaseEnvironment(environmentId),
                   ]).pipe(Effect.map(([native, browser]) => native + browser));
                 }).pipe(
                   Effect.tap((stopped) =>

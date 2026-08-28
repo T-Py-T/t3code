@@ -47,6 +47,7 @@ import { previewEnvironment } from "~/state/preview";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
+import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 
 import { previewBridge } from "./previewBridge";
 import {
@@ -263,14 +264,21 @@ export function PreviewAutomationHosts() {
         <PreviewAutomationHost
           key={environment.environmentId}
           environmentId={environment.environmentId}
+          supportsExternalBrowser={
+            environment.entry.target._tag === "PrimaryConnectionTarget" ||
+            isDesktopLocalConnectionTarget(environment.entry.target)
+          }
         />
       ))}
     </>
   );
 }
 
-function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId }) {
-  const { environmentId } = props;
+function PreviewAutomationHost(props: {
+  readonly environmentId: EnvironmentId;
+  readonly supportsExternalBrowser: boolean;
+}) {
+  const { environmentId, supportsExternalBrowser } = props;
   const enableExternalBrowserAccess = useEnvironmentSettings(
     environmentId,
     (settings) => settings.enableExternalBrowserAccess,
@@ -282,8 +290,9 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
       clientId: automationClientId,
       environmentId,
       supportedOperations: [...PREVIEW_AUTOMATION_OPERATIONS],
+      supportedBrowsers: supportsExternalBrowser ? ["built-in", "external"] : ["built-in"],
     }),
-    [automationClientId, environmentId],
+    [automationClientId, environmentId, supportsExternalBrowser],
   );
   const automationRequestsAtom = previewEnvironment.automationRequests({
     environmentId,
@@ -324,6 +333,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             enabled: enableExternalBrowserAccess,
             environmentId,
             request,
+            signal,
             resolveNavigation: (navigateInput) =>
               resolveBrowserNavigationTarget(
                 environmentId,

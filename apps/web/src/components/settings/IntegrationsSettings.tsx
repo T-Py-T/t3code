@@ -531,7 +531,7 @@ function AgentComputerUseSetting() {
   return (
     <SettingsRow
       {...searchableSetting("agent-computer-use")}
-      description="Let agents observe and operate approved applications on this computer. T3 Code itself, terminals, and unapproved actions remain blocked by policy."
+      description="Experimental preview. Let agents observe and operate approved applications on this computer. Native release signing and platform acceptance are still in progress."
       status={
         settings.enableComputerUse
           ? "Applies to sessions started from now on. Sensitive actions still require an approval."
@@ -833,7 +833,7 @@ export function IntegrationsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="computer-use" title="Computer Use">
+      <SettingsSection id="computer-use" title="Computer Use (experimental)">
         <AgentComputerUseSetting />
         <ComputerUseAccessControls />
       </SettingsSection>

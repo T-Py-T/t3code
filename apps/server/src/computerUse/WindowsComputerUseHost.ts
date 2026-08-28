@@ -96,6 +96,24 @@ export function parseWindowsAuthenticodeIdentity(
   });
 }
 
+export function windowsComputerUseSigningIdentityMatches(
+  helper: Pick<VerifiedLocalComputerUseHelper, "subject" | "publisher">,
+  host: Pick<VerifiedLocalComputerUseHelper, "subject" | "publisher">,
+): boolean {
+  return helper.subject === host.subject && helper.publisher === host.publisher;
+}
+
+export function minimalWindowsComputerUseEnvironment(
+  environment: NodeJS.ProcessEnv,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    ["SystemRoot", "WINDIR", "TEMP", "TMP"].flatMap((name) => {
+      const value = environment[name];
+      return value === undefined ? [] : [[name, value] as const];
+    }),
+  );
+}
+
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
@@ -174,6 +192,33 @@ const verifyHelper = Effect.fn("WindowsComputerUseHost.verifyHelper")(function* 
       detail: "The Windows helper does not have a valid Authenticode signature.",
     });
   }
+  const hostExecutablePath = config.computerUseHostExecutablePath;
+  if (!hostExecutablePath) {
+    return yield* new LocalComputerUseHostTransportError({
+      operation: "verify",
+      detail: "The signed Windows desktop host identity is unavailable.",
+    });
+  }
+  const hostSignature = yield* processRunner
+    .run(windowsAuthenticodeProbeInput(hostExecutablePath))
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalComputerUseHostTransportError({
+            operation: "verify",
+            detail: "The Windows desktop host Authenticode identity could not be read.",
+            cause,
+          }),
+      ),
+    );
+  const hostIdentity =
+    hostSignature.code === 0 ? parseWindowsAuthenticodeIdentity(hostSignature.stdout) : undefined;
+  if (!hostIdentity || !windowsComputerUseSigningIdentityMatches(identity, hostIdentity)) {
+    return yield* new LocalComputerUseHostTransportError({
+      operation: "verify",
+      detail: "The Windows helper is not signed by the installed T3 Code desktop publisher.",
+    });
+  }
   return { path, ...identity } satisfies VerifiedLocalComputerUseHelper;
 });
 
@@ -182,5 +227,9 @@ export const layer = makeLocalComputerUseHostLayer({
   hostPlatform: "win32",
   platform: "windows",
   verifyHelper,
-  makeCommand: (helper) => ChildProcess.make(helper.path, [], { extendEnv: true }),
+  makeCommand: (helper) =>
+    ChildProcess.make(helper.path, [], {
+      env: minimalWindowsComputerUseEnvironment(process.env),
+      extendEnv: false,
+    }),
 });

@@ -35,6 +35,7 @@ const bridge = (overrides: Partial<DesktopExternalBrowserBridge> = {}) =>
     scroll: vi.fn(),
     evaluate: vi.fn(),
     waitFor: vi.fn(),
+    cancel: vi.fn(),
     ...overrides,
   }) satisfies DesktopExternalBrowserBridge;
 
@@ -66,6 +67,7 @@ describe("routeExternalBrowserAutomationRequest", () => {
           target: { kind: "environment-port", port: 5173, path: "/test" },
         },
       }),
+      signal: new AbortController().signal,
       resolveNavigation,
     });
 
@@ -76,6 +78,7 @@ describe("routeExternalBrowserAutomationRequest", () => {
         url: "http://127.0.0.1:5173/test",
       }),
       "external_1",
+      "request-1",
     );
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("target");
   });
@@ -88,9 +91,39 @@ describe("routeExternalBrowserAutomationRequest", () => {
         enabled: false,
         environmentId: EnvironmentId.make("local"),
         request: request({}),
+        signal: new AbortController().signal,
         resolveNavigation: vi.fn(),
       }),
     ).rejects.toThrow(/disabled/i);
     expect(status).not.toHaveBeenCalled();
+  });
+
+  it("cancels the active desktop operation when control is interrupted", async () => {
+    const controller = new AbortController();
+    let rejectNavigation: ((error: Error) => void) | undefined;
+    const navigate = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectNavigation = reject;
+        }),
+    );
+    const cancel = vi.fn(async () => {
+      rejectNavigation?.(new Error("cancelled"));
+    });
+    const routed = routeExternalBrowserAutomationRequest({
+      bridge: bridge({ navigate, cancel }),
+      enabled: true,
+      environmentId: EnvironmentId.make("local"),
+      request: request({
+        operation: "navigate",
+        input: { browser: "external", url: "https://example.com" },
+      }),
+      signal: controller.signal,
+      resolveNavigation: (input) => input.url!,
+    });
+
+    controller.abort();
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledWith("request-1"));
+    await expect(routed).rejects.toThrow("cancelled");
   });
 });

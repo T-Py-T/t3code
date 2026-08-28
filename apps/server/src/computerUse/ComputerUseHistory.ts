@@ -69,6 +69,7 @@ export class ComputerUseHistory extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ComputerUseHistoryEntry>>;
     readonly clear: (environmentId: EnvironmentId) => Effect.Effect<number>;
     readonly changes: Stream.Stream<ComputerUseHistoryEntry>;
+    readonly projectionChanges: Stream.Stream<ComputerUseHistoryEntry>;
   }
 >()("t3/computerUse/ComputerUseHistory") {}
 
@@ -163,7 +164,21 @@ export const makeWithPersistence = (persistence?: ComputerUseHistoryPersistence)
         ),
     );
 
-    return ComputerUseHistory.of({ append, list, clear, changes: Stream.fromPubSub(changes) });
+    const projectionChanges = Stream.unwrapScoped(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(changes);
+        const snapshot = yield* SynchronizedRef.get(state);
+        return Stream.concat(Stream.fromIterable(snapshot.entries), Stream.fromQueue(subscription));
+      }),
+    );
+
+    return ComputerUseHistory.of({
+      append,
+      list,
+      clear,
+      changes: Stream.fromPubSub(changes),
+      projectionChanges,
+    });
   });
 
 export const make = makeWithPersistence();

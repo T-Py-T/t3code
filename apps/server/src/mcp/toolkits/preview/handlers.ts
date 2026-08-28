@@ -31,6 +31,15 @@ import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "
 
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
+const browserOrigin = (url: string | null): string => {
+  if (!url) return "about:blank";
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "opaque-origin";
+  }
+};
+
 /**
  * Collapses the `show` alias onto `open` and defaults tab reuse.
  *
@@ -72,12 +81,57 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   const details = typeof input === "object" && input !== null ? input : {};
   const browser = "browser" in details && details.browser === "external" ? "external" : "built-in";
   const displayName = browser === "external" ? "External browser" : "Built-in browser";
+  const externalStatus =
+    browser === "external"
+      ? yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "status",
+          input: { browser: "external" },
+          ...(tabId === undefined ? {} : { tabId }),
+        })
+      : undefined;
+  const profileId = externalStatus?.profileId;
+  if (browser === "external" && !profileId) {
+    return yield* new PreviewAutomationUnavailableError({
+      capability: "preview",
+      environmentId: scope.environmentId,
+      threadId: scope.threadId,
+      providerSessionId: scope.providerSessionId,
+      providerInstanceId: scope.providerInstanceId,
+    });
+  }
+  const policyIdentitySeed =
+    browser === "external"
+      ? {
+          profileId,
+          tabId: tabId ?? externalStatus?.tabId ?? "new-tab",
+          destination:
+            operation === "open" || operation === "navigate"
+              ? {
+                  url: "url" in details && typeof details.url === "string" ? details.url : null,
+                  target: "target" in details ? details.target : null,
+                }
+              : browserOrigin(externalStatus?.url ?? null),
+        }
+      : { browser };
+  const policyIdentityDigest = yield* crypto
+    .digest(
+      "SHA-256",
+      new TextEncoder().encode(encodeUnknownJsonString(policyIdentitySeed)),
+    )
+    .pipe(Effect.orDie, Effect.map(Encoding.encodeHex));
   const target: ComputerUseTarget = {
     targetId: ComputerUseTargetId.make(`preview-${browser}`),
     kind: "browser-tab",
-    displayName,
-    applicationId: `t3.preview.${browser}`,
-    stableIdentity: `preview:${browser}`,
+    displayName:
+      browser === "external"
+        ? `${displayName} — ${browserOrigin(externalStatus?.url ?? null)}`
+        : displayName,
+    applicationId: browser === "external" ? `t3.preview.external.${profileId}` : "t3.preview.built-in",
+    stableIdentity:
+      browser === "external"
+        ? `preview:external:${policyIdentityDigest}`
+        : "preview:built-in",
   };
   const access =
     operation === "status" || operation === "snapshot" || operation === "waitFor"
@@ -147,7 +201,11 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
     toolkit.executeGoverned(
       {
         scope: computerScope,
-        hostId: ComputerUseHostId.make(`preview-${scope.environmentId}`),
+        hostId: ComputerUseHostId.make(
+          browser === "external"
+            ? `preview-${scope.environmentId}-${policyIdentityDigest}`
+            : `preview-${scope.environmentId}`,
+        ),
         operation: `browser-${operation}` as ComputerUseHistoryOperation,
         target,
         access,

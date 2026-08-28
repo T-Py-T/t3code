@@ -922,6 +922,7 @@ describe("DesktopBackendConfiguration", () => {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
         const config = yield* configuration.resolvePrimary;
         assert.equal(config.bootstrap.computerUseHelperPath, helperPath);
+        assert.equal(config.bootstrap.computerUseHostExecutablePath, process.execPath);
         assert.notProperty(config.bootstrap, "computerUseHelperDevelopment");
       }).pipe(
         Effect.provide(
@@ -1009,6 +1010,7 @@ describe("DesktopBackendConfiguration", () => {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
         const config = yield* configuration.resolvePrimary;
         assert.equal(config.bootstrap.computerUseHelperPath, helperPath);
+        assert.equal(config.bootstrap.computerUseHostExecutablePath, process.execPath);
         assert.notProperty(config.bootstrap, "computerUseHelperDevelopment");
       }).pipe(
         Effect.provide(

@@ -152,7 +152,10 @@ jobs:
           fi
 
       - name: Upload thread transfer result
-        if: always() && steps.transfer_budget.outputs.present == 'true'
+        # ACT 0.2.89's local artifact server cannot decode the v7 action's
+        # `mime_type` field. The report is still generated and published above;
+        # only the GitHub-hosted artifact transfer is skipped locally.
+        if: always() && steps.transfer_budget.outputs.present == 'true' && env.ACT != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: thread-transfer-results

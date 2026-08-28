@@ -108,7 +108,9 @@ export default defineConfig({
     );
     const commands: string[] = [];
     if (checkedPaths.length > 0) {
-      commands.push(`vp check --fix ${checkedPaths.map(shellQuote).join(" ")}`);
+      commands.push(
+        `vp check --fix --no-error-on-unmatched-pattern ${checkedPaths.map(shellQuote).join(" ")}`,
+      );
     }
     if (paths.some(isResourceMonitorPath)) {
       commands.push("cargo fmt --manifest-path native/resource-monitor/Cargo.toml -- --check");

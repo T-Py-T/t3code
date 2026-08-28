@@ -38,20 +38,23 @@ index 755e41c..dc431aa 100644
              return protocol.send(key.clientId, {
                ...request,
                headers: undefined,
-@@ -465,9 +487,13 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
-       case "Chunk":
-       case "ClientProtocolError":
-       case "Defect":
+@@ -473,12 +495,16 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
+           return f(clientId, request);
+         case "Pong":
+         case "Exit":
+         case "Chunk":
+         case "ClientProtocolError":
+         case "Defect":
 +        const responseClientId = request._tag === "Exit" ? serverRequestClients.get(requestKey(request.requestId)) ?? clientId : clientId;
 +        if (request._tag === "Exit") {
 +          serverRequestClients.delete(requestKey(request.requestId));
 +        }
-         return RcMap.get(clients, new McpClientKey({
--          clientId,
--          protocolVersion: getProtocolForClient(clientProtocols, clientId, protocolRegistry).protocolVersion
-+          clientId: responseClientId,
-+          protocolVersion: getProtocolForClient(clientProtocols, responseClientId, protocolRegistry).protocolVersion
-         })).pipe(Effect.flatMap(({
+           return RcMap.get(clients, new McpClientKey({
+-            clientId,
+-            protocolVersion: getProtocolForClient(clientProtocols, clientId, protocolRegistry).protocolVersion
++            clientId: responseClientId,
++            protocolVersion: getProtocolForClient(clientProtocols, responseClientId, protocolRegistry).protocolVersion
+           })).pipe(Effect.flatMap(({
              write
            }) => write(request)), Effect.scoped);
 @@ -693,6 +720,20 @@ const layerWithProtocolState = options => Layer.effectDiscard(Effect.forkScoped(

@@ -742,9 +742,40 @@ public sealed class WindowsComputerUseHost : IDisposable
 
     private static void Focus(TargetRecord target)
     {
-        NativeMethods.BringWindowToTop(target.Handle);
-        NativeMethods.SetForegroundWindow(target.Handle);
-        Thread.Sleep(40);
+        var currentThread = NativeMethods.GetCurrentThreadId();
+        var foreground = NativeMethods.GetForegroundWindow();
+        var foregroundThread = foreground == IntPtr.Zero
+            ? 0
+            : NativeMethods.GetWindowThreadProcessId(foreground, out _);
+        var targetThread = NativeMethods.GetWindowThreadProcessId(target.Handle, out _);
+        var attachedThreads = new List<uint>(2);
+        try
+        {
+            foreach (var thread in new[] { foregroundThread, targetThread }.Distinct())
+            {
+                if (
+                    thread != 0
+                    && thread != currentThread
+                    && NativeMethods.AttachThreadInput(currentThread, thread, true)
+                )
+                {
+                    attachedThreads.Add(thread);
+                }
+            }
+
+            NativeMethods.BringWindowToTop(target.Handle);
+            NativeMethods.SetForegroundWindow(target.Handle);
+            NativeMethods.SetFocus(target.Handle);
+        }
+        finally
+        {
+            foreach (var thread in attachedThreads.AsEnumerable().Reverse())
+            {
+                NativeMethods.AttachThreadInput(currentThread, thread, false);
+            }
+        }
+
+        Thread.Sleep(80);
         if (NativeMethods.GetForegroundWindow() != target.Handle)
         {
             throw HostFailure.Unsupported("foreground-input");
@@ -1690,6 +1721,16 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool BringWindowToTop(IntPtr handle);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool AttachThreadInput(uint first, uint second, [MarshalAs(UnmanagedType.Bool)] bool attach);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr SetFocus(IntPtr handle);
+
+    [DllImport("kernel32.dll")]
+    internal static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

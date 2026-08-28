@@ -29,6 +29,7 @@ import {
   UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
+  makeWindowsComputerUsePublishArguments,
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
@@ -1485,6 +1486,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.equal(resolveWindowsComputerUseRuntimeIdentifier("x64"), "win-x64");
     assert.equal(resolveWindowsComputerUseRuntimeIdentifier("arm64"), "win-arm64");
+    assert.deepStrictEqual(
+      makeWindowsComputerUsePublishArguments({
+        projectPath: "C:\\repo\\T3CodeComputerUse.csproj",
+        runtimeIdentifier: "win-arm64",
+        publishDirectory: "C:\\repo\\publish\\win-arm64",
+      }),
+      [
+        "publish",
+        "C:\\repo\\T3CodeComputerUse.csproj",
+        "--configuration",
+        "Release",
+        "--runtime",
+        "win-arm64",
+        "--self-contained",
+        "true",
+        "--output",
+        "C:\\repo\\publish\\win-arm64",
+        "-p:PublishSingleFile=true",
+        "-p:IncludeNativeLibrariesForSelfExtract=true",
+      ],
+    );
   });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {

@@ -28,7 +28,7 @@ separate comparison path documented in [Codex Computer Use](./providers-codex-co
 | Capability                 | Current branch behavior                                                                                                                       | Release status                                                                                             |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | macOS native apps          | T3 helper discovers, observes, captures, and operates allowed AX targets; terminal apps and T3 Code are forbidden                             | Implemented; signed/notarized release proof remains                                                        |
-| Windows native apps        | ARM64 helper uses UI Automation, capture, and native input with bounded cleanup and forbidden-target policy                                   | Implemented; packaged UTM and physical signed smoke tests remain release gates                             |
+| Windows native apps        | ARM64 helper uses UI Automation, capture, foreground transfer, and native input with bounded cleanup and forbidden-target policy              | Implemented; packaged UTM development acceptance passed, while production-signed physical smoke remains    |
 | Codex, Pi, and Atomic      | Shared MCP toolkit; Pi and Atomic receive the same bundled extension, approvals, cancellation, browser tools, and Atomic workflow correlation | Implemented                                                                                                |
 | Lifecycle and policy       | Exclusive leases, app grants, risk confirmation, pause, resume, stop, takeover, metadata history, and persistent-grant revocation             | Implemented in the environment API and web, desktop, and mobile thread UI                                  |
 | Built-in browser           | Semantic snapshots, navigation, locators, actions, diagnostics, screenshots, and recordings                                                   | Implemented                                                                                                |
@@ -313,6 +313,16 @@ UTM acceptance proves the Windows application path and is required for every Win
 change. It does not replace a final signed smoke test on physical Windows hardware for native input
 latency, multiple displays, device sleep/wake, signing reputation, and hardware-specific security
 behavior. T3 must fail closed on UAC secure-desktop and other privileged prompts in both environments.
+
+The Windows app package stages the Computer Use host as one executable. The .NET publish must set
+`IncludeNativeLibrariesForSelfExtract=true` as well as `PublishSingleFile=true`; staging only the
+managed single-file output leaves WPF native libraries behind and makes screenshot/UI Automation
+fail on ARM64 even though status and target discovery still work. Foreground actions temporarily
+attach the helper input thread to the current foreground and target window threads, transfer focus,
+and detach both threads in a guaranteed cleanup path before sending input.
+
+The repeatable commands and the latest development evidence are recorded in
+[Windows Computer Use acceptance](../operations/windows-computer-use-acceptance.md).
 
 ### CLI-only environments
 

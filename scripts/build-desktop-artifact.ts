@@ -1897,6 +1897,27 @@ export function resolveWindowsComputerUseRuntimeIdentifier(
   return arch === "arm64" ? "win-arm64" : "win-x64";
 }
 
+export function makeWindowsComputerUsePublishArguments(input: {
+  readonly projectPath: string;
+  readonly runtimeIdentifier: "win-arm64" | "win-x64";
+  readonly publishDirectory: string;
+}): ReadonlyArray<string> {
+  return [
+    "publish",
+    input.projectPath,
+    "--configuration",
+    "Release",
+    "--runtime",
+    input.runtimeIdentifier,
+    "--self-contained",
+    "true",
+    "--output",
+    input.publishDirectory,
+    "-p:PublishSingleFile=true",
+    "-p:IncludeNativeLibrariesForSelfExtract=true",
+  ];
+}
+
 export const stageWindowsComputerUseHelper = Effect.fn("stageWindowsComputerUseHelper")(
   function* (input: {
     readonly repoRoot: string;
@@ -1922,19 +1943,14 @@ export const stageWindowsComputerUseHelper = Effect.fn("stageWindowsComputerUseH
     );
 
     if (!reuseHelper) {
-      const spawnCommand = yield* resolveSpawnCommand("dotnet", [
-        "publish",
-        projectPath,
-        "--configuration",
-        "Release",
-        "--runtime",
-        runtimeIdentifier,
-        "--self-contained",
-        "true",
-        "--output",
-        publishDirectory,
-        "-p:PublishSingleFile=true",
-      ]);
+      const spawnCommand = yield* resolveSpawnCommand(
+        "dotnet",
+        makeWindowsComputerUsePublishArguments({
+          projectPath,
+          runtimeIdentifier,
+          publishDirectory,
+        }),
+      );
       yield* runCommand(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: input.repoRoot,

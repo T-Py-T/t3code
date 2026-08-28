@@ -109,7 +109,10 @@ import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/Atta
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
-import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
+import {
+  readWorkflowScript,
+  referencedAgentArtifactPaths,
+} from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
@@ -1365,7 +1368,7 @@ const makeWsRpcLayer = (
                   cause,
                 });
               const thread = yield* projectionSnapshotQuery
-                .getThreadShellById(input.threadId)
+                .getThreadDetailById(input.threadId)
                 .pipe(Effect.mapError(projectionFailure));
               if (Option.isNone(thread)) {
                 return yield* new OrchestrationGetWorkflowScriptError({
@@ -1385,6 +1388,7 @@ const makeWsRpcLayer = (
               return yield* readWorkflowScript({
                 scriptPath: input.scriptPath,
                 workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+                allowedArtifactPaths: referencedAgentArtifactPaths(thread.value.activities),
               });
             }),
             { "rpc.aggregate": "orchestration" },

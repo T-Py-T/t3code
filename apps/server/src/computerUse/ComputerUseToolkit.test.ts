@@ -89,7 +89,7 @@ const respondTo = (
   response: Omit<ComputerUseHostResponse, "hostId">,
 ) => broker.respond({ ...response, hostId: host.hostId } as ComputerUseHostResponse);
 
-for (const providerInstance of ["codex", "pi", "atomic"] as const) {
+for (const providerInstance of ["codex", "pi", "atomic", "omp"] as const) {
   it.effect(`exposes the same policy-governed toolkit to ${providerInstance}`, () =>
     Effect.scoped(
       Effect.gen(function* () {

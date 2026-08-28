@@ -237,12 +237,49 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           },
         },
       });
+      yield* eventStore.append({
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-task-activity"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        occurredAt: "2026-01-01T00:00:00.200Z",
+        commandId: CommandId.make("cmd-task-activity"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-task-activity"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          activity: {
+            id: EventId.make("activity-task"),
+            tone: "tool",
+            kind: "task.progress",
+            summary: "Agent made progress",
+            payload: {},
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00.200Z",
+          },
+        },
+      });
       yield* projectionPipeline.bootstrap;
+
+      const activityRows = yield* sql<{
+        readonly activityId: string;
+        readonly sequence: number | null;
+      }>`
+        SELECT activity_id AS "activityId", sequence
+        FROM projection_thread_activities
+        WHERE activity_id IN ('activity-routine', 'activity-task')
+        ORDER BY activity_id ASC
+      `;
+      assert.deepEqual(activityRows, [
+        { activityId: "activity-routine", sequence: null },
+        { activityId: "activity-task", sequence: 6 },
+      ]);
 
       threadShellUpdates = yield* sql<{ readonly count: number }>`
         SELECT count FROM thread_shell_updates
       `;
-      assert.deepEqual(threadShellUpdates, [{ count: 1 }]);
+      assert.deepEqual(threadShellUpdates, [{ count: 2 }]);
       yield* sql`DROP TRIGGER count_thread_shell_updates`;
       yield* sql`DROP TABLE thread_shell_updates`;
 

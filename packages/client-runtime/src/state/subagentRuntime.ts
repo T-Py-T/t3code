@@ -525,12 +525,23 @@ export function foldSubagentActivities(
         const existed = agents.has(taskId);
         if (!existed && isBackgroundTaskActivity(payload)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
+        const previousAttempt = agent.attempt;
         fillMetadata(agent, payload);
         if (agent.activationCount === 0) agent.activationCount = 1;
         const explicitStatus = asRuntimeStatus(payload.status);
-        if (explicitStatus) {
+        const incomingAttempt = asCount(payload.attempt);
+        const startsNewAttempt =
+          incomingAttempt !== undefined &&
+          (previousAttempt === null || incomingAttempt > previousAttempt);
+        const isAmbiguousSameTimestampReactivation =
+          isTerminalSubagentStatus(agent.status) &&
+          (explicitStatus === "running" || explicitStatus === "pending") &&
+          at <= agent.updatedAt &&
+          !startsNewAttempt;
+        if (explicitStatus && !isAmbiguousSameTimestampReactivation) {
           applyStatus(agent, explicitStatus, at);
         } else if (
+          !explicitStatus &&
           (payload.usageSnapshot !== true || !existed) &&
           !isTerminalSubagentStatus(agent.status) &&
           agent.status !== "idle"
@@ -563,6 +574,7 @@ export function foldSubagentActivities(
         // first row's classification instead of being re-judged.
         if (!agents.has(taskId) && isBackgroundTaskActivity(payload)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
+        const previousAttempt = agent.attempt;
         fillMetadata(agent, payload);
         // A task first seen via task.updated (start row aged out) has run at
         // least once — zero activations would misreport "run 0" and let a
@@ -570,7 +582,16 @@ export function foldSubagentActivities(
         if (agent.activationCount === 0) agent.activationCount = 1;
         const wasTerminal = isTerminalSubagentStatus(agent.status);
         const status = asRuntimeStatus(payload.status);
-        if (status) applyStatus(agent, status, at);
+        const incomingAttempt = asCount(payload.attempt);
+        const startsNewAttempt =
+          incomingAttempt !== undefined &&
+          (previousAttempt === null || incomingAttempt > previousAttempt);
+        const isAmbiguousSameTimestampReactivation =
+          wasTerminal &&
+          (status === "running" || status === "pending") &&
+          at <= agent.updatedAt &&
+          !startsNewAttempt;
+        if (status && !isAmbiguousSameTimestampReactivation) applyStatus(agent, status, at);
         const error = asString(payload.error);
         if (error) agent.error = bounded(error);
         // Provider end time beats ingestion time for the transition that

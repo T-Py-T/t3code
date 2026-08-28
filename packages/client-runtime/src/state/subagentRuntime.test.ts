@@ -146,6 +146,18 @@ describe("foldSubagentActivities", () => {
     expect(agents[0]!.completedAt).toBe("2026-08-01T11:00:00.000Z");
   });
 
+  it("same-timestamp progress cannot reopen a completed activation", () => {
+    const at = "2026-08-01T11:00:00.000Z";
+    const agents = fold([
+      activity("task.started", { taskId: "same-ms", taskType: "local_agent" }),
+      activity("task.completed", { taskId: "same-ms", status: "completed" }, at),
+      activity("task.progress", { taskId: "same-ms", status: "running" }, at),
+    ]);
+
+    expect(agents[0]!.status).toBe("completed");
+    expect(agents[0]!.activationCount).toBe(1);
+  });
+
   it("reactivation increments the run count and clears result/error", () => {
     const agents = fold([
       activity("task.started", { taskId: "task-4", taskType: "local_agent" }),

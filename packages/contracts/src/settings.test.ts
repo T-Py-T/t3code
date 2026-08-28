@@ -280,6 +280,11 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.pi.enabled).toBe(false);
     expect(decoded.providers.pi.binaryPath).toBe("pi");
     expect(decoded.providers.pi.trustProjectResources).toBe(false);
+    expect(decoded.providers.omp.enabled).toBe(false);
+    expect(decoded.providers.omp.binaryPath).toBe("omp");
+    expect(decoded.providers.omp.agentDir).toBe("");
+    expect(decoded.providers.omp.trustProjectResources).toBe(false);
+    expect(decoded.providers.omp.approvalMode).toBe("write");
   });
 
   it("derives per-driver defaults from the settings schemas", () => {
@@ -288,6 +293,7 @@ describe("provider enabled defaults", () => {
     expect(defaultEnabledForDriver(ProviderDriverKind.make("grok"))).toBe(false);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("atomic"))).toBe(false);
     expect(defaultEnabledForDriver(ProviderDriverKind.make("pi"))).toBe(false);
+    expect(defaultEnabledForDriver(ProviderDriverKind.make("omp"))).toBe(false);
     // Unknown fork drivers stay enabled; their own build decides otherwise.
     expect(defaultEnabledForDriver(ProviderDriverKind.make("ollama"))).toBe(true);
   });

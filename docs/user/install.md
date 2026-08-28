@@ -58,13 +58,14 @@ to use, then authenticate it.
 | ---------- | ------------------------------------------------------- | -------------- | -------------------------- |
 | Atomic     | [Atomic](https://github.com/bastani-inc/atomic)         | `atomic`       | Model provider credentials |
 | Pi         | [Pi coding agent](https://github.com/earendil-works/pi) | `pi`           | Model provider credentials |
+| Oh My Pi   | [Oh My Pi](https://github.com/can1357/oh-my-pi)         | `omp`          | Model provider credentials |
 | Codex      | [Codex CLI](https://developers.openai.com/codex/cli)    | `codex`        | `codex login`              |
 | Claude     | [Claude Code](https://claude.com/product/claude-code)   | `claude`       | `claude auth login`        |
 | Cursor     | [Cursor CLI](https://cursor.com/cli)                    | `cursor-agent` | `agent login`              |
 | Grok Build | [Grok Build CLI](https://x.ai/cli)                      | `grok`         | `grok login`               |
 | OpenCode   | [OpenCode](https://opencode.ai)                         | `opencode`     | `opencode auth login`      |
 
-Codex and Claude are on by default. Atomic, Pi, Cursor, Grok Build, and OpenCode are off by default;
+Codex and Claude are on by default. Atomic, Pi, Oh My Pi, Cursor, Grok Build, and OpenCode are off by default;
 turn them on in **Settings** → the provider's card when you want to use them.
 
 Install the Pi-compatible providers with npm when you want either of them:
@@ -72,10 +73,24 @@ Install the Pi-compatible providers with npm when you want either of them:
 ```bash
 npm install --global @earendil-works/pi-coding-agent
 npm install --global @bastani/atomic
+npm install --global @oh-my-pi/pi-coding-agent
 ```
 
-Pi 0.84.3 or newer is recommended. Atomic and Pi discover the models and credentials configured in
+Pi 0.84.3 or newer and Oh My Pi 18.0.8 or newer are recommended. Atomic, Pi, and Oh My Pi discover the models and credentials configured in
 their own agent directories. T3 Code does not copy or manage those credentials.
+
+### Oh My Pi workflow and agent visibility
+
+Oh My Pi chat, thinking, tool activity, phased todos, and child agents render in the normal T3
+conversation and **Agents** panel. Open a child's **transcript** to follow its JSONL session while it
+runs. Use **Stop all** to interrupt the active parent workflow. A message sent during a run steers it;
+use `/follow-up <message>` to queue work for after the current OMP turn instead.
+
+OMP project workflow commands created under `.omp/commands/*.md` get a contained **{} script**
+viewer. Ambient extension/plugin code is disabled by default. Enabling **Load ambient extensions**
+runs that code with the T3 server's permissions. OMP may still discover project skills, rules,
+prompts, and settings; use an isolated OMP agent directory when you need a stronger trust boundary.
+The complete capability and validation matrix is in [Oh My Pi provider](../internals/providers-omp.md).
 
 ### Atomic Workflow Visibility
 

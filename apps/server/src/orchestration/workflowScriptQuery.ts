@@ -1,16 +1,18 @@
 // @effect-diagnostics nodeBuiltinImport:off
 /**
- * Read-only access to persisted workflow scripts for the Agents surface's
- * "{} script" affordance.
+ * Read-only access to persisted workflow scripts and OMP child transcripts
+ * for the Agents surface's script/transcript affordances.
  *
  * Containment rules (lifted from the reviewed #3650 inspection service):
  * - the resolved realpath must live under ~/.claude/projects (Claude) or the
- *   current thread workspace's .atomic/workflows directory;
- * - only .js files are served from Claude and .js/.ts from Atomic;
+ *   current thread workspace's .atomic/workflows or .omp/commands directory;
+ * - only .js files are served from Claude, .js/.ts from Atomic, .md from OMP
+ *   workflow commands, and .jsonl from the default Oh My Pi/Pi session roots;
  * - reads are size-capped rather than failed, with a truncation marker.
  *
  * The client-supplied path is a hint from the workflow's runHandles; it is
- * never trusted beyond these checks.
+ * never trusted beyond these checks. The RPC caller must also prove that the
+ * exact path was persisted on the selected thread's task activity.
  */
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
@@ -26,31 +28,80 @@ function claudeScriptsRoot(): string {
   return NodePath.join(NodeOS.homedir(), ".claude", "projects");
 }
 
+function piSessionRoots(): ReadonlyArray<string> {
+  return [
+    NodePath.join(NodeOS.homedir(), ".omp", "agent", "sessions"),
+    NodePath.join(NodeOS.homedir(), ".pi", "agent", "sessions"),
+  ];
+}
+
+function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+/** Artifact paths that the provider actually attached to this thread's task activities. */
+export function referencedAgentArtifactPaths(
+  activities: ReadonlyArray<{ readonly payload: unknown }>,
+): ReadonlyArray<string> {
+  const paths = new Set<string>();
+  for (const activity of activities) {
+    const payload = record(activity.payload);
+    if (!payload) continue;
+    if (typeof payload.outputFile === "string") paths.add(payload.outputFile);
+    const runHandles = record(payload.runHandles);
+    if (typeof runHandles?.scriptPath === "string") paths.add(runHandles.scriptPath);
+  }
+  return Array.from(paths);
+}
+
 export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(function* (input: {
   readonly scriptPath: string;
   readonly workspaceRoot?: string;
+  readonly allowedArtifactPaths: ReadonlyArray<string>;
 }) {
   const requested = input.scriptPath;
   const requestedExtension = NodePath.extname(requested);
 
   if (
     !NodePath.isAbsolute(requested) ||
-    (requestedExtension !== ".js" && requestedExtension !== ".ts")
+    ![".js", ".ts", ".md", ".jsonl"].includes(requestedExtension)
   ) {
     return yield* new OrchestrationGetWorkflowScriptError({
       reason: "invalid-path",
       scriptPath: requested,
     });
   }
+  const allowedArtifactPaths = new Set(
+    input.allowedArtifactPaths
+      .filter((artifactPath) => NodePath.isAbsolute(artifactPath))
+      .map((artifactPath) => NodePath.resolve(artifactPath)),
+  );
+  if (!allowedArtifactPaths.has(NodePath.resolve(requested))) {
+    return yield* new OrchestrationGetWorkflowScriptError({
+      reason: "outside-root",
+      scriptPath: requested,
+    });
+  }
 
   const configuredRoots = [
     { path: claudeScriptsRoot(), extensions: new Set([".js"]) },
+    ...piSessionRoots().map((sessionRoot) => ({
+      path: sessionRoot,
+      extensions: new Set([".jsonl"]),
+    })),
     ...(input.workspaceRoot
       ? [
           {
             path: NodePath.resolve(input.workspaceRoot, ".atomic", "workflows"),
             workspaceRoot: NodePath.resolve(input.workspaceRoot),
             extensions: new Set([".js", ".ts"]),
+          },
+          {
+            path: NodePath.resolve(input.workspaceRoot, ".omp", "commands"),
+            workspaceRoot: NodePath.resolve(input.workspaceRoot),
+            extensions: new Set([".md"]),
           },
         ]
       : []),

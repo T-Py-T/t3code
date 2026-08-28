@@ -65,7 +65,7 @@ home still uses the Computer Use installation from its shared home. If the clien
 provider stays usable for normal chat and shows a warning in Settings.
 
 This switch manages the OpenAI Computer Use client attached by T3. It does not rewrite
-`config.toml` or remove MCP servers that you configured separately. Pi and Atomic cannot use this
+`config.toml` or remove MCP servers that you configured separately. Pi, Atomic, and Oh My Pi cannot use this
 OpenAI bridge. They can use T3-owned Computer Use through the shared T3 toolkit when the environment
 setting is enabled; those app grants and confirmations are described in
 [Permission modes](./permission-modes.md#computer-use).

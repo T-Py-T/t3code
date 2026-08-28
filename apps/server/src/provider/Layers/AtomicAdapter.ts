@@ -60,6 +60,22 @@ const isRecord = Schema.is(UnknownRecord);
 const isString = Schema.is(Schema.String);
 const isBoolean = Schema.is(Schema.Boolean);
 const isStringArray = Schema.is(Schema.Array(Schema.String));
+const OmpTodoStatus = Schema.Literals([
+  "pending",
+  "in_progress",
+  "completed",
+  "abandoned",
+  "blocked",
+]);
+const OmpTodoItem = Schema.Struct({
+  content: Schema.String,
+  status: OmpTodoStatus,
+  blocker: Schema.optional(Schema.String),
+});
+const OmpTodoPhase = Schema.Struct({
+  name: Schema.String,
+  tasks: Schema.Array(OmpTodoItem),
+});
 const AtomicStateData = Schema.Struct({
   model: Schema.optional(
     Schema.NullOr(
@@ -73,6 +89,7 @@ const AtomicStateData = Schema.Struct({
   sessionFile: Schema.optional(Schema.String),
   sessionId: Schema.optional(Schema.String),
   isStreaming: Schema.optional(Schema.Boolean),
+  todoPhases: Schema.optional(Schema.Array(OmpTodoPhase)),
 });
 const decodeState = Schema.decodeUnknownOption(AtomicStateData);
 const AtomicResumeCursor = Schema.Struct({
@@ -172,8 +189,20 @@ interface AtomicWorkflowRunContext {
   readonly stages: Map<string, AtomicWorkflowStageContext>;
 }
 
+interface OmpSubagentContext {
+  readonly id: string;
+  agent: string;
+  description: string | undefined;
+  sessionFile: string | undefined;
+  parentToolCallId: string | undefined;
+  index: number | undefined;
+  model: string | undefined;
+  task: string | undefined;
+}
+
 interface AtomicSessionContext {
   readonly threadId: ThreadId;
+  readonly cwd: string;
   readonly scope: Scope.Closeable;
   readonly rpc: AtomicRpcProcess;
   session: ProviderSession;
@@ -191,6 +220,18 @@ interface AtomicSessionContext {
   readonly workflowRuns: Map<string, AtomicWorkflowRunContext>;
   readonly workflowLifecycleSignatures: Map<string, string>;
   readonly privateComputerUseToolCalls: Map<string, string>;
+  readonly ompSubagents: Map<string, OmpSubagentContext>;
+  readonly ompSettledSubagentIds: Set<string>;
+  readonly ompTodoStatuses: Map<string, typeof OmpTodoStatus.Type>;
+  readonly ompTodoRunGeneration: string;
+  ompTodoRunSequence: number;
+  ompTodoRunId: string | undefined;
+  ompTodoPlanSignature: string | undefined;
+  ompTodoCompletedTurnId: TurnId | undefined;
+  readonly ompTodoDescriptions: Map<string, string>;
+  ompTodoRootState: "idle" | "running" | "completed";
+  ompWorkflowScriptPath: string | undefined;
+  ompPublishedWorkflowScriptPath: string | undefined;
   mappedEventSequence: number;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   stopped: boolean;
@@ -210,13 +251,16 @@ export interface PiCompatibleSettings {
   readonly agentDir: string;
   readonly trustProjectResources: boolean;
   readonly launchArgs: string;
+  readonly approvalMode?: "always-ask" | "write" | "yolo";
 }
 
 export interface PiCompatibleAdapterDefinition {
   readonly provider: ProviderDriverKind;
   readonly displayName: string;
   readonly agentDirEnvironmentVariable: "ATOMIC_CODING_AGENT_DIR" | "PI_CODING_AGENT_DIR";
-  readonly rawSource: "atomic.rpc" | "pi.rpc";
+  readonly rawSource: "atomic.rpc" | "pi.rpc" | "omp.rpc";
+  readonly protocolVersion?: 2;
+  readonly cliFlavor?: "pi" | "omp";
 }
 
 export type AtomicAdapterOptions = PiCompatibleAdapterOptions;
@@ -282,6 +326,11 @@ function workflowStageTaskId(runId: string, stageId: string): string {
 
 function nonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  const number = nonNegativeNumber(value);
+  return number === undefined ? undefined : Math.trunc(number);
 }
 
 function atomicSessionUsage(data: unknown) {
@@ -430,9 +479,24 @@ function piCompatibleEnvironment(
 
 function sessionArgs(
   settings: PiCompatibleSettings,
+  definition: PiCompatibleAdapterDefinition,
+  runtimeMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access",
   title: string | undefined,
 ): ReadonlyArray<string> {
   const configured = [...tokenizeCliArgs(settings.launchArgs)];
+  if (definition.cliFlavor === "omp") {
+    const hasApprovalFlag = configured.some(
+      (arg) => arg === "--approval-mode" || arg === "--auto-approve" || arg === "--yolo",
+    );
+    const hasExtensionTrustFlag = configured.some((arg) => arg === "--no-extensions");
+    const approvalMode =
+      runtimeMode === "approval-required" ? "always-ask" : (settings.approvalMode ?? "write");
+    return [
+      ...(settings.trustProjectResources || hasExtensionTrustFlag ? [] : ["--no-extensions"]),
+      ...(hasApprovalFlag ? [] : ["--approval-mode", approvalMode]),
+      ...configured,
+    ];
+  }
   const hasTrustFlag = configured.some((arg) => arg === "--approve" || arg === "--no-approve");
   return [
     ...(hasTrustFlag ? [] : [settings.trustProjectResources ? "--approve" : "--no-approve"]),
@@ -558,6 +622,615 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         turnId,
         payload: { state, ...(errorMessage ? { errorMessage } : {}), stopReason: state },
       });
+    });
+
+  const settleActiveProviderTurn = (
+    context: AtomicSessionContext,
+    turnId: TurnId,
+    source: ReturnType<typeof raw>,
+  ) =>
+    Effect.gen(function* () {
+      const statsResult = yield* context.rpc
+        .request({ type: "get_session_stats" })
+        .pipe(Effect.result);
+      if (statsResult._tag === "Success") {
+        const usage = atomicSessionUsage(statsResult.success.data);
+        if (usage) {
+          yield* publish({
+            type: "thread.token-usage.updated",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            turnId,
+            payload: { usage },
+            raw: source,
+          });
+        }
+      }
+      yield* resolveAbandonedUiRequests(context);
+      const terminalError = context.pendingAssistantError;
+      if (terminalError) {
+        yield* publish({
+          type: "runtime.error",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          turnId,
+          payload: { message: terminalError, class: "provider_error" },
+          raw: source,
+        });
+        yield* completeActiveTurn(context, "failed", terminalError);
+      } else {
+        yield* completeActiveTurn(context, "completed");
+      }
+    });
+
+  const ompSubagentLinkage = (subagent: OmpSubagentContext) => ({
+    taskType: "omp_subagent" as const,
+    title: subagent.description ?? subagent.task ?? subagent.agent,
+    role: subagent.agent,
+    ...(subagent.model ? { model: subagent.model } : {}),
+    ...(subagent.parentToolCallId ? { toolUseId: subagent.parentToolCallId } : {}),
+    ...(subagent.index === undefined ? {} : { agentIndex: subagent.index }),
+    ...(subagent.sessionFile
+      ? {
+          outputFile: subagent.sessionFile,
+          runHandles: {
+            runId: subagent.id,
+            transcriptDir: path.dirname(subagent.sessionFile),
+          },
+        }
+      : { runHandles: { runId: subagent.id } }),
+    timelineBypass: true as const,
+  });
+
+  const handleOmpSubagentEvent = (context: AtomicSessionContext, event: AtomicRpcEvent) =>
+    Effect.gen(function* () {
+      const type = field(event, "type");
+      if (definition.cliFlavor !== "omp" || !type?.startsWith("subagent_")) return false;
+      if (context.stopped || context.suppressAgentEventsUntilNextTurn) return true;
+      const payload = isRecord(event.payload) ? event.payload : undefined;
+      if (!payload) return true;
+      const source = raw(event, type);
+
+      if (type === "subagent_lifecycle") {
+        const id = field(payload, "id");
+        const status = field(payload, "status");
+        if (!id || !status) return true;
+        const existing = context.ompSubagents.get(id);
+        const subagent: OmpSubagentContext = {
+          id,
+          agent: field(payload, "agent") ?? existing?.agent ?? "OMP subagent",
+          description: field(payload, "description") ?? existing?.description,
+          sessionFile: field(payload, "sessionFile") ?? existing?.sessionFile,
+          parentToolCallId: field(payload, "parentToolCallId") ?? existing?.parentToolCallId,
+          index: nonNegativeInteger(payload.index) ?? existing?.index,
+          model: existing?.model,
+          task: existing?.task,
+        };
+        const taskId = RuntimeTaskId.make(id);
+        if (status === "started") {
+          context.ompSettledSubagentIds.delete(id);
+          context.ompSubagents.set(id, subagent);
+          yield* publish({
+            type: "task.started",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              taskId,
+              description: subagent.description ?? `Running ${subagent.agent}`,
+              ...ompSubagentLinkage(subagent),
+            },
+            raw: source,
+          });
+          return true;
+        }
+        if (context.ompSettledSubagentIds.has(id) && existing === undefined) return true;
+        context.ompSettledSubagentIds.add(id);
+        context.ompSubagents.delete(id);
+        yield* publish({
+          type: "task.completed",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId,
+            status:
+              status === "completed" ? "completed" : status === "aborted" ? "stopped" : "failed",
+            summary:
+              status === "completed"
+                ? `${subagent.agent} completed.`
+                : status === "aborted"
+                  ? `${subagent.agent} was stopped.`
+                  : `${subagent.agent} failed.`,
+            ...ompSubagentLinkage(subagent),
+          },
+          raw: source,
+        });
+        return true;
+      }
+
+      if (type === "subagent_progress") {
+        const progress = isRecord(payload.progress) ? payload.progress : undefined;
+        const id = progress ? field(progress, "id") : undefined;
+        if (!id || !progress) return true;
+        if (context.ompSettledSubagentIds.has(id)) return true;
+        const existing = context.ompSubagents.get(id) ?? {
+          id,
+          agent: field(payload, "agent") ?? field(progress, "agent") ?? "OMP subagent",
+          description: undefined,
+          sessionFile: undefined,
+          parentToolCallId: undefined,
+          index: undefined,
+          model: undefined,
+          task: undefined,
+        };
+        existing.agent = field(payload, "agent") ?? field(progress, "agent") ?? existing.agent;
+        existing.description = field(progress, "description") ?? existing.description;
+        existing.sessionFile = field(payload, "sessionFile") ?? existing.sessionFile;
+        existing.parentToolCallId = field(payload, "parentToolCallId") ?? existing.parentToolCallId;
+        existing.index = nonNegativeInteger(payload.index) ?? existing.index;
+        existing.model = field(progress, "resolvedModel") ?? existing.model;
+        existing.task = field(payload, "task") ?? field(progress, "task") ?? existing.task;
+        context.ompSubagents.set(id, existing);
+        const recentOutput = isStringArray(progress.recentOutput)
+          ? progress.recentOutput.findLast((line) => line.trim().length > 0)
+          : undefined;
+        const currentTool = field(progress, "currentTool");
+        const description =
+          recentOutput ??
+          field(progress, "lastIntent") ??
+          existing.task ??
+          existing.description ??
+          `Running ${existing.agent}`;
+        yield* publish({
+          type: "task.progress",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(id),
+            description,
+            ...(recentOutput ? { summary: recentOutput } : {}),
+            ...(currentTool ? { lastToolName: currentTool } : {}),
+            usage: {
+              tokens: nonNegativeInteger(progress.tokens) ?? 0,
+              contextTokens: nonNegativeNumber(progress.contextTokens) ?? 0,
+              contextWindow: nonNegativeNumber(progress.contextWindow) ?? 0,
+              cost: nonNegativeNumber(progress.cost) ?? 0,
+              durationMs: nonNegativeInteger(progress.durationMs) ?? 0,
+              toolCount: nonNegativeInteger(progress.toolCount) ?? 0,
+            },
+            typedUsage: {
+              totalTokens: nonNegativeInteger(progress.tokens) ?? 0,
+              toolUses: nonNegativeInteger(progress.toolCount) ?? 0,
+              durationMs: nonNegativeInteger(progress.durationMs) ?? 0,
+            },
+            status: field(progress, "status") === "pending" ? "pending" : "running",
+            ...ompSubagentLinkage(existing),
+          },
+          raw: source,
+        });
+        return true;
+      }
+
+      if (type === "subagent_event") {
+        const id = field(payload, "id");
+        const childEvent = isRecord(payload.event) ? payload.event : undefined;
+        const existing = id ? context.ompSubagents.get(id) : undefined;
+        if (!id || !childEvent || !existing) return true;
+        const childType = field(childEvent, "type");
+        const childMessage = isRecord(childEvent.message) ? childEvent.message : undefined;
+        const summary =
+          childType === "message_end" && childMessage
+            ? visibleMessageText(childMessage)
+            : childType?.startsWith("tool_execution")
+              ? field(childEvent, "toolName")
+              : undefined;
+        if (!summary) return true;
+        yield* publish({
+          type: "task.progress",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(id),
+            description: summary,
+            summary,
+            ...(childType?.startsWith("tool_execution") ? { lastToolName: summary } : {}),
+            status: "running",
+            ...ompSubagentLinkage(existing),
+          },
+          raw: source,
+        });
+        return true;
+      }
+      return true;
+    });
+
+  const stopOmpSubagentProjection = (context: AtomicSessionContext, summary: string) =>
+    Effect.gen(function* () {
+      if (definition.cliFlavor !== "omp") return;
+      for (const [id, subagent] of context.ompSubagents) {
+        yield* publish({
+          type: "task.completed",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(id),
+            status: "stopped",
+            summary,
+            ...ompSubagentLinkage(subagent),
+          },
+        });
+        context.ompSettledSubagentIds.add(id);
+      }
+      context.ompSubagents.clear();
+    });
+
+  const stopOmpTodoProjection = (context: AtomicSessionContext, summary: string) =>
+    Effect.gen(function* () {
+      if (definition.cliFlavor !== "omp") return;
+      for (const [taskId, description] of context.ompTodoDescriptions) {
+        const status = context.ompTodoStatuses.get(taskId);
+        if (status === "completed" || status === "abandoned") continue;
+        yield* publish({
+          type: "task.completed",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(taskId),
+            status: "stopped",
+            summary: `${description} was stopped.`,
+          },
+        });
+      }
+      context.ompTodoStatuses.clear();
+      context.ompTodoDescriptions.clear();
+      if (!context.ompTodoRunId || context.ompTodoRootState !== "running") return;
+      context.ompTodoRootState = "completed";
+      context.ompTodoCompletedTurnId = context.activeTurnId;
+      yield* publish({
+        type: "task.completed",
+        ...(yield* eventStamp()),
+        provider: PROVIDER,
+        providerInstanceId: boundInstanceId,
+        threadId: context.threadId,
+        ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+        payload: {
+          taskId: RuntimeTaskId.make(context.ompTodoRunId),
+          status: "stopped",
+          summary,
+          taskType: "local_workflow",
+          workflowName: "Oh My Pi plan",
+          title: "Oh My Pi plan",
+        },
+      });
+    });
+
+  const syncOmpTodos = (
+    context: AtomicSessionContext,
+    source: ReturnType<typeof raw>,
+    knownPhases?: ReadonlyArray<typeof OmpTodoPhase.Type>,
+  ) =>
+    Effect.gen(function* () {
+      if (definition.cliFlavor !== "omp") return;
+      let phases = knownPhases;
+      if (phases === undefined) {
+        const response = yield* context.rpc.request({ type: "get_state" }).pipe(Effect.result);
+        if (response._tag === "Failure") return;
+        phases = Option.getOrUndefined(decodeState(response.success.data))?.todoPhases;
+      }
+      if (!phases) return;
+
+      const stopProjectedTodo = (taskId: string, description: string) =>
+        Effect.flatMap(eventStamp(), (stamp) =>
+          publish({
+            type: "task.completed",
+            ...stamp,
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              taskId: RuntimeTaskId.make(taskId),
+              status: "stopped",
+              summary: `${description} was removed from the Oh My Pi plan.`,
+            },
+            raw: source,
+          }),
+        );
+
+      if (phases.length === 0) {
+        for (const [taskId, description] of context.ompTodoDescriptions) {
+          const status = context.ompTodoStatuses.get(taskId);
+          if (status !== "completed" && status !== "abandoned") {
+            yield* stopProjectedTodo(taskId, description);
+          }
+        }
+        context.ompTodoStatuses.clear();
+        context.ompTodoDescriptions.clear();
+        if (context.ompTodoRunId && context.ompTodoRootState === "running") {
+          const runId = context.ompTodoRunId;
+          context.ompTodoRootState = "completed";
+          context.ompTodoCompletedTurnId = context.activeTurnId;
+          yield* publish({
+            type: "task.completed",
+            ...(yield* eventStamp()),
+            provider: PROVIDER,
+            providerInstanceId: boundInstanceId,
+            threadId: context.threadId,
+            ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+            payload: {
+              taskId: RuntimeTaskId.make(runId),
+              status: "stopped",
+              summary: "Oh My Pi plan was cleared.",
+              taskType: "local_workflow",
+              workflowName: "Oh My Pi plan",
+              title: "Oh My Pi plan",
+            },
+            raw: source,
+          });
+        }
+        return;
+      }
+
+      const hasNonTerminalTask = phases.some((phase) =>
+        phase.tasks.some((task) => task.status !== "completed" && task.status !== "abandoned"),
+      );
+      const signaturePart = (value: string) => `${value.length}:${value}`;
+      const planSignature = phases
+        .map(
+          (phase) =>
+            `${signaturePart(phase.name)}${phase.tasks
+              .map((task) => signaturePart(task.content))
+              .join("")}`,
+        )
+        .join("");
+      const sourceType = field(source.payload, "type");
+      const isTodoMutation =
+        sourceType === "tool_execution_end" && field(source.payload, "toolName") === "todo";
+      if (
+        context.ompTodoRunId === undefined ||
+        (context.ompTodoRootState === "completed" &&
+          (hasNonTerminalTask ||
+            planSignature !== context.ompTodoPlanSignature ||
+            (isTodoMutation && context.activeTurnId !== context.ompTodoCompletedTurnId)))
+      ) {
+        context.ompTodoRunSequence += 1;
+        const baseRunId = `omp-plan:${context.threadId}:${context.ompTodoRunGeneration}`;
+        context.ompTodoRunId =
+          context.ompTodoRunSequence === 1
+            ? baseRunId
+            : `${baseRunId}:${context.ompTodoRunSequence}`;
+        context.ompTodoStatuses.clear();
+        context.ompTodoDescriptions.clear();
+        context.ompTodoRootState = "idle";
+        context.ompTodoCompletedTurnId = undefined;
+        context.ompPublishedWorkflowScriptPath = undefined;
+      }
+      context.ompTodoPlanSignature = planSignature;
+      const runId = context.ompTodoRunId;
+      const rootTaskId = RuntimeTaskId.make(runId);
+      const workflowName = "Oh My Pi plan";
+      const workflowRunHandles = {
+        runId,
+        ...(context.ompWorkflowScriptPath ? { scriptPath: context.ompWorkflowScriptPath } : {}),
+      };
+      const phaseLinks = phases.map((phase, index) => ({
+        index,
+        title: phase.name.trim() || `Phase ${index + 1}`,
+      }));
+      if (context.ompTodoRootState === "idle") {
+        context.ompTodoRootState = "running";
+        yield* publish({
+          type: "task.started",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: rootTaskId,
+            description: "Executing the Oh My Pi plan",
+            taskType: "local_workflow",
+            workflowName,
+            title: workflowName,
+            phases: phaseLinks,
+            runHandles: workflowRunHandles,
+          },
+          raw: source,
+        });
+        context.ompPublishedWorkflowScriptPath = context.ompWorkflowScriptPath;
+      }
+      if (
+        context.ompWorkflowScriptPath !== undefined &&
+        context.ompPublishedWorkflowScriptPath !== context.ompWorkflowScriptPath &&
+        context.ompTodoRootState === "running"
+      ) {
+        yield* publish({
+          type: "task.progress",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: rootTaskId,
+            description: "Generated an Oh My Pi workflow command",
+            status: "running",
+            taskType: "local_workflow",
+            workflowName,
+            title: workflowName,
+            phases: phaseLinks,
+            runHandles: workflowRunHandles,
+          },
+          raw: source,
+        });
+        context.ompPublishedWorkflowScriptPath = context.ompWorkflowScriptPath;
+      }
+
+      const allTaskIds: RuntimeTaskId[] = [];
+      let flatIndex = 0;
+      let previousTaskId: RuntimeTaskId | undefined;
+      for (const [phaseIndex, phase] of phases.entries()) {
+        const phaseTitle = phase.name.trim() || `Phase ${phaseIndex + 1}`;
+        for (const task of phase.tasks) {
+          const taskId = RuntimeTaskId.make(`${runId}:todo:${flatIndex}`);
+          allTaskIds.push(taskId);
+          const priorDescription = context.ompTodoDescriptions.get(taskId);
+          if (priorDescription !== undefined && priorDescription !== task.content) {
+            const replacedStatus = context.ompTodoStatuses.get(taskId);
+            if (replacedStatus !== "completed" && replacedStatus !== "abandoned") {
+              yield* stopProjectedTodo(taskId, priorDescription);
+            }
+            context.ompTodoStatuses.delete(taskId);
+          }
+          context.ompTodoDescriptions.set(taskId, task.content);
+          const priorStatus = context.ompTodoStatuses.get(taskId);
+          const linkage = {
+            taskType: "local_agent" as const,
+            workflowName,
+            workflowStageId: `todo:${flatIndex}`,
+            title: task.content,
+            role: "workflow task",
+            parentAgentId: runId,
+            ...(previousTaskId ? { dependsOnTaskIds: [previousTaskId] } : {}),
+            agentIndex: flatIndex,
+            phaseIndex,
+            phaseTitle,
+            phases: phaseLinks,
+            runHandles: { runId },
+            timelineBypass: true as const,
+          };
+          if (priorStatus === undefined) {
+            yield* publish({
+              type: "task.started",
+              ...(yield* eventStamp()),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: context.threadId,
+              ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+              payload: {
+                taskId,
+                description: task.content,
+                ...linkage,
+              },
+              raw: source,
+            });
+          }
+          if (priorStatus !== task.status) {
+            if (task.status === "completed" || task.status === "abandoned") {
+              yield* publish({
+                type: "task.completed",
+                ...(yield* eventStamp()),
+                provider: PROVIDER,
+                providerInstanceId: boundInstanceId,
+                threadId: context.threadId,
+                ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+                payload: {
+                  taskId,
+                  status: task.status === "completed" ? "completed" : "stopped",
+                  summary:
+                    task.status === "completed"
+                      ? `${task.content} completed.`
+                      : `${task.content} was abandoned.`,
+                  ...linkage,
+                },
+                raw: source,
+              });
+            } else {
+              const runtimeStatus =
+                task.status === "in_progress"
+                  ? "running"
+                  : task.status === "blocked"
+                    ? "waiting"
+                    : "pending";
+              const description =
+                task.status === "blocked" && task.blocker?.trim()
+                  ? `${task.content}: ${task.blocker.trim()}`
+                  : task.content;
+              yield* publish({
+                type: "task.progress",
+                ...(yield* eventStamp()),
+                provider: PROVIDER,
+                providerInstanceId: boundInstanceId,
+                threadId: context.threadId,
+                ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+                payload: {
+                  taskId,
+                  description,
+                  ...(task.blocker?.trim() ? { summary: task.blocker.trim() } : {}),
+                  status: runtimeStatus,
+                  ...linkage,
+                },
+                raw: source,
+              });
+            }
+            context.ompTodoStatuses.set(taskId, task.status);
+          }
+          previousTaskId = taskId;
+          flatIndex += 1;
+        }
+      }
+
+      const currentTaskIds = new Set<string>(allTaskIds);
+      for (const [taskId, description] of context.ompTodoDescriptions) {
+        if (currentTaskIds.has(taskId)) continue;
+        const removedStatus = context.ompTodoStatuses.get(taskId);
+        if (removedStatus !== "completed" && removedStatus !== "abandoned") {
+          yield* stopProjectedTodo(taskId, description);
+        }
+        context.ompTodoStatuses.delete(taskId);
+        context.ompTodoDescriptions.delete(taskId);
+      }
+
+      const allTerminal =
+        allTaskIds.length > 0 &&
+        allTaskIds.every((taskId) => {
+          const status = context.ompTodoStatuses.get(taskId);
+          return status === "completed" || status === "abandoned";
+        });
+      if (allTerminal && context.ompTodoRootState === "running") {
+        context.ompTodoRootState = "completed";
+        context.ompTodoCompletedTurnId = context.activeTurnId;
+        yield* publish({
+          type: "task.completed",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+          payload: {
+            taskId: rootTaskId,
+            status: "completed",
+            summary: "Oh My Pi plan completed.",
+            taskType: "local_workflow",
+            workflowName,
+            title: workflowName,
+            phases: phaseLinks,
+            runHandles: workflowRunHandles,
+          },
+          raw: source,
+        });
+      }
     });
 
   const handleExtensionUi = (
@@ -1341,6 +2014,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
     Effect.gen(function* () {
       const type = field(event, "type");
       if (!type) return;
+      if (yield* handleOmpSubagentEvent(context, event)) return;
       if (type === "extension_ui_request") {
         if (context.suppressAgentEventsUntilNextTurn) return;
         return yield* handleExtensionUi(context, event);
@@ -1425,6 +2099,50 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       const turnId = context.activeTurnId;
       if (!turnId) return;
       const source = raw(event, type);
+      if (type === "command_output") {
+        const text = field(event, "text");
+        if (!text) return;
+        context.messageSequence += 1;
+        const itemId = RuntimeItemId.make(`${turnId}:command:${context.messageSequence}`);
+        yield* publish({
+          type: "item.started",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          turnId,
+          itemId,
+          payload: { itemType: "assistant_message", status: "inProgress" },
+          raw: source,
+        });
+        yield* publish({
+          type: "content.delta",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          turnId,
+          itemId,
+          payload: { streamKind: "assistant_text", delta: text },
+          raw: source,
+        });
+        yield* publish({
+          type: "item.completed",
+          ...(yield* eventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: context.threadId,
+          turnId,
+          itemId,
+          payload: { itemType: "assistant_message", status: "completed" },
+          raw: source,
+        });
+        return;
+      }
+      if (type === "prompt_result" && event.agentInvoked === false) {
+        yield* settleActiveProviderTurn(context, turnId, source);
+        return;
+      }
       if (type === "message_start") {
         const message = isRecord(event.message) ? event.message : undefined;
         if (message && field(message, "role") !== "assistant") return;
@@ -1651,6 +2369,26 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           field(persistedEvent, "toolCallId") ?? field(persistedEvent, "id") ?? `${turnId}:tool`;
         const itemId = RuntimeItemId.make(toolCallId);
         const toolName = field(persistedEvent, "toolName") ?? `${definition.displayName} tool`;
+        let capturedOmpWorkflowCommand = false;
+        if (
+          definition.cliFlavor === "omp" &&
+          type === "tool_execution_end" &&
+          toolName === "write"
+        ) {
+          const args = isRecord(persistedEvent.args) ? persistedEvent.args : undefined;
+          const writtenPath = args ? field(args, "path") : undefined;
+          if (writtenPath) {
+            const workflowCommandsRoot = path.resolve(context.cwd, ".omp", "commands");
+            const candidate = path.resolve(context.cwd, writtenPath);
+            if (
+              path.extname(candidate).toLowerCase() === ".md" &&
+              candidate.startsWith(`${workflowCommandsRoot}${path.sep}`)
+            ) {
+              context.ompWorkflowScriptPath = candidate;
+              capturedOmpWorkflowCommand = true;
+            }
+          }
+        }
         const lifecycle =
           type === "tool_execution_start"
             ? "item.started"
@@ -1679,54 +2417,43 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           },
           raw: persistedSource,
         });
+        if (
+          definition.cliFlavor === "omp" &&
+          type === "tool_execution_end" &&
+          toolName === "todo"
+        ) {
+          yield* syncOmpTodos(context, persistedSource);
+        } else if (capturedOmpWorkflowCommand) {
+          yield* syncOmpTodos(context, persistedSource);
+        }
         return;
       }
       if (type === "agent_settled") {
-        const statsResult = yield* context.rpc
-          .request({ type: "get_session_stats" })
-          .pipe(Effect.result);
-        if (statsResult._tag === "Success") {
-          const usage = atomicSessionUsage(statsResult.success.data);
-          if (usage) {
-            yield* publish({
-              type: "thread.token-usage.updated",
-              ...(yield* eventStamp()),
-              provider: PROVIDER,
-              providerInstanceId: boundInstanceId,
-              threadId: context.threadId,
-              turnId,
-              payload: { usage },
-              raw: source,
-            });
-          }
-        }
-        yield* resolveAbandonedUiRequests(context);
-        const terminalError = context.pendingAssistantError;
-        if (terminalError) {
-          yield* publish({
-            type: "runtime.error",
-            ...(yield* eventStamp()),
-            provider: PROVIDER,
-            providerInstanceId: boundInstanceId,
-            threadId: context.threadId,
-            turnId,
-            payload: { message: terminalError, class: "provider_error" },
-            raw: source,
-          });
-          yield* completeActiveTurn(context, "failed", terminalError);
-        } else {
-          yield* completeActiveTurn(context, "completed");
-        }
+        yield* settleActiveProviderTurn(context, turnId, source);
         return;
       }
       // agent_end is the end of one low-level Pi run. Atomic may still retry,
       // compact, or deliver queued workflow follow-ups; agent_settled is the
       // only terminal lifecycle signal.
-      if (type === "agent_end") return;
-      if (type === "compaction_start" || type === "compaction_end") {
+      if (type === "agent_end") {
+        if (definition.cliFlavor !== "omp" || event.isTerminal === false) return;
+        yield* syncOmpTodos(context, source);
+        if (context.ompSubagents.size > 0) {
+          return;
+        }
+        yield* settleActiveProviderTurn(context, turnId, source);
+        return;
+      }
+      if (
+        type === "compaction_start" ||
+        type === "compaction_end" ||
+        type === "auto_compaction_start" ||
+        type === "auto_compaction_end"
+      ) {
+        const isStart = type === "compaction_start" || type === "auto_compaction_start";
         const itemId = RuntimeItemId.make(`${turnId}:compaction`);
         yield* publish({
-          type: type === "compaction_start" ? "item.started" : "item.completed",
+          type: isStart ? "item.started" : "item.completed",
           ...(yield* eventStamp()),
           provider: PROVIDER,
           providerInstanceId: boundInstanceId,
@@ -1735,7 +2462,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           itemId,
           payload: {
             itemType: "context_compaction",
-            status: type === "compaction_start" ? "inProgress" : "completed",
+            status: isStart ? "inProgress" : "completed",
           },
           raw: source,
         });
@@ -1795,6 +2522,11 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       yield* context.rpc.kill;
       yield* resolveAbandonedUiRequests(context, true);
       yield* stopActiveWorkflowTasks(context);
+      yield* stopOmpTodoProjection(context, "Oh My Pi plan stopped with the provider session.");
+      yield* stopOmpSubagentProjection(
+        context,
+        "Oh My Pi child stopped with the provider session.",
+      );
       yield* completeActiveTurn(context, "interrupted", "Session stopped.");
       yield* Effect.ignore(Scope.close(context.scope, Exit.void));
       const ownsSession = sessions.get(context.threadId) === context;
@@ -1822,11 +2554,13 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
           });
         }
-        if (input.runtimeMode !== "full-access") {
+        const supportsOmpApprovals =
+          definition.cliFlavor === "omp" && input.runtimeMode === "approval-required";
+        if (input.runtimeMode !== "full-access" && !supportsOmpApprovals) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "startSession",
-            issue: `${definition.displayName} RPC does not expose approval callbacks. Choose Full access for ${definition.displayName} sessions.`,
+            issue: `${definition.displayName} cannot honor the selected runtime mode. Choose Approval required or Full access for Oh My Pi sessions.`,
           });
         }
         const existing = sessions.get(input.threadId);
@@ -1838,7 +2572,10 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
           const processLaunch = yield* Effect.gen(function* () {
             if (mcpSession === undefined) {
-              return { args: sessionArgs(settings, input.title), environment };
+              return {
+                args: sessionArgs(settings, definition, input.runtimeMode, input.title),
+                environment,
+              };
             }
             const extensionPath = yield* fileSystem
               .makeTempFileScoped({ prefix: "t3-computer-use-", suffix: ".mjs" })
@@ -1846,7 +2583,11 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             yield* fileSystem.writeFileString(extensionPath, T3_COMPUTER_USE_PI_EXTENSION_SOURCE);
             yield* fileSystem.chmod(extensionPath, 0o600);
             return {
-              args: [...sessionArgs(settings, input.title), "--extension", extensionPath],
+              args: [
+                ...sessionArgs(settings, definition, input.runtimeMode, input.title),
+                "--extension",
+                extensionPath,
+              ],
               environment: {
                 ...environment,
                 T3CODE_MCP_ENDPOINT: mcpSession.endpoint,
@@ -1892,6 +2633,24 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
                 }),
             ),
           );
+          if (definition.protocolVersion !== undefined) {
+            yield* rpc
+              .request({
+                type: "negotiate_protocol",
+                protocolVersion: definition.protocolVersion,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "negotiate_protocol",
+                      detail: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+          }
           const resume = Option.getOrUndefined(decodeResumeCursor(input.resumeCursor));
           if (resume?.sessionFile) {
             yield* rpc.request({ type: "switch_session", sessionPath: resume.sessionFile }).pipe(
@@ -1900,6 +2659,33 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
                   new ProviderAdapterRequestError({
                     provider: PROVIDER,
                     method: "switch_session",
+                    detail: cause.message,
+                    cause,
+                  }),
+              ),
+            );
+          }
+          if (definition.cliFlavor === "omp" && input.title?.trim()) {
+            yield* rpc.request({ type: "set_session_name", name: input.title.trim() }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "set_session_name",
+                    detail: cause.message,
+                    cause,
+                  }),
+              ),
+            );
+          }
+          const initialOmpSubagents = new Map<string, OmpSubagentContext>();
+          if (definition.cliFlavor === "omp") {
+            yield* rpc.request({ type: "set_subagent_subscription", level: "events" }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "set_subagent_subscription",
                     detail: cause.message,
                     cause,
                   }),
@@ -1970,6 +2756,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           };
           const context: AtomicSessionContext = {
             threadId: input.threadId,
+            cwd,
             scope: sessionScope,
             rpc,
             session,
@@ -1987,7 +2774,22 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             workflowRuns: new Map(),
             workflowLifecycleSignatures: new Map(),
             privateComputerUseToolCalls: new Map(),
-            mappedEventSequence: 0,
+            ompSubagents: initialOmpSubagents,
+            ompSettledSubagentIds: new Set(),
+            ompTodoStatuses: new Map(),
+            ompTodoRunGeneration: definition.cliFlavor === "omp" ? yield* randomId : "",
+            ompTodoRunSequence: 0,
+            ompTodoRunId: undefined,
+            ompTodoPlanSignature: undefined,
+            ompTodoCompletedTurnId: undefined,
+            ompTodoDescriptions: new Map(),
+            ompTodoRootState: "idle",
+            ompWorkflowScriptPath: undefined,
+            ompPublishedWorkflowScriptPath: undefined,
+            // The event consumer is attached after the initialization RPCs.
+            // Treat everything observed before get_state's response as the
+            // baseline; those startup frames cannot belong to a T3 turn.
+            mappedEventSequence: stateResponse.precedingEventSequence,
             turns: [],
             stopped: false,
           };
@@ -2009,39 +2811,106 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             }),
             Effect.forkIn(sessionScope),
           );
-          sessions.set(input.threadId, context);
-          transferred = true;
-          yield* publish({
-            type: "session.started",
-            ...(yield* eventStamp()),
-            provider: PROVIDER,
-            providerInstanceId: boundInstanceId,
-            threadId: input.threadId,
-            payload: {
-              message: `${definition.displayName} RPC session ready`,
-              resume: session.resumeCursor,
-            },
-          });
-          yield* publish({
-            type: "session.state.changed",
-            ...(yield* eventStamp()),
-            provider: PROVIDER,
-            providerInstanceId: boundInstanceId,
-            threadId: input.threadId,
-            payload: {
-              state: "ready",
-              reason: `${definition.displayName} RPC session ready`,
-            },
-          });
-          yield* publish({
-            type: "thread.started",
-            ...(yield* eventStamp()),
-            provider: PROVIDER,
-            providerInstanceId: boundInstanceId,
-            threadId: input.threadId,
-            payload: { providerThreadId: state?.sessionId },
-          });
-          return session;
+          return yield* Effect.gen(function* () {
+            sessions.set(input.threadId, context);
+            transferred = true;
+            yield* publish({
+              type: "session.started",
+              ...(yield* eventStamp()),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: input.threadId,
+              payload: {
+                message: `${definition.displayName} RPC session ready`,
+                resume: session.resumeCursor,
+              },
+            });
+            yield* publish({
+              type: "session.state.changed",
+              ...(yield* eventStamp()),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: input.threadId,
+              payload: {
+                state: "ready",
+                reason: `${definition.displayName} RPC session ready`,
+              },
+            });
+            yield* publish({
+              type: "thread.started",
+              ...(yield* eventStamp()),
+              provider: PROVIDER,
+              providerInstanceId: boundInstanceId,
+              threadId: input.threadId,
+              payload: { providerThreadId: state?.sessionId },
+            });
+            if (definition.cliFlavor === "omp") {
+              const subagentsResponse = yield* rpc.request({ type: "get_subagents" }).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "get_subagents",
+                      detail: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+              yield* awaitMappedEvents(context, subagentsResponse.precedingEventSequence);
+              const subagentsData = isRecord(subagentsResponse.data)
+                ? subagentsResponse.data
+                : undefined;
+              if (Array.isArray(subagentsData?.subagents)) {
+                for (const value of subagentsData.subagents) {
+                  if (!isRecord(value)) continue;
+                  const id = field(value, "id");
+                  const status = field(value, "status");
+                  if (
+                    !id ||
+                    context.ompSubagents.has(id) ||
+                    context.ompSettledSubagentIds.has(id) ||
+                    status === "completed" ||
+                    status === "failed" ||
+                    status === "aborted"
+                  ) {
+                    continue;
+                  }
+                  const progress = isRecord(value.progress) ? value.progress : undefined;
+                  initialOmpSubagents.set(id, {
+                    id,
+                    agent: field(value, "agent") ?? "OMP subagent",
+                    description: field(value, "description"),
+                    sessionFile: field(value, "sessionFile"),
+                    parentToolCallId: field(value, "parentToolCallId"),
+                    index: nonNegativeInteger(value.index),
+                    model: progress ? field(progress, "resolvedModel") : undefined,
+                    task: field(value, "task"),
+                  });
+                }
+              }
+              for (const subagent of initialOmpSubagents.values()) {
+                context.ompSubagents.set(subagent.id, subagent);
+                yield* publish({
+                  type: "task.started",
+                  ...(yield* eventStamp()),
+                  provider: PROVIDER,
+                  providerInstanceId: boundInstanceId,
+                  threadId: input.threadId,
+                  payload: {
+                    taskId: RuntimeTaskId.make(subagent.id),
+                    description: subagent.description ?? `Running ${subagent.agent}`,
+                    ...ompSubagentLinkage(subagent),
+                  },
+                });
+              }
+              yield* syncOmpTodos(
+                context,
+                raw({ type: "get_state" }, "get_state"),
+                state?.todoPhases,
+              );
+            }
+            return session;
+          }).pipe(Effect.tapError(() => stopSessionInternal(context, true).pipe(Effect.ignore)));
         }).pipe(
           Effect.ensuring(
             Effect.suspend(() =>
@@ -2094,6 +2963,24 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             provider: PROVIDER,
             operation: "sendTurn",
             issue: "Turn requires non-empty text or attachments.",
+          });
+        }
+        const ompQueueCommand =
+          definition.cliFlavor === "omp" && text
+            ? /^\/(follow-up|steer)\s+([\s\S]+)$/iu.exec(text)
+            : null;
+        const explicitStreamingBehavior =
+          ompQueueCommand?.[1] === "follow-up"
+            ? "followUp"
+            : ompQueueCommand?.[1] === "steer"
+              ? "steer"
+              : undefined;
+        const promptText = ompQueueCommand?.[2]?.trim() || text;
+        if (explicitStreamingBehavior !== undefined && context.activeTurnId === undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: `/${ompQueueCommand?.[1]} requires an active Oh My Pi turn.`,
           });
         }
         const selection =
@@ -2163,9 +3050,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             .request(
               {
                 type: "prompt",
-                message: text ?? "Please inspect the attached image.",
+                message: promptText ?? "Please inspect the attached image.",
                 ...(images.length > 0 ? { images } : {}),
-                ...(steering ? { streamingBehavior: "steer" } : {}),
+                ...(steering ? { streamingBehavior: explicitStreamingBehavior ?? "steer" } : {}),
               },
               Duration.infinity,
             )
@@ -2277,6 +3164,8 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         context.suppressAgentEventsUntilNextTurn = true;
       }
       yield* resolveAbandonedUiRequests(context);
+      yield* stopOmpTodoProjection(context, "Oh My Pi plan was interrupted.");
+      yield* stopOmpSubagentProjection(context, "Oh My Pi child was interrupted.");
       yield* completeActiveTurn(context, "interrupted");
     });
 

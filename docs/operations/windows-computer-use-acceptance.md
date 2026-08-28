@@ -69,7 +69,7 @@ trees into product events.
 
 ## Provider and client checklist
 
-For Codex, Pi, and Atomic, repeat the same user-visible scenario:
+For Codex, Pi, Atomic, and Oh My Pi, repeat the same user-visible scenario:
 
 - call `computer_status` and verify the signed Windows host identity;
 - list targets and choose an allowed Notepad window by stable target ID;
@@ -84,6 +84,10 @@ For Codex, Pi, and Atomic, repeat the same user-visible scenario:
 
 Atomic must additionally preserve workflow and stage correlation while an approval is pending.
 Ordinary chat and workflow progress must continue to render during the wait.
+
+Oh My Pi must additionally preserve phased todo status, detached-child status, and the child
+transcript affordance while an approval is pending. Its provider run must use OMP 18.0.9 or the
+current pinned acceptance version.
 
 ## UTM development evidence
 

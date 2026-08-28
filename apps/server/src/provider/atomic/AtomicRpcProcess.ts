@@ -27,6 +27,21 @@ export type AtomicRpcResponse = AtomicRpcWireResponse & {
 const AtomicRpcEvent = Schema.Record(Schema.String, Schema.Unknown);
 export type AtomicRpcEvent = typeof AtomicRpcEvent.Type;
 
+const RpcChunkFrame = Schema.Struct({
+  type: Schema.Literal("rpc_chunk"),
+  chunkId: Schema.String,
+  index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  count: Schema.Int.check(Schema.isGreaterThan(0)),
+  byteLength: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  data: Schema.String,
+});
+type RpcChunkFrame = typeof RpcChunkFrame.Type;
+
+const RpcReadyFrame = Schema.Struct({
+  type: Schema.Literal("ready"),
+  maxReassembledFrameBytes: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+});
+
 const eventSequences = new WeakMap<object, number>();
 
 /** Ordered transport cursor attached out-of-band so it never pollutes raw provider data. */
@@ -36,7 +51,10 @@ export function atomicRpcEventSequence(event: AtomicRpcEvent): number | undefine
 
 const isAtomicRpcResponse = Schema.is(AtomicRpcResponse);
 const isAtomicRpcEvent = Schema.is(AtomicRpcEvent);
+const isRpcChunkFrame = Schema.is(RpcChunkFrame);
+const isRpcReadyFrame = Schema.is(RpcReadyFrame);
 const encodeJsonString = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeJsonString = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 export class AtomicRpcError extends Schema.TaggedErrorClass<AtomicRpcError>()("AtomicRpcError", {
   runtimeName: Schema.String,
@@ -75,6 +93,11 @@ export interface AtomicRpcProcessOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT = Duration.seconds(15);
+const MAX_RPC_REASSEMBLED_FRAME_BYTES = 64 * 1024 * 1024;
+// OMP v18 emits at most 256 chunks for its 64 MiB reassembly budget. Keep the
+// shared transport deliberately more permissive for other Pi-compatible
+// runtimes while still preventing attacker-controlled, unbounded chunk arrays.
+const MAX_RPC_CHUNK_COUNT = 65_536;
 // Atomic performs network work before it sends its first response: it
 // refreshes OAuth credentials and fetches the model catalog, rewriting
 // auth.json and models-store.json. Measured cold start is ~28s against a
@@ -124,6 +147,17 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
   let requestSequence = 0;
   let eventSequence = 0;
   let terminalError: AtomicRpcError | undefined;
+  let maxReassembledFrameBytes = MAX_RPC_REASSEMBLED_FRAME_BYTES;
+  let chunkAssembly:
+    | {
+        readonly chunkId: string;
+        readonly count: number;
+        readonly byteLength: number;
+        readonly chunks: Array<Uint8Array>;
+        nextIndex: number;
+        receivedBytes: number;
+      }
+    | undefined;
   // False until Atomic sends its first response, i.e. until startup network
   // work has finished. Gates which timeout `request` applies.
   let settled = false;
@@ -179,36 +213,160 @@ export const makeAtomicRpcProcess = Effect.fn("makeAtomicRpcProcess")(function* 
       pending.clear();
     });
 
-  yield* handle.stdout.pipe(
-    Stream.pipeThroughChannel(Ndjson.decode({ ignoreEmptyLines: true })),
-    Stream.runForEach((value) => {
+  const invalidFrame = (detail: string) => {
+    const error = new AtomicRpcError({
+      runtimeName,
+      binaryPath: options.binaryPath,
+      operation: "read",
+      detail,
+    });
+    terminalError = error;
+    return failPending(error).pipe(Effect.andThen(Effect.fail(error)));
+  };
+
+  const dispatchFrame = (value: unknown): Effect.Effect<void, AtomicRpcError> =>
+    Effect.gen(function* () {
       if (isAtomicRpcResponse(value)) {
+        if (chunkAssembly) {
+          return yield* invalidFrame(
+            `Received an RPC response before chunk sequence '${chunkAssembly.chunkId}' completed.`,
+          );
+        }
         settled = true;
         const deferred = value.id ? pending.get(value.id) : undefined;
-        if (!deferred) return Effect.void;
+        if (!deferred) return;
         pending.delete(value.id!);
-        return value.success
-          ? Deferred.succeed(deferred, {
-              ...value,
-              precedingEventSequence: eventSequence,
-            }).pipe(Effect.asVoid)
-          : Deferred.fail(
-              deferred,
+        if (value.success) {
+          yield* Deferred.succeed(deferred, {
+            ...value,
+            precedingEventSequence: eventSequence,
+          });
+          return;
+        }
+        yield* Deferred.fail(
+          deferred,
+          new AtomicRpcError({
+            runtimeName,
+            binaryPath: options.binaryPath,
+            operation: value.command,
+            detail: value.error ?? `${runtimeName} returned an unsuccessful response.`,
+          }),
+        );
+        return;
+      }
+
+      if (isRpcChunkFrame(value)) {
+        if (value.count > MAX_RPC_CHUNK_COUNT) {
+          return yield* invalidFrame(
+            `RPC chunk sequence '${value.chunkId}' exceeds the ${MAX_RPC_CHUNK_COUNT}-chunk limit.`,
+          );
+        }
+        if (value.byteLength > maxReassembledFrameBytes) {
+          return yield* invalidFrame(
+            `RPC chunk sequence '${value.chunkId}' exceeds the ${maxReassembledFrameBytes}-byte reassembly limit.`,
+          );
+        }
+        if (!chunkAssembly) {
+          if (value.index !== 0) {
+            return yield* invalidFrame(
+              `RPC chunk sequence '${value.chunkId}' started at index ${value.index}.`,
+            );
+          }
+          chunkAssembly = {
+            chunkId: value.chunkId,
+            count: value.count,
+            byteLength: value.byteLength,
+            chunks: [],
+            nextIndex: 0,
+            receivedBytes: 0,
+          };
+        }
+        const assembly = chunkAssembly;
+        if (
+          value.chunkId !== assembly.chunkId ||
+          value.count !== assembly.count ||
+          value.byteLength !== assembly.byteLength ||
+          value.index !== assembly.nextIndex
+        ) {
+          return yield* invalidFrame(
+            `RPC chunk sequence '${assembly.chunkId}' was interrupted or arrived out of order.`,
+          );
+        }
+        const bytes = Buffer.from(value.data, "base64");
+        if (bytes.toString("base64") !== value.data) {
+          return yield* invalidFrame(
+            `RPC chunk ${value.index} for '${value.chunkId}' is not canonical base64.`,
+          );
+        }
+        assembly.chunks.push(bytes);
+        assembly.nextIndex += 1;
+        assembly.receivedBytes += bytes.byteLength;
+        if (
+          assembly.receivedBytes > assembly.byteLength ||
+          assembly.receivedBytes > maxReassembledFrameBytes
+        ) {
+          return yield* invalidFrame(
+            `RPC chunk sequence '${value.chunkId}' exceeded its declared byte length.`,
+          );
+        }
+        if (assembly.nextIndex < assembly.count) return;
+        chunkAssembly = undefined;
+        if (assembly.receivedBytes !== assembly.byteLength) {
+          return yield* invalidFrame(
+            `RPC chunk sequence '${value.chunkId}' declared ${assembly.byteLength} bytes but produced ${assembly.receivedBytes}.`,
+          );
+        }
+        const payloadBytes = Buffer.concat(assembly.chunks);
+        const payloadText = yield* Effect.try({
+          try: () => new TextDecoder("utf-8", { fatal: true }).decode(payloadBytes),
+          catch: (cause) =>
+            new AtomicRpcError({
+              runtimeName,
+              binaryPath: options.binaryPath,
+              operation: "read",
+              detail: `RPC chunk sequence '${value.chunkId}' is not valid UTF-8.`,
+              cause,
+            }),
+        });
+        const payload = yield* decodeJsonString(payloadText).pipe(
+          Effect.mapError(
+            (cause) =>
               new AtomicRpcError({
                 runtimeName,
                 binaryPath: options.binaryPath,
-                operation: value.command,
-                detail: value.error ?? `${runtimeName} returned an unsuccessful response.`,
+                operation: "read",
+                detail: `RPC chunk sequence '${value.chunkId}' is not valid JSON.`,
+                cause,
               }),
-            ).pipe(Effect.asVoid);
+          ),
+        );
+        yield* dispatchFrame(payload);
+        return;
+      }
+
+      if (chunkAssembly) {
+        return yield* invalidFrame(
+          `RPC frame interrupted chunk sequence '${chunkAssembly.chunkId}'.`,
+        );
       }
       if (!isAtomicRpcEvent(value)) {
-        return Effect.logWarning(`Ignored malformed ${runtimeName} RPC frame.`);
+        yield* Effect.logWarning(`Ignored malformed ${runtimeName} RPC frame.`);
+        return;
+      }
+      if (isRpcReadyFrame(value) && value.maxReassembledFrameBytes !== undefined) {
+        maxReassembledFrameBytes = Math.min(
+          value.maxReassembledFrameBytes,
+          MAX_RPC_REASSEMBLED_FRAME_BYTES,
+        );
       }
       eventSequence += 1;
       eventSequences.set(value, eventSequence);
-      return PubSub.publish(events, value).pipe(Effect.asVoid);
-    }),
+      yield* PubSub.publish(events, value);
+    });
+
+  yield* handle.stdout.pipe(
+    Stream.pipeThroughChannel(Ndjson.decode({ ignoreEmptyLines: true })),
+    Stream.runForEach(dispatchFrame),
     Effect.catchCause((cause) => failPending(cause)),
     // A clean EOF is just as terminal as a decode failure. Without this
     // finalizer, requests wait for their full timeout after the child exits.

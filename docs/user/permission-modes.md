@@ -37,8 +37,8 @@ bypasses an app grant or a point-of-risk confirmation.
 Computer Use is a feature-complete preview for unlocked native-app and browser workflows. Native
 release signing, physical-platform acceptance, in-app macOS permission setup, Office add-in parity,
 and unattended locked use remain outside that supported preview scope. On web or desktop, turn on
-**Settings** → **Integrations** → **Computer Use (preview)** before starting a new Codex, Pi, or
-Atomic session. The setting is off by default, and an existing session keeps the tools it started
+**Settings** → **Integrations** → **Computer Use (preview)** before starting a new Codex, Pi,
+Atomic, or Oh My Pi session. The setting is off by default, and an existing session keeps the tools it started
 with. T3 Code asks separately before observing or operating an app. An app grant can last
 for one action, the current turn, the provider session, or permanently on that verified computer.
 Actions that may have an external effect require another confirmation immediately before execution.
@@ -71,7 +71,7 @@ granted manually in macOS System Settings; T3 never clicks or approves a privacy
 
 Agent access to the in-app preview browser is on by default. On web or desktop, turn **Agent browser
 access** off under **Settings** → **Integrations** → **Browser** to withhold the `preview_*` tools
-from new Codex, Pi, and Atomic sessions. Your own browser panel remains available, and a session that
+from new Codex, Pi, Atomic, and Oh My Pi sessions. Your own browser panel remains available, and a session that
 is already running keeps the tools it started with.
 
 The desktop app can also open a dedicated, persistent T3 Code browser profile for sites that require
@@ -104,7 +104,8 @@ set to always-approve, and **Full access** starts Grok with always-approve. The 
 describe what you get; the exact per-provider translation is internal and may change.
 
 Pi and Atomic currently offer only **Full access** because their session protocol has no generic
-provider approval callback. T3-owned Computer Use app grants and action confirmations still apply
-through the bundled T3 extension.
+provider approval callback. Oh My Pi offers **Approval required** through OMP's `always-ask` mode
+and **Full access** through its configured approval mode. T3-owned Computer Use app grants and
+action confirmations still apply through the bundled T3 extension in either mode.
 
 For providers that support them, mobile offers the same modes with the same labels and descriptions.

@@ -19,6 +19,13 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       staleTimeMs: 300_000,
       idleTtlMs: 300_000,
     }),
+    agentTranscript: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:orchestration:agent-transcript",
+      tag: ORCHESTRATION_WS_METHODS.getWorkflowScript,
+      staleTimeMs: 1_000,
+      idleTtlMs: 30_000,
+      refreshIntervalMs: 2_000,
+    }),
     fullThreadDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:full-thread-diff",
       tag: ORCHESTRATION_WS_METHODS.getFullThreadDiff,

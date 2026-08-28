@@ -13,6 +13,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 import { assert, describe } from "vite-plus/test";
 
 import { makeAtomicRpcProcess } from "./AtomicRpcProcess.ts";
@@ -140,6 +142,160 @@ describe("AtomicRpcProcess", () => {
         if (afterEof.failure._tag === "AtomicRpcError") {
           assert.strictEqual(afterEof.failure.operation, "read");
         }
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("reassembles negotiated RPC v2 chunks into one provider event", () =>
+    Effect.gen(function* () {
+      const rpc = yield* makeAtomicRpcProcess({
+        binaryPath: writeMockAtomicScript(`
+const payload = Buffer.from(JSON.stringify({
+  type: "extension_ui_request",
+  id: "large-ui",
+  method: "notify",
+  message: "${"x".repeat(256)}🌍",
+}), "utf8");
+const count = 5;
+process.stdout.write(JSON.stringify({
+  type: "ready",
+  protocolVersion: 1,
+  supportedProtocolVersions: [1, 2],
+  maxFrameBytes: 1024,
+  maxReassembledFrameBytes: 1024 * 1024,
+}) + "\\n");
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk.toString("utf8");
+  let index;
+  while ((index = buffer.indexOf("\\n")) !== -1) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    const command = JSON.parse(line);
+    process.stdout.write(JSON.stringify({
+      id: command.id,
+      type: "response",
+      command: command.type,
+      success: true,
+      data: { protocolVersion: 2 },
+    }) + "\\n");
+    if (command.type !== "negotiate_protocol") continue;
+    const chunkSize = Math.ceil(payload.length / count);
+    for (let chunkIndex = 0; chunkIndex < count; chunkIndex += 1) {
+      const start = chunkIndex * chunkSize;
+      const end = Math.min(start + chunkSize, payload.length);
+      process.stdout.write(JSON.stringify({
+        type: "rpc_chunk",
+        chunkId: "large-ui-event",
+        index: chunkIndex,
+        count,
+        byteLength: payload.length,
+        data: payload.subarray(start, end).toString("base64"),
+      }) + "\\n");
+    }
+  }
+});
+`),
+        runtimeName: "OMP",
+      });
+      const eventFiber = yield* rpc.events.pipe(
+        Stream.filter((event) => event.type === "extension_ui_request"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* rpc.request({ type: "negotiate_protocol", protocolVersion: 2 });
+      const event = yield* Fiber.join(eventFiber).pipe(Effect.timeout(Duration.seconds(2)));
+
+      assert.equal(event._tag, "Some");
+      if (event._tag === "None") return;
+      assert.equal(event.value.id, "large-ui");
+      assert.equal(event.value.method, "notify");
+      assert.match(String(event.value.message), /🌍$/u);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("rejects an unbounded RPC v2 chunk count before allocating assembly state", () =>
+    Effect.gen(function* () {
+      const rpc = yield* makeAtomicRpcProcess({
+        binaryPath: writeMockAtomicScript(`
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk.toString("utf8");
+  const newline = buffer.indexOf("\\n");
+  if (newline === -1) return;
+  const command = JSON.parse(buffer.slice(0, newline));
+  process.stdout.write(JSON.stringify({
+    type: "rpc_chunk",
+    chunkId: "unbounded-count",
+    index: 0,
+    count: 1000000,
+    byteLength: 1,
+    data: "eA==",
+  }) + "\\n");
+  setTimeout(() => process.stdout.write(JSON.stringify({
+    id: command.id,
+    type: "response",
+    command: command.type,
+    success: true,
+  }) + "\\n"), 50);
+});
+setInterval(() => {}, 1000);
+`),
+        runtimeName: "OMP",
+      });
+
+      const result = yield* rpc
+        .request({ type: "get_state" })
+        .pipe(Effect.timeout(Duration.seconds(2)), Effect.result);
+
+      assert.strictEqual(result._tag, "Failure");
+      if (result._tag === "Failure" && result.failure._tag === "AtomicRpcError") {
+        assert.strictEqual(result.failure.operation, "read");
+        assert.match(result.failure.message, /65536-chunk limit/u);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("does not let a ready frame raise the absolute reassembly limit", () =>
+    Effect.gen(function* () {
+      const rpc = yield* makeAtomicRpcProcess({
+        binaryPath: writeMockAtomicScript(`
+process.stdout.write(JSON.stringify({
+  type: "ready",
+  maxReassembledFrameBytes: Number.MAX_SAFE_INTEGER,
+}) + "\\n");
+process.stdin.once("data", (chunk) => {
+  const command = JSON.parse(chunk.toString("utf8").trim());
+  process.stdout.write(JSON.stringify({
+    type: "rpc_chunk",
+    chunkId: "oversized-ready",
+    index: 0,
+    count: 2,
+    byteLength: 67108865,
+    data: "eA==",
+  }) + "\\n");
+  setTimeout(() => process.stdout.write(JSON.stringify({
+    id: command.id,
+    type: "response",
+    command: command.type,
+    success: true,
+  }) + "\\n"), 50);
+});
+setInterval(() => {}, 1000);
+`),
+        runtimeName: "OMP",
+      });
+
+      const result = yield* rpc
+        .request({ type: "get_state" })
+        .pipe(Effect.timeout(Duration.seconds(2)), Effect.result);
+
+      assert.strictEqual(result._tag, "Failure");
+      if (result._tag === "Failure" && result.failure._tag === "AtomicRpcError") {
+        assert.strictEqual(result.failure.operation, "read");
+        assert.match(result.failure.message, /67108864-byte reassembly limit/u);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

@@ -7,6 +7,7 @@ import {
   Icon,
   OpenAI,
   OpenCodeIcon,
+  OmpIcon,
   PiAgentIcon,
 } from "../Icons";
 import { PROVIDER_OPTIONS } from "../../session-logic";
@@ -14,6 +15,7 @@ import { PROVIDER_OPTIONS } from "../../session-logic";
 export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
   [ProviderDriverKind.make("atomic")]: AtomicIcon,
   [ProviderDriverKind.make("pi")]: PiAgentIcon,
+  [ProviderDriverKind.make("omp")]: OmpIcon,
   [ProviderDriverKind.make("codex")]: OpenAI,
   [ProviderDriverKind.make("claudeAgent")]: ClaudeAI,
   [ProviderDriverKind.make("opencode")]: OpenCodeIcon,

@@ -34,6 +34,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
@@ -116,6 +117,7 @@ interface PendingRequest {
   readonly lease: ControlLease;
   readonly operation: ComputerUseOperation;
   readonly deferred: Deferred.Deferred<unknown, ComputerUseBrokerError>;
+  readonly stopReason?: ComputerUseStopReason;
 }
 
 interface BrokerState {
@@ -124,6 +126,8 @@ interface BrokerState {
   readonly pending: ReadonlyMap<ComputerUseRequestId, PendingRequest>;
   readonly requestSequence: number;
 }
+
+const CANCELLATION_DRAIN_MS = 1_000;
 
 const HOST_FAILURE_REASONS = {
   ComputerUsePermissionMissingError: "permission-missing",
@@ -188,6 +192,7 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     pending: new Map(),
     requestSequence: 0,
   });
+  const connectionGate = yield* Semaphore.make(1);
 
   const closeConnection = Effect.fn("ComputerUseBroker.closeConnection")(function* (
     connection: HostConnection,
@@ -238,40 +243,50 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     yield* closeConnection(connection, disconnected);
   });
 
-  const acquireConnection = Effect.fn("ComputerUseBroker.acquireConnection")(function* (
-    host: ComputerUseVerifiedHost,
-  ) {
-    const connectionId = ComputerUseConnectionId.make(
-      yield* crypto.randomUUIDv4.pipe(Effect.orDie),
-    );
-    const queue = yield* Queue.unbounded<ComputerUseHostStreamEvent>();
-    yield* Queue.offer(queue, { type: "connected", connectionId });
-    const connection: HostConnection = { host, connectionId, queue };
-    const replaced = yield* SynchronizedRef.modify(state, (current) => {
-      const previous = current.hosts.get(host.environmentId);
-      const hosts = new Map(current.hosts);
-      hosts.set(host.environmentId, connection);
-      if (!previous) {
-        return [undefined, { ...current, hosts }] as const;
-      }
-      const leases = new Map(current.leases);
-      const lease = leases.get(host.environmentId);
-      if (lease?.connection.queue === previous.queue) leases.delete(host.environmentId);
-      const pending = new Map(current.pending);
-      const disconnected: PendingRequest[] = [];
-      for (const [requestId, request] of pending) {
-        if (request.lease.connection.queue !== previous.queue) continue;
-        pending.delete(requestId);
-        disconnected.push(request);
-      }
-      return [
-        { previous, disconnected },
-        { ...current, hosts, leases, pending },
-      ] as const;
-    });
-    if (replaced) yield* closeConnection(replaced.previous, replaced.disconnected);
-    return connection;
-  });
+  const acquireConnection = Effect.fn("ComputerUseBroker.acquireConnection")(
+    (host: ComputerUseVerifiedHost) =>
+      connectionGate.withPermit(
+        Effect.gen(function* () {
+          const previousLease = (yield* SynchronizedRef.get(state)).leases.get(host.environmentId);
+          if (previousLease !== undefined) {
+            yield* stopMatching(
+              (lease) => lease.leaseId === previousLease.leaseId,
+              "host-disconnected",
+            );
+          }
+          const connectionId = ComputerUseConnectionId.make(
+            yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+          );
+          const queue = yield* Queue.unbounded<ComputerUseHostStreamEvent>();
+          yield* Queue.offer(queue, { type: "connected", connectionId });
+          const connection: HostConnection = { host, connectionId, queue };
+          const replaced = yield* SynchronizedRef.modify(state, (current) => {
+            const previous = current.hosts.get(host.environmentId);
+            const hosts = new Map(current.hosts);
+            hosts.set(host.environmentId, connection);
+            if (!previous) {
+              return [undefined, { ...current, hosts }] as const;
+            }
+            const leases = new Map(current.leases);
+            const lease = leases.get(host.environmentId);
+            if (lease?.connection.queue === previous.queue) leases.delete(host.environmentId);
+            const pending = new Map(current.pending);
+            const disconnected: PendingRequest[] = [];
+            for (const [requestId, request] of pending) {
+              if (request.lease.connection.queue !== previous.queue) continue;
+              pending.delete(requestId);
+              disconnected.push(request);
+            }
+            return [
+              { previous, disconnected },
+              { ...current, hosts, leases, pending },
+            ] as const;
+          });
+          if (replaced) yield* closeConnection(replaced.previous, replaced.disconnected);
+          return connection;
+        }),
+      ),
+  );
 
   const connect: ComputerUseBroker["Service"]["connect"] = Effect.fn("ComputerUseBroker.connect")(
     (host) =>
@@ -301,6 +316,18 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
         return [entry, { ...current, pending: next }] as const;
       });
       if (!pending) return;
+      if (pending.stopReason !== undefined) {
+        yield* Deferred.fail(
+          pending.deferred,
+          new ComputerUseStoppedError({
+            operation: pending.operation,
+            ...pending.lease.scope,
+            leaseId: pending.lease.leaseId,
+            reason: pending.stopReason,
+          }),
+        );
+        return;
+      }
       if (response.ok) {
         yield* Deferred.succeed(pending.deferred, response.result);
       } else if (response.error) {
@@ -448,38 +475,34 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
       }
       return yield* Deferred.await(deferred);
     });
-    const boundedDispatch = dispatchAndAwait.pipe(
-      Effect.timeoutOption(timeoutMs),
-      Effect.ensuring(removePending),
-    );
-    const result = yield* route.completeMutation === undefined
+    const boundedDispatch = Effect.gen(function* () {
+      const result = yield* dispatchAndAwait.pipe(Effect.timeoutOption(timeoutMs));
+      if (Option.isNone(result)) {
+        yield* stopMatching((lease) => lease.leaseId === route.lease.leaseId, "interrupted");
+        return yield* new ComputerUseTimeoutError({
+          operation: input.operation,
+          ...input.scope,
+          leaseId: route.lease.leaseId,
+          timeoutMs,
+        });
+      }
+      return resultSchema === undefined
+        ? (result.value as A)
+        : yield* Schema.decodeUnknownEffect(resultSchema)(result.value).pipe(
+            Effect.map((decoded) => decoded as A),
+            Effect.mapError(
+              () =>
+                new ComputerUseMalformedResponseError({
+                  operation: input.operation,
+                  ...input.scope,
+                  leaseId: route.lease.leaseId,
+                }),
+            ),
+          );
+    }).pipe(Effect.ensuring(removePending));
+    return yield* route.completeMutation === undefined
       ? boundedDispatch
       : boundedDispatch.pipe(Effect.ensuring(Deferred.succeed(route.completeMutation, undefined)));
-    return yield* Option.match(result, {
-      onNone: () =>
-        Effect.fail(
-          new ComputerUseTimeoutError({
-            operation: input.operation,
-            ...input.scope,
-            leaseId: route.lease.leaseId,
-            timeoutMs,
-          }),
-        ),
-      onSome: (value) =>
-        resultSchema === undefined
-          ? Effect.succeed(value as A)
-          : Schema.decodeUnknownEffect(resultSchema)(value).pipe(
-              Effect.map((decoded) => decoded as A),
-              Effect.mapError(
-                () =>
-                  new ComputerUseMalformedResponseError({
-                    operation: input.operation,
-                    ...input.scope,
-                    leaseId: route.lease.leaseId,
-                  }),
-              ),
-            ),
-    });
   });
 
   const stopMatching = Effect.fn("ComputerUseBroker.stopMatching")(function* (
@@ -493,7 +516,7 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
       ): readonly [
         ReadonlyArray<{
           readonly lease: ControlLease;
-          readonly requests: ReadonlyArray<PendingRequest>;
+          readonly requests: ReadonlyArray<readonly [ComputerUseRequestId, PendingRequest]>;
         }>,
         BrokerState,
       ] => {
@@ -501,16 +524,17 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
         const pending = new Map(current.pending);
         const stopped: Array<{
           lease: ControlLease;
-          requests: ReadonlyArray<PendingRequest>;
+          requests: ReadonlyArray<readonly [ComputerUseRequestId, PendingRequest]>;
         }> = [];
         for (const [environmentId, activeLease] of current.leases) {
           if (!matches(activeLease)) continue;
           leases.delete(environmentId);
-          const requests: PendingRequest[] = [];
-          for (const [requestId, request] of pending) {
+          const requests: Array<readonly [ComputerUseRequestId, PendingRequest]> = [];
+          for (const [requestId, request] of current.pending) {
             if (request.lease.leaseId !== activeLease.leaseId) continue;
-            pending.delete(requestId);
-            requests.push(request);
+            const stoppedRequest = { ...request, stopReason: reason };
+            pending.set(requestId, stoppedRequest);
+            requests.push([requestId, stoppedRequest]);
           }
           stopped.push({ lease: activeLease, requests });
         }
@@ -520,28 +544,43 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     yield* Effect.forEach(
       stoppedLeases,
       (stopped) =>
-        Effect.gen(function* () {
-          yield* Queue.offer(stopped.lease.connection.queue, {
-            type: "cancel",
-            connectionId: stopped.lease.connection.connectionId,
-            leaseId: stopped.lease.leaseId,
-            reason,
-          });
-          yield* Effect.forEach(
-            stopped.requests,
-            (request) =>
-              Deferred.fail(
-                request.deferred,
-                new ComputerUseStoppedError({
-                  operation: request.operation,
-                  ...request.lease.scope,
-                  leaseId: request.lease.leaseId,
-                  reason,
-                }),
-              ),
-            { discard: true },
-          );
+        Queue.offer(stopped.lease.connection.queue, {
+          type: "cancel",
+          connectionId: stopped.lease.connection.connectionId,
+          leaseId: stopped.lease.leaseId,
+          reason,
         }),
+      { discard: true },
+    );
+    yield* Effect.forEach(
+      stoppedLeases.flatMap((stopped) => stopped.requests),
+      ([, request]) => Deferred.await(request.deferred).pipe(Effect.exit),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.timeoutOption(CANCELLATION_DRAIN_MS), Effect.asVoid);
+    const unacknowledged = yield* SynchronizedRef.modify(state, (current) => {
+      const pending = new Map(current.pending);
+      const remaining: PendingRequest[] = [];
+      for (const stopped of stoppedLeases) {
+        for (const [requestId, request] of stopped.requests) {
+          if (pending.get(requestId) !== request) continue;
+          pending.delete(requestId);
+          remaining.push(request);
+        }
+      }
+      return [remaining, { ...current, pending }] as const;
+    });
+    yield* Effect.forEach(
+      unacknowledged,
+      (request) =>
+        Deferred.fail(
+          request.deferred,
+          new ComputerUseStoppedError({
+            operation: request.operation,
+            ...request.lease.scope,
+            leaseId: request.lease.leaseId,
+            reason,
+          }),
+        ),
       { discard: true },
     );
     return stoppedLeases.length;

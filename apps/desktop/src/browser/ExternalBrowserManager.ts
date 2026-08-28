@@ -3,6 +3,7 @@ import type {
   PreviewAutomationClickInput,
   PreviewAutomationConsoleEntry,
   PreviewAutomationEvaluateInput,
+  PreviewAutomationExternalBrowserIdentity,
   PreviewAutomationNavigateInput,
   PreviewAutomationNetworkEntry,
   PreviewAutomationOpenInput,
@@ -95,6 +96,7 @@ export class ExternalBrowserOperationError extends Schema.TaggedErrorClass<Exter
       "result-too-large",
       "unsupported",
       "cancelled",
+      "identity-changed",
     ]),
     tabId: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
@@ -114,6 +116,8 @@ export class ExternalBrowserOperationError extends Schema.TaggedErrorClass<Exter
         return `The external browser does not support ${this.operation}.`;
       case "cancelled":
         return `External browser ${this.operation} was cancelled.`;
+      case "identity-changed":
+        return "The signed-in browser profile, tab, or origin changed after approval.";
       default:
         return `External browser ${this.operation} failed.`;
     }
@@ -157,6 +161,28 @@ export function externalBrowserConnectionState(
   return connected ? "connected" : "disconnected";
 }
 
+export function externalBrowserIdentityMatches(
+  profileId: string,
+  expected: PreviewAutomationExternalBrowserIdentity,
+  actualTabId: string | null,
+  actualUrl: string | null,
+): boolean {
+  if (actualTabId !== null && actualUrl === null) return false;
+  let actualOrigin = "about:blank";
+  if (actualUrl !== null) {
+    try {
+      actualOrigin = new URL(actualUrl).origin;
+    } catch {
+      actualOrigin = "opaque-origin";
+    }
+  }
+  return (
+    expected.profileId === profileId &&
+    expected.tabId === actualTabId &&
+    (actualTabId === null || expected.origin === actualOrigin)
+  );
+}
+
 const statusForPage = async (
   available: boolean,
   page: Page | null,
@@ -190,61 +216,73 @@ export class ExternalBrowserManager extends Context.Service<
     readonly status: (
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<PreviewAutomationStatus, ExternalBrowserOperationError>;
     readonly open: (
       input: PreviewAutomationOpenInput,
       requestedTabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<PreviewAutomationStatus, ExternalBrowserOperationError>;
     readonly close: () => Effect.Effect<void, ExternalBrowserOperationError>;
     readonly navigate: (
       input: PreviewAutomationNavigateInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<PreviewAutomationStatus, ExternalBrowserOperationError>;
     readonly resize: (
       input: PreviewAutomationResizeInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<PreviewAutomationResizeResult, ExternalBrowserOperationError>;
     readonly setColorScheme: (
       input: PreviewAutomationSetColorSchemeInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<PreviewAutomationSetColorSchemeResult, ExternalBrowserOperationError>;
     readonly snapshot: (
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<PreviewAutomationSnapshot, ExternalBrowserOperationError>;
     readonly click: (
       input: PreviewAutomationClickInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<void, ExternalBrowserOperationError>;
     readonly type: (
       input: PreviewAutomationTypeInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<void, ExternalBrowserOperationError>;
     readonly press: (
       input: PreviewAutomationPressInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<void, ExternalBrowserOperationError>;
     readonly scroll: (
       input: PreviewAutomationScrollInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<void, ExternalBrowserOperationError>;
     readonly evaluate: (
       input: PreviewAutomationEvaluateInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<unknown, ExternalBrowserOperationError>;
     readonly waitFor: (
       input: PreviewAutomationWaitForInput,
       tabId?: string | null,
       operationId?: string,
+      expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
     ) => Effect.Effect<void, ExternalBrowserOperationError>;
     readonly cancel: (operationId: string) => Effect.Effect<void>;
   }
@@ -262,14 +300,13 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
   let actionSequence = 0;
   const knownOperations = new Set<string>();
   const cancelledOperations = new Set<string>();
+  const activeOperationPages = new Map<string, Page>();
   const isExternalBrowserOperationError = Schema.is(ExternalBrowserOperationError);
 
   const ensureNotCancelled = (operation: string, operationId?: string) =>
-    Effect.sync(() => {
-      if (operationId && cancelledOperations.has(operationId)) {
-        throw new ExternalBrowserOperationError({ operation, reason: "cancelled" });
-      }
-    });
+    operationId && cancelledOperations.has(operationId)
+      ? Effect.fail(new ExternalBrowserOperationError({ operation, reason: "cancelled" }))
+      : Effect.void;
 
   const runOperation = <A, E>(
     operation: string,
@@ -284,10 +321,16 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
       yield* ensureNotCancelled(operation, operationId);
       return value;
     }).pipe(
+      Effect.catch((error) =>
+        cancelledOperations.has(operationId)
+          ? Effect.fail(new ExternalBrowserOperationError({ operation, reason: "cancelled" }))
+          : Effect.fail(error),
+      ),
       Effect.ensuring(
         Effect.sync(() => {
           knownOperations.delete(operationId);
           cancelledOperations.delete(operationId);
+          activeOperationPages.delete(operationId);
         }),
       ),
     );
@@ -441,49 +484,96 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
     return { runtime: activeRuntime, page, tabId };
   };
 
+  const validateExpectedIdentity = (
+    operation: string,
+    expectedIdentity: PreviewAutomationExternalBrowserIdentity | undefined,
+    actualTabId: string | null,
+    page: Page | null,
+  ): Effect.Effect<void, ExternalBrowserOperationError> => {
+    if (expectedIdentity === undefined) return Effect.void;
+    const changed = !externalBrowserIdentityMatches(
+      profileId,
+      expectedIdentity,
+      actualTabId,
+      page?.url() ?? null,
+    );
+    return changed
+      ? Effect.fail(
+          new ExternalBrowserOperationError({
+            operation,
+            reason: "identity-changed",
+            ...(actualTabId === null ? {} : { tabId: actualTabId }),
+          }),
+        )
+      : Effect.void;
+  };
+
   const withPage = <A>(
     operation: string,
     requestedTabId: string | null | undefined,
     operationId: string | undefined,
+    expectedIdentity: PreviewAutomationExternalBrowserIdentity | undefined,
     run: (activeRuntime: ExternalBrowserRuntime, page: Page, tabId: string) => PromiseLike<A>,
   ): Effect.Effect<A, ExternalBrowserOperationError> =>
     runOperation(
       operation,
       operationId,
       mutationGate.withPermit(
-        attemptPromise(
-          operation,
-          async () => {
-            const resolved = resolvePage(operation, requestedTabId);
-            const diagnostics = diagnosticsFor(resolved.runtime, resolved.tabId);
-            const action: PreviewAutomationActionEvent = {
-              id: `${resolved.tabId}:${++actionSequence}`,
-              action: operation,
-              status: "running",
-              startedAt: timestamp(),
-            };
-            boundedPush(diagnostics.actionTimeline, action);
-            try {
-              const value = await run(resolved.runtime, resolved.page, resolved.tabId);
-              Object.assign(action, { status: "succeeded", completedAt: timestamp() });
-              return value;
-            } catch (cause) {
-              Object.assign(action, {
-                status: "failed",
-                completedAt: timestamp(),
-                error: cause instanceof Error ? cause.message : String(cause),
-              });
-              throw cause;
-            }
-          },
-          requestedTabId,
-        ),
+        Effect.gen(function* () {
+          yield* ensureNotCancelled(operation, operationId);
+          const resolved = yield* attemptPromise(operation, async () =>
+            resolvePage(operation, requestedTabId),
+          );
+          yield* validateExpectedIdentity(
+            operation,
+            expectedIdentity,
+            resolved.tabId,
+            resolved.page,
+          );
+          if (operationId) activeOperationPages.set(operationId, resolved.page);
+          yield* ensureNotCancelled(operation, operationId);
+          return yield* attemptPromise(
+            operation,
+            async () => {
+              const diagnostics = diagnosticsFor(resolved.runtime, resolved.tabId);
+              const action: PreviewAutomationActionEvent = {
+                id: `${resolved.tabId}:${++actionSequence}`,
+                action: operation,
+                status: "running",
+                startedAt: timestamp(),
+              };
+              boundedPush(diagnostics.actionTimeline, action);
+              try {
+                const value = await run(resolved.runtime, resolved.page, resolved.tabId);
+                Object.assign(action, { status: "succeeded", completedAt: timestamp() });
+                return value;
+              } catch (cause) {
+                Object.assign(action, {
+                  status: "failed",
+                  completedAt: timestamp(),
+                  error: cause instanceof Error ? cause.message : String(cause),
+                });
+                throw cause;
+              }
+            },
+            requestedTabId,
+          ).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (operationId && activeOperationPages.get(operationId) === resolved.page) {
+                  activeOperationPages.delete(operationId);
+                }
+              }),
+            ),
+          );
+        }),
       ),
     );
 
   const status = (
     requestedTabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ): Effect.Effect<PreviewAutomationStatus, ExternalBrowserOperationError> =>
     runOperation(
       "status",
@@ -491,12 +581,15 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
       Effect.gen(function* () {
         const executable = yield* findExecutable();
         const activeRuntime = runtime;
-        if (activeRuntime === null)
+        if (activeRuntime === null) {
+          yield* validateExpectedIdentity("status", expectedIdentity, null, null);
           return yield* Effect.promise(() =>
             statusForPage(executable !== null, null, null, profileId),
           );
+        }
         const tabId = requestedTabId ?? activeRuntime.currentTabId;
         const page = tabId ? (activeRuntime.pages.get(tabId) ?? null) : null;
+        yield* validateExpectedIdentity("status", expectedIdentity, page ? tabId : null, page);
         return yield* Effect.promise(() =>
           statusForPage(executable !== null, page, page ? tabId : null, profileId),
         );
@@ -507,6 +600,7 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
     input: PreviewAutomationOpenInput,
     requestedTabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ): Effect.Effect<PreviewAutomationStatus, ExternalBrowserOperationError> =>
     runOperation(
       "open",
@@ -521,10 +615,20 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
             tabId = requestedTabId ?? activeRuntime.currentTabId;
             page = tabId ? activeRuntime.pages.get(tabId) : undefined;
           }
+          if (expectedIdentity?.tabId !== null) {
+            yield* validateExpectedIdentity("open", expectedIdentity, tabId, page ?? null);
+          } else if (expectedIdentity?.profileId !== profileId) {
+            return yield* new ExternalBrowserOperationError({
+              operation: "open",
+              reason: "identity-changed",
+            });
+          }
           if (!page || page.isClosed()) {
             page = yield* attemptPromise("open", () => activeRuntime.context.newPage());
             tabId = registerPage(activeRuntime, page);
           }
+          if (operationId) activeOperationPages.set(operationId, page);
+          yield* ensureNotCancelled("open", operationId);
           activeRuntime.currentTabId = tabId;
           if (input.url) {
             const url = normalizeExternalBrowserUrl(input.url);
@@ -536,7 +640,13 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
           }
           yield* attemptPromise("open", () => page!.bringToFront(), tabId);
           return yield* Effect.promise(() => statusForPage(true, page!, tabId, profileId));
-        }),
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (operationId) activeOperationPages.delete(operationId);
+            }),
+          ),
+        ),
       ),
     );
 
@@ -553,108 +663,132 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
     status,
     open,
     close: () => close,
-    navigate: (input, tabId, operationId) =>
-      withPage("navigate", tabId, operationId, async (_activeRuntime, page, activeTabId) => {
-        const url = normalizeExternalBrowserUrl(input.url!);
-        const waitUntil =
-          input.readiness === "domContentLoaded"
-            ? "domcontentloaded"
-            : input.readiness === "none"
-              ? "commit"
-              : "load";
-        await page.goto(url, { waitUntil, timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
-        return await statusForPage(true, page, activeTabId, profileId);
-      }),
-    resize: (input, tabId, operationId) =>
-      withPage("resize", tabId, operationId, async (_activeRuntime, page, activeTabId) => {
-        const current = page.viewportSize() ?? { width: 1280, height: 800 };
-        const setting = resolvePreviewViewport(input);
-        const viewport =
-          setting._tag === "fill" ? current : { width: setting.width, height: setting.height };
-        await page.setViewportSize(viewport);
-        return { tabId: activeTabId, setting, viewport } satisfies PreviewAutomationResizeResult;
-      }),
-    setColorScheme: (input, tabId, operationId) =>
-      withPage("setColorScheme", tabId, operationId, async (_activeRuntime, page, activeTabId) => {
-        await page.emulateMedia({
-          colorScheme: input.colorScheme === "system" ? null : input.colorScheme,
-        });
-        return {
-          tabId: activeTabId,
-          colorScheme: input.colorScheme,
-        } satisfies PreviewAutomationSetColorSchemeResult;
-      }),
-    snapshot: (tabId, operationId) =>
-      withPage("snapshot", tabId, operationId, async (activeRuntime, page, activeTabId) => {
-        const [visibleText, interactiveElements, accessibilityTree, screenshot, viewport] =
-          await Promise.all([
-            page
-              .locator("body")
-              .innerText()
-              .catch(() => ""),
-            page.locator("a,button,input,textarea,select,[role],[tabindex]").evaluateAll(
-              (elements, maximum) =>
-                elements.slice(0, maximum).map((element, index) => {
-                  const htmlElement = element as HTMLElement;
-                  const rect = htmlElement.getBoundingClientRect();
-                  const tag = htmlElement.tagName.toLowerCase();
-                  const id = htmlElement.id;
-                  const selector = id
-                    ? `${tag}#${CSS.escape(id)}`
-                    : `${tag}:nth-of-type(${index + 1})`;
-                  return {
-                    tag,
-                    role: htmlElement.getAttribute("role"),
-                    name:
-                      htmlElement.getAttribute("aria-label") ??
-                      (htmlElement as HTMLInputElement).value ??
-                      htmlElement.innerText ??
-                      "",
-                    selector,
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                  };
-                }),
-              MAX_INTERACTIVE_ELEMENTS,
-            ),
-            page
-              .locator("body")
-              .ariaSnapshot({ timeout: DEFAULT_TIMEOUT_MS })
-              .catch(() => ""),
-            page.screenshot({ type: "png" }),
-            page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
-          ]);
-        const diagnostics = diagnosticsFor(activeRuntime, activeTabId);
-        return {
-          url: page.url(),
-          title: await page.title(),
-          loading: false,
-          visibleText: visibleText.slice(0, MAX_VISIBLE_TEXT_LENGTH),
-          interactiveElements,
-          accessibilityTree,
-          consoleEntries: [...diagnostics.consoleEntries],
-          networkEntries: [...diagnostics.networkEntries],
-          actionTimeline: [...diagnostics.actionTimeline],
-          screenshot: {
-            mimeType: "image/png",
-            data: screenshot.toString("base64"),
-            width: viewport.width,
-            height: viewport.height,
-          },
-        } satisfies PreviewAutomationSnapshot;
-      }),
-    click: (input, tabId, operationId) =>
-      withPage("click", tabId, operationId, async (_activeRuntime, page) => {
+    navigate: (input, tabId, operationId, expectedIdentity) =>
+      withPage(
+        "navigate",
+        tabId,
+        operationId,
+        expectedIdentity,
+        async (_activeRuntime, page, activeTabId) => {
+          const url = normalizeExternalBrowserUrl(input.url!);
+          const waitUntil =
+            input.readiness === "domContentLoaded"
+              ? "domcontentloaded"
+              : input.readiness === "none"
+                ? "commit"
+                : "load";
+          await page.goto(url, { waitUntil, timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+          return await statusForPage(true, page, activeTabId, profileId);
+        },
+      ),
+    resize: (input, tabId, operationId, expectedIdentity) =>
+      withPage(
+        "resize",
+        tabId,
+        operationId,
+        expectedIdentity,
+        async (_activeRuntime, page, activeTabId) => {
+          const current = page.viewportSize() ?? { width: 1280, height: 800 };
+          const setting = resolvePreviewViewport(input);
+          const viewport =
+            setting._tag === "fill" ? current : { width: setting.width, height: setting.height };
+          await page.setViewportSize(viewport);
+          return { tabId: activeTabId, setting, viewport } satisfies PreviewAutomationResizeResult;
+        },
+      ),
+    setColorScheme: (input, tabId, operationId, expectedIdentity) =>
+      withPage(
+        "setColorScheme",
+        tabId,
+        operationId,
+        expectedIdentity,
+        async (_activeRuntime, page, activeTabId) => {
+          await page.emulateMedia({
+            colorScheme: input.colorScheme === "system" ? null : input.colorScheme,
+          });
+          return {
+            tabId: activeTabId,
+            colorScheme: input.colorScheme,
+          } satisfies PreviewAutomationSetColorSchemeResult;
+        },
+      ),
+    snapshot: (tabId, operationId, expectedIdentity) =>
+      withPage(
+        "snapshot",
+        tabId,
+        operationId,
+        expectedIdentity,
+        async (activeRuntime, page, activeTabId) => {
+          const [visibleText, interactiveElements, accessibilityTree, screenshot, viewport] =
+            await Promise.all([
+              page
+                .locator("body")
+                .innerText()
+                .catch(() => ""),
+              page.locator("a,button,input,textarea,select,[role],[tabindex]").evaluateAll(
+                (elements, maximum) =>
+                  elements.slice(0, maximum).map((element, index) => {
+                    const htmlElement = element as HTMLElement;
+                    const rect = htmlElement.getBoundingClientRect();
+                    const tag = htmlElement.tagName.toLowerCase();
+                    const id = htmlElement.id;
+                    const selector = id
+                      ? `${tag}#${CSS.escape(id)}`
+                      : `${tag}:nth-of-type(${index + 1})`;
+                    return {
+                      tag,
+                      role: htmlElement.getAttribute("role"),
+                      name:
+                        htmlElement.getAttribute("aria-label") ??
+                        (htmlElement as HTMLInputElement).value ??
+                        htmlElement.innerText ??
+                        "",
+                      selector,
+                      x: rect.x,
+                      y: rect.y,
+                      width: rect.width,
+                      height: rect.height,
+                    };
+                  }),
+                MAX_INTERACTIVE_ELEMENTS,
+              ),
+              page
+                .locator("body")
+                .ariaSnapshot({ timeout: DEFAULT_TIMEOUT_MS })
+                .catch(() => ""),
+              page.screenshot({ type: "png" }),
+              page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
+            ]);
+          const diagnostics = diagnosticsFor(activeRuntime, activeTabId);
+          return {
+            url: page.url(),
+            title: await page.title(),
+            loading: false,
+            visibleText: visibleText.slice(0, MAX_VISIBLE_TEXT_LENGTH),
+            interactiveElements,
+            accessibilityTree,
+            consoleEntries: [...diagnostics.consoleEntries],
+            networkEntries: [...diagnostics.networkEntries],
+            actionTimeline: [...diagnostics.actionTimeline],
+            screenshot: {
+              mimeType: "image/png",
+              data: screenshot.toString("base64"),
+              width: viewport.width,
+              height: viewport.height,
+            },
+          } satisfies PreviewAutomationSnapshot;
+        },
+      ),
+    click: (input, tabId, operationId, expectedIdentity) =>
+      withPage("click", tabId, operationId, expectedIdentity, async (_activeRuntime, page) => {
         if (input.x !== undefined && input.y !== undefined) {
           await page.mouse.click(input.x, input.y);
           return;
         }
         await pageLocator(page, input).click({ timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
       }),
-    type: (input, tabId, operationId) =>
-      withPage("type", tabId, operationId, async (_activeRuntime, page) => {
+    type: (input, tabId, operationId, expectedIdentity) =>
+      withPage("type", tabId, operationId, expectedIdentity, async (_activeRuntime, page) => {
         if (!input.locator && !input.selector) {
           await page.keyboard.insertText(input.text);
           return;
@@ -665,13 +799,13 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
           timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         });
       }),
-    press: (input, tabId, operationId) =>
-      withPage("press", tabId, operationId, async (_activeRuntime, page) => {
+    press: (input, tabId, operationId, expectedIdentity) =>
+      withPage("press", tabId, operationId, expectedIdentity, async (_activeRuntime, page) => {
         const chord = [...(input.modifiers ?? []), input.key].join("+");
         await page.keyboard.press(chord);
       }),
-    scroll: (input, tabId, operationId) =>
-      withPage("scroll", tabId, operationId, async (_activeRuntime, page) => {
+    scroll: (input, tabId, operationId, expectedIdentity) =>
+      withPage("scroll", tabId, operationId, expectedIdentity, async (_activeRuntime, page) => {
         const deltaX = input.deltaX ?? 0;
         const deltaY = input.deltaY ?? 0;
         if (input.locator || input.selector) {
@@ -683,8 +817,8 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
         }
         await page.mouse.wheel(deltaX, deltaY);
       }),
-    evaluate: (input, tabId, operationId) =>
-      withPage("evaluate", tabId, operationId, async (_activeRuntime, page) => {
+    evaluate: (input, tabId, operationId, expectedIdentity) =>
+      withPage("evaluate", tabId, operationId, expectedIdentity, async (_activeRuntime, page) => {
         const result = await page.evaluate(input.expression);
         const encoded = JSON.stringify(result);
         if (encoded !== undefined && Buffer.byteLength(encoded, "utf8") > MAX_EVALUATION_BYTES) {
@@ -695,8 +829,8 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
         }
         return result;
       }),
-    waitFor: (input, tabId, operationId) =>
-      withPage("waitFor", tabId, operationId, async (_activeRuntime, page) => {
+    waitFor: (input, tabId, operationId, expectedIdentity) =>
+      withPage("waitFor", tabId, operationId, expectedIdentity, async (_activeRuntime, page) => {
         const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
         if (input.locator || input.selector) {
           await pageLocator(page, input).waitFor({ state: "visible", timeout });
@@ -713,18 +847,16 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
       }),
     cancel: (operationId) =>
       Effect.gen(function* () {
-        const wasKnown = knownOperations.has(operationId);
         cancelledOperations.add(operationId);
         while (cancelledOperations.size > 512) {
           const oldest = cancelledOperations.values().next().value;
           if (oldest === undefined) break;
           cancelledOperations.delete(oldest);
         }
-        if (!wasKnown) return;
-        const activeRuntime = runtime;
-        if (activeRuntime === null) return;
-        runtime = null;
-        yield* attemptPromise("cancel", () => activeRuntime.context.close()).pipe(Effect.ignore);
+        if (!knownOperations.has(operationId)) return;
+        const page = activeOperationPages.get(operationId);
+        if (!page || page.isClosed()) return;
+        yield* attemptPromise("cancel", () => page.close()).pipe(Effect.ignore);
       }),
   });
 

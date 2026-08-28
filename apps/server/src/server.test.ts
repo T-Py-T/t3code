@@ -1006,6 +1006,8 @@ const buildAppUnderTest = (options?: {
           requestApproval: () =>
             Effect.die("Computer Use approval requests are not stubbed in this test"),
           resolveApproval: () => Effect.succeed(false),
+          finishTurn: () => Effect.void,
+          finishThread: () => Effect.void,
           ...options?.layers?.computerUsePolicy,
         }),
       ),

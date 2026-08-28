@@ -48,18 +48,27 @@ export async function routeExternalBrowserAutomationRequest(input: {
   };
   signal.addEventListener("abort", cancel, { once: true });
   const tabId = request.tabId ?? null;
+  const expectedIdentity = request.expectedExternalBrowserIdentity;
   try {
+    signal.throwIfAborted();
     switch (request.operation) {
       case "status":
-        return await bridge.status(tabId, request.requestId);
+        return await bridge.status(tabId, request.requestId, expectedIdentity);
       case "open": {
         const openInput = request.input as PreviewAutomationOpenInput;
-        if (!openInput.url) return await bridge.open(openInput, tabId, request.requestId);
+        if (!openInput.url) {
+          return await bridge.open(openInput, tabId, request.requestId, expectedIdentity);
+        }
         const resolvedUrl = input.resolveNavigation({
           browser: "external",
           url: openInput.url,
         });
-        return await bridge.open({ ...openInput, url: resolvedUrl }, tabId, request.requestId);
+        return await bridge.open(
+          { ...openInput, url: resolvedUrl },
+          tabId,
+          request.requestId,
+          expectedIdentity,
+        );
       }
       case "navigate": {
         const navigateInput = request.input as PreviewAutomationNavigateInput;
@@ -69,6 +78,7 @@ export async function routeExternalBrowserAutomationRequest(input: {
           { ...withoutTarget, url: resolvedUrl },
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       }
       case "resize":
@@ -76,50 +86,58 @@ export async function routeExternalBrowserAutomationRequest(input: {
           request.input as PreviewAutomationResizeInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "setColorScheme":
         return await bridge.setColorScheme(
           request.input as PreviewAutomationSetColorSchemeInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "snapshot":
-        return await bridge.snapshot(tabId, request.requestId);
+        return await bridge.snapshot(tabId, request.requestId, expectedIdentity);
       case "click":
         return await bridge.click(
           request.input as PreviewAutomationClickInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "type":
         return await bridge.type(
           request.input as PreviewAutomationTypeInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "press":
         return await bridge.press(
           request.input as PreviewAutomationPressInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "scroll":
         return await bridge.scroll(
           request.input as PreviewAutomationScrollInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "evaluate":
         return await bridge.evaluate(
           request.input as PreviewAutomationEvaluateInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "waitFor":
         return await bridge.waitFor(
           request.input as PreviewAutomationWaitForInput,
           tabId,
           request.requestId,
+          expectedIdentity,
         );
       case "recordingStart":
       case "recordingStop":

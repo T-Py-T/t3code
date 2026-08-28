@@ -23,6 +23,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
@@ -153,6 +154,8 @@ export class ComputerUsePolicy extends Context.Service<
       input: ComputerUseApprovalRequestInput,
     ) => Effect.Effect<ComputerUseApprovalId>;
     readonly resolveApproval: (input: ComputerUseApprovalResolutionInput) => Effect.Effect<boolean>;
+    readonly finishTurn: (threadId: ThreadId, turnId: TurnId) => Effect.Effect<void>;
+    readonly finishThread: (threadId: ThreadId) => Effect.Effect<void>;
   }
 >()("t3/computerUse/ComputerUsePolicy") {}
 
@@ -168,6 +171,10 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
       pending: new Map(),
       sequence: 0,
     });
+    // Approval resolution writes several independent refs. Serialize that
+    // transition with lifecycle cleanup so a turn cannot finish between
+    // removing a pending approval and materializing its scoped grant.
+    const lifecycleGate = yield* Semaphore.make(1);
 
     const savePersistentGrants = (current: ReadonlyArray<GrantRecord>) =>
       persistence
@@ -368,12 +375,16 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
     const requestApproval: ComputerUsePolicy["Service"]["requestApproval"] = Effect.fn(
       "ComputerUsePolicy.requestApproval",
     )((input) =>
-      SynchronizedRef.modify(approvals, (current) => {
-        const approvalId = ComputerUseApprovalId.make(`computer-use-approval-${current.sequence}`);
-        const pending = new Map(current.pending);
-        pending.set(approvalId, input);
-        return [approvalId, { pending, sequence: current.sequence + 1 }] as const;
-      }),
+      lifecycleGate.withPermit(
+        SynchronizedRef.modify(approvals, (current) => {
+          const approvalId = ComputerUseApprovalId.make(
+            `computer-use-approval-${current.sequence}`,
+          );
+          const pending = new Map(current.pending);
+          pending.set(approvalId, input);
+          return [approvalId, { pending, sequence: current.sequence + 1 }] as const;
+        }),
+      ),
     );
 
     const pause: ComputerUsePolicy["Service"]["pause"] = Effect.fn("ComputerUsePolicy.pause")(
@@ -404,49 +415,112 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
 
     const resolveApproval: ComputerUsePolicy["Service"]["resolveApproval"] = Effect.fn(
       "ComputerUsePolicy.resolveApproval",
-    )(function* ({ approvalId, decision }) {
-      const pending = yield* SynchronizedRef.modify(approvals, (current) => {
-        const found = current.pending.get(approvalId);
-        if (!found) return [undefined, current] as const;
-        const next = new Map(current.pending);
-        next.delete(approvalId);
-        return [found, { ...current, pending: next }] as const;
-      });
-      if (!pending) return false;
-      if (decision === "decline" || decision === "cancel") return true;
-      const pendingDecision = pending.decision;
-      if (pendingDecision._tag === "request-app-grant") {
-        const duration: ComputerUseGrantDuration =
-          decision === "acceptAlways"
-            ? "persistent"
-            : decision === "acceptForSession"
-              ? "session"
-              : decision === "acceptForTurn"
-                ? "turn"
-                : "one-action";
-        yield* grant({
-          scope: pending.input.scope,
-          target: pending.input.target,
-          access: pendingDecision.access,
-          duration,
-        });
-        return true;
-      }
-      if (pendingDecision._tag === "request-action-confirmation") {
-        const action = pending.input.action;
-        if (action === undefined) return true;
-        yield* SynchronizedRef.update(confirmations, (current) => [
-          ...current,
-          {
-            scope: pending.input.scope,
-            target: pending.input.target,
-            risk: pendingDecision.risk,
-            requestIdentity: action.requestIdentity,
-          },
-        ]);
-      }
-      return true;
-    });
+    )(({ approvalId, decision }) =>
+      lifecycleGate.withPermit(
+        Effect.gen(function* () {
+          const pending = yield* SynchronizedRef.modify(approvals, (current) => {
+            const found = current.pending.get(approvalId);
+            if (!found) return [undefined, current] as const;
+            const next = new Map(current.pending);
+            next.delete(approvalId);
+            return [found, { ...current, pending: next }] as const;
+          });
+          if (!pending) return false;
+          if (decision === "decline" || decision === "cancel") return true;
+          const pendingDecision = pending.decision;
+          if (pendingDecision._tag === "request-app-grant") {
+            const duration: ComputerUseGrantDuration =
+              decision === "acceptAlways"
+                ? "persistent"
+                : decision === "acceptForSession"
+                  ? "session"
+                  : decision === "acceptForTurn"
+                    ? "turn"
+                    : "one-action";
+            yield* grant({
+              scope: pending.input.scope,
+              target: pending.input.target,
+              access: pendingDecision.access,
+              duration,
+            });
+            return true;
+          }
+          if (pendingDecision._tag === "request-action-confirmation") {
+            const action = pending.input.action;
+            if (action === undefined) return true;
+            yield* SynchronizedRef.update(confirmations, (current) => [
+              ...current,
+              {
+                scope: pending.input.scope,
+                target: pending.input.target,
+                risk: pendingDecision.risk,
+                requestIdentity: action.requestIdentity,
+              },
+            ]);
+          }
+          return true;
+        }),
+      ),
+    );
+
+    const finishTurn: ComputerUsePolicy["Service"]["finishTurn"] = Effect.fn(
+      "ComputerUsePolicy.finishTurn",
+    )((threadId, turnId) =>
+      lifecycleGate.withPermit(
+        Effect.gen(function* () {
+          yield* SynchronizedRef.update(grants, (current) =>
+            current.filter(
+              (grant) =>
+                grant.duration === "persistent" ||
+                grant.duration === "session" ||
+                grant.scope.threadId !== threadId ||
+                grant.scope.turnId !== turnId,
+            ),
+          );
+          yield* SynchronizedRef.update(confirmations, (current) =>
+            current.filter(
+              (confirmation) =>
+                confirmation.scope.threadId !== threadId || confirmation.scope.turnId !== turnId,
+            ),
+          );
+          yield* SynchronizedRef.update(approvals, (current) => ({
+            ...current,
+            pending: new Map(
+              Array.from(current.pending).filter(
+                ([, approval]) =>
+                  approval.input.scope.threadId !== threadId ||
+                  approval.input.scope.turnId !== turnId,
+              ),
+            ),
+          }));
+        }),
+      ),
+    );
+
+    const finishThread: ComputerUsePolicy["Service"]["finishThread"] = Effect.fn(
+      "ComputerUsePolicy.finishThread",
+    )((threadId) =>
+      lifecycleGate.withPermit(
+        Effect.gen(function* () {
+          yield* SynchronizedRef.update(grants, (current) =>
+            current.filter(
+              (grant) => grant.duration === "persistent" || grant.scope.threadId !== threadId,
+            ),
+          );
+          yield* SynchronizedRef.update(confirmations, (current) =>
+            current.filter((confirmation) => confirmation.scope.threadId !== threadId),
+          );
+          yield* SynchronizedRef.update(approvals, (current) => ({
+            ...current,
+            pending: new Map(
+              Array.from(current.pending).filter(
+                ([, approval]) => approval.input.scope.threadId !== threadId,
+              ),
+            ),
+          }));
+        }),
+      ),
+    );
 
     return ComputerUsePolicy.of({
       evaluate,
@@ -458,6 +532,8 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
       isPaused,
       requestApproval,
       resolveApproval,
+      finishTurn,
+      finishThread,
     });
   });
 
@@ -528,5 +604,13 @@ export const resolveActiveComputerUseApproval = (
   decision: ProviderApprovalDecision,
 ): Effect.Effect<boolean> =>
   activeComputerUsePolicy?.resolveApproval({ approvalId, decision }) ?? Effect.succeed(false);
+
+export const finishActiveComputerUsePolicyTurn = (
+  threadId: ThreadId,
+  turnId: TurnId,
+): Effect.Effect<void> => activeComputerUsePolicy?.finishTurn(threadId, turnId) ?? Effect.void;
+
+export const finishActiveComputerUsePolicyThread = (threadId: ThreadId): Effect.Effect<void> =>
+  activeComputerUsePolicy?.finishThread(threadId) ?? Effect.void;
 
 export const layer = Layer.effect(ComputerUsePolicy, makeActive);

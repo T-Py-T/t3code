@@ -124,6 +124,58 @@ describe("previewAutomationRequestConsumer", () => {
     registry.dispose();
   });
 
+  it("aborts work owned by a replaced stream generation", async () => {
+    const requestsAtom = Atom.make<AsyncResult.AsyncResult<PreviewAutomationStreamEvent, Error>>(
+      AsyncResult.initial<PreviewAutomationStreamEvent, Error>(false),
+    );
+    let staleSignal: AbortSignal | undefined;
+    const handleRequest = vi.fn(
+      (value: PreviewAutomationRequest, signal: AbortSignal): Promise<unknown> => {
+        if (value.requestId !== "request-stale") return Promise.resolve("replacement");
+        staleSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    );
+    const respond = vi.fn(async (_response: PreviewAutomationResponse) => undefined);
+    const state = consumerState(handleRequest);
+    const consumerAtom = createPreviewAutomationRequestConsumerAtom({
+      requestsAtom,
+      clientId,
+      connectionAtom: state.connectionAtom,
+      environmentId,
+      requestHandlerAtom: state.requestHandlerAtom,
+      respond,
+      label: "test:preview-automation-replaced-generation",
+    });
+    const registry = AtomRegistry.make();
+    registry.mount(consumerAtom);
+    registry.set(requestsAtom, AsyncResult.success(requestEvent("request-stale")));
+    await vi.waitFor(() => expect(handleRequest).toHaveBeenCalledTimes(1));
+
+    registry.set(
+      requestsAtom,
+      AsyncResult.success({ type: "connected", connectionId: "connection-2" }),
+    );
+    await vi.waitFor(() => expect(staleSignal?.aborted).toBe(true));
+    expect(respond).not.toHaveBeenCalled();
+
+    registry.set(
+      requestsAtom,
+      AsyncResult.success(requestEvent("request-replacement", {}, "connection-2")),
+    );
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(1));
+    expect(respond).toHaveBeenCalledWith({
+      clientId,
+      connectionId: "connection-2",
+      requestId: "request-replacement",
+      ok: true,
+      result: "replacement",
+    });
+    registry.dispose();
+  });
+
   it("aborts an in-flight request when control is stopped", async () => {
     const requestsAtom = Atom.make<AsyncResult.AsyncResult<PreviewAutomationStreamEvent, Error>>(
       AsyncResult.initial<PreviewAutomationStreamEvent, Error>(false),
@@ -155,7 +207,17 @@ describe("previewAutomationRequestConsumer", () => {
     registry.set(requestsAtom, AsyncResult.success(cancelEvent("request-cancelled")));
 
     await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true));
-    expect(respond).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(1));
+    expect(respond).toHaveBeenCalledWith({
+      clientId,
+      connectionId,
+      requestId: "request-cancelled",
+      ok: false,
+      error: {
+        _tag: "PreviewAutomationControlInterruptedError",
+        message: "Preview automation status was interrupted.",
+      },
+    });
     registry.dispose();
   });
 

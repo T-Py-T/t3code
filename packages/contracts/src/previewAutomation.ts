@@ -58,6 +58,15 @@ export const PreviewAutomationConnectionState = Schema.Literals([
 ]);
 export type PreviewAutomationConnectionState = typeof PreviewAutomationConnectionState.Type;
 
+/** Identity authorized by policy immediately before an external-browser operation. */
+export const PreviewAutomationExternalBrowserIdentity = Schema.Struct({
+  profileId: TrimmedNonEmptyString,
+  tabId: Schema.NullOr(PreviewTabId),
+  origin: TrimmedNonEmptyString,
+});
+export type PreviewAutomationExternalBrowserIdentity =
+  typeof PreviewAutomationExternalBrowserIdentity.Type;
+
 const PreviewAutomationTabTargetFields = {
   browser: Schema.optional(
     PreviewAutomationBrowser.annotate({
@@ -622,6 +631,7 @@ export const PreviewAutomationRequest = Schema.Struct({
   tabIdExplicit: Schema.optional(Schema.Boolean),
   operation: PreviewAutomationOperation,
   input: Schema.Unknown,
+  expectedExternalBrowserIdentity: Schema.optional(PreviewAutomationExternalBrowserIdentity),
   timeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 export type PreviewAutomationRequest = typeof PreviewAutomationRequest.Type;

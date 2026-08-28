@@ -27,9 +27,13 @@ export const status = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_STATUS_CHANNEL,
   payload: DesktopExternalBrowserStatusInputSchema,
   result: PreviewAutomationStatus,
-  handler: Effect.fn("desktop.ipc.externalBrowser.status")(function* ({ tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.status")(function* ({
+    tabId,
+    operationId,
+    expectedIdentity,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    return yield* manager.status(tabId, operationId);
+    return yield* manager.status(tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -37,9 +41,14 @@ export const open = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_OPEN_CHANNEL,
   payload: DesktopExternalBrowserOpenInputSchema,
   result: PreviewAutomationStatus,
-  handler: Effect.fn("desktop.ipc.externalBrowser.open")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.open")(function* ({
+    input,
+    tabId,
+    operationId,
+    expectedIdentity,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    return yield* manager.open(input, tabId, operationId);
+    return yield* manager.open(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -61,9 +70,10 @@ export const navigate = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    return yield* manager.navigate(input, tabId, operationId);
+    return yield* manager.navigate(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -75,9 +85,10 @@ export const resize = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    return yield* manager.resize(input, tabId, operationId);
+    return yield* manager.resize(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -89,9 +100,10 @@ export const setColorScheme = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    return yield* manager.setColorScheme(input, tabId, operationId);
+    return yield* manager.setColorScheme(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -99,9 +111,13 @@ export const snapshot = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_SNAPSHOT_CHANNEL,
   payload: DesktopExternalBrowserStatusInputSchema,
   result: PreviewAutomationSnapshot,
-  handler: Effect.fn("desktop.ipc.externalBrowser.snapshot")(function* ({ tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.snapshot")(function* ({
+    tabId,
+    operationId,
+    expectedIdentity,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    return yield* manager.snapshot(tabId, operationId);
+    return yield* manager.snapshot(tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -113,9 +129,10 @@ export const click = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    yield* manager.click(input, tabId, operationId);
+    yield* manager.click(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -123,9 +140,14 @@ export const type = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_TYPE_CHANNEL,
   payload: DesktopExternalBrowserTypeInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.externalBrowser.type")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.type")(function* ({
+    input,
+    tabId,
+    operationId,
+    expectedIdentity,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    yield* manager.type(input, tabId, operationId);
+    yield* manager.type(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -137,9 +159,10 @@ export const press = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    yield* manager.press(input, tabId, operationId);
+    yield* manager.press(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -151,9 +174,10 @@ export const scroll = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    yield* manager.scroll(input, tabId, operationId);
+    yield* manager.scroll(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -165,9 +189,10 @@ export const evaluate = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    return yield* manager.evaluate(input, tabId, operationId);
+    return yield* manager.evaluate(input, tabId, operationId, expectedIdentity);
   }),
 });
 
@@ -179,9 +204,10 @@ export const waitFor = DesktopIpc.makeIpcMethod({
     input,
     tabId,
     operationId,
+    expectedIdentity,
   }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
-    yield* manager.waitFor(input, tabId, operationId);
+    yield* manager.waitFor(input, tabId, operationId, expectedIdentity);
   }),
 });
 

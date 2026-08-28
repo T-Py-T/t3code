@@ -63,6 +63,7 @@ import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ComputerUseBroker from "../../computerUse/ComputerUseBroker.ts";
 import * as ComputerUseControl from "../../computerUse/ComputerUseControl.ts";
+import * as ComputerUsePolicy from "../../computerUse/ComputerUsePolicy.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
@@ -248,6 +249,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.all([
         ComputerUseBroker.stopActiveComputerUseTurn(threadId, turnId, reason),
         ComputerUseControl.releaseActiveComputerUseTurn(threadId, turnId),
+        ComputerUsePolicy.finishActiveComputerUsePolicyTurn(threadId, turnId),
         PreviewAutomationBroker.stopActivePreviewAutomationTurn(threadId, turnId),
       ]).pipe(Effect.asVoid));
   const finishComputerUseThread =
@@ -256,6 +258,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.all([
         ComputerUseBroker.stopActiveComputerUseThread(threadId, reason),
         ComputerUseControl.releaseActiveComputerUseThread(threadId),
+        ComputerUsePolicy.finishActiveComputerUsePolicyThread(threadId),
         PreviewAutomationBroker.stopActivePreviewAutomationThread(threadId),
       ]).pipe(Effect.asVoid));
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();

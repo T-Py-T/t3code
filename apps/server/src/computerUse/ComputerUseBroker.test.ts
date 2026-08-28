@@ -373,14 +373,39 @@ it.effect("settles an in-flight host request when the lease is stopped", () =>
         readonly leaseId: ComputerUseLeaseId;
         readonly reason: "user";
       }>();
+      let routedRequest:
+        | (ComputerUseHostStreamEvent & { readonly type: "request" })["request"]
+        | undefined;
+      let routedConnectionId: ComputerUseConnectionId | undefined;
       const events = yield* broker.connect(host);
       yield* Stream.runForEach(events, (event) => {
-        if (event.type === "request") return Deferred.succeed(requestReceived, undefined);
+        if (event.type === "request") {
+          routedRequest = event.request;
+          routedConnectionId = event.connectionId;
+          return Deferred.succeed(requestReceived, undefined);
+        }
         if (event.type === "cancel" && event.reason === "user") {
-          return Deferred.succeed(cancelReceived, {
-            leaseId: event.leaseId,
-            reason: event.reason,
-          });
+          if (!routedRequest || !routedConnectionId) return Effect.void;
+          return broker
+            .respond({
+              hostId: host.hostId,
+              connectionId: routedConnectionId,
+              leaseId: routedRequest.leaseId,
+              requestId: routedRequest.requestId,
+              ok: false,
+              error: {
+                _tag: "ComputerUseInterruptedError",
+                message: "cancelled",
+              },
+            })
+            .pipe(
+              Effect.andThen(
+                Deferred.succeed(cancelReceived, {
+                  leaseId: event.leaseId,
+                  reason: event.reason,
+                }),
+              ),
+            );
         }
         return Effect.void;
       }).pipe(Effect.forkScoped);
@@ -547,10 +572,27 @@ it.effect("reports a bounded timeout and clears the pending request", () =>
     Effect.gen(function* () {
       const broker = yield* makeBroker;
       const requestReceived = yield* Deferred.make<void>();
-      const requests = requestsFrom(yield* broker.connect(host));
-      yield* Stream.runForEach(requests, () => Deferred.succeed(requestReceived, undefined)).pipe(
-        Effect.forkScoped,
-      );
+      let routedRequest:
+        | (ComputerUseHostStreamEvent & { readonly type: "request" })["request"]
+        | undefined;
+      let routedConnectionId: ComputerUseConnectionId | undefined;
+      const events = yield* broker.connect(host);
+      yield* Stream.runForEach(events, (event) => {
+        if (event.type === "request") {
+          routedRequest = event.request;
+          routedConnectionId = event.connectionId;
+          return Deferred.succeed(requestReceived, undefined);
+        }
+        if (event.type !== "cancel" || !routedRequest || !routedConnectionId) return Effect.void;
+        return broker.respond({
+          hostId: host.hostId,
+          connectionId: routedConnectionId,
+          leaseId: routedRequest.leaseId,
+          requestId: routedRequest.requestId,
+          ok: false,
+          error: { _tag: "ComputerUseInterruptedError", message: "timed out" },
+        });
+      }).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
 
       const inFlight = yield* broker
@@ -575,10 +617,27 @@ it.effect("ends the old lease when a replacement host connects", () =>
     Effect.gen(function* () {
       const broker = yield* makeBroker;
       const firstRequestReceived = yield* Deferred.make<string>();
-      const firstRequests = requestsFrom(yield* broker.connect(host));
-      const firstConsumer = yield* Stream.runForEach(firstRequests, (request) =>
-        Deferred.succeed(firstRequestReceived, request.leaseId),
-      ).pipe(Effect.forkScoped);
+      let firstRequest:
+        | (ComputerUseHostStreamEvent & { readonly type: "request" })["request"]
+        | undefined;
+      let firstConnectionId: ComputerUseConnectionId | undefined;
+      const firstEvents = yield* broker.connect(host);
+      const firstConsumer = yield* Stream.runForEach(firstEvents, (event) => {
+        if (event.type === "request") {
+          firstRequest = event.request;
+          firstConnectionId = event.connectionId;
+          return Deferred.succeed(firstRequestReceived, event.request.leaseId);
+        }
+        if (event.type !== "cancel" || !firstRequest || !firstConnectionId) return Effect.void;
+        return broker.respond({
+          hostId: host.hostId,
+          connectionId: firstConnectionId,
+          leaseId: firstRequest.leaseId,
+          requestId: firstRequest.requestId,
+          ok: false,
+          error: { _tag: "ComputerUseInterruptedError", message: "host replaced" },
+        });
+      }).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
 
       const inFlight = yield* broker
@@ -605,13 +664,10 @@ it.effect("ends the old lease when a replacement host connects", () =>
       }).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
 
-      const completion = inFlight.pollUnsafe();
-      expect(completion).toBeDefined();
-      if (completion === undefined) return;
       const error = yield* Fiber.join(inFlight).pipe(Effect.flip);
       expect(error).toBeInstanceOf(ComputerUseStoppedError);
       expect(error).toMatchObject({ reason: "host-disconnected" });
-      expect(firstConsumer.pollUnsafe()).toBeDefined();
+      yield* Fiber.await(firstConsumer);
 
       expect(yield* broker.invoke({ scope, operation: "observe", targetId, input: {} })).toBe(
         "replacement",

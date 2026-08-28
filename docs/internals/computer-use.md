@@ -327,6 +327,11 @@ fail on ARM64 even though status and target discovery still work. Foreground act
 attach the helper input thread to the current foreground and target window threads, transfer focus,
 and detach both threads in a guaranteed cleanup path before sending input.
 
+The Windows host identity includes the verified helper certificate thumbprint. Certificate renewal
+therefore changes the host identity and intentionally invalidates persistent Computer Use grants.
+The first action after rotation must be approved again; silently carrying grants across an
+unrecognized publisher identity would weaken the fail-closed trust boundary.
+
 The repeatable commands and the latest development evidence are recorded in
 [Windows Computer Use acceptance](../operations/windows-computer-use-acceptance.md).
 

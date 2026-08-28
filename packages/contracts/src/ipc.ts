@@ -65,6 +65,7 @@ import type {
 import {
   PreviewAutomationClickInput,
   PreviewAutomationEvaluateInput,
+  PreviewAutomationExternalBrowserIdentity,
   PreviewAutomationHost,
   PreviewAutomationHostFocus,
   PreviewAutomationNavigateInput,
@@ -1007,6 +1008,7 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const DesktopPreviewConfigInputSchema = Schema.Struct({
@@ -1037,39 +1039,56 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
   data: Schema.Uint8Array,
 });
 
+export const DesktopPreviewAutomationTabInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+
 export const DesktopPreviewAutomationClickInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationClickInput,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const DesktopPreviewAutomationTypeInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationTypeInput,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const DesktopPreviewAutomationPressInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationPressInput,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const DesktopPreviewAutomationScrollInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationScrollInput,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const DesktopPreviewAutomationEvaluateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationEvaluateInput,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationWaitForInput,
+  operationId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+
+export const DesktopPreviewAutomationCancelInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  operationId: TrimmedNonEmptyString,
 });
 
 const DesktopExternalBrowserOptionalTabSchema = Schema.Struct({
   tabId: Schema.optionalKey(Schema.NullOr(DesktopPreviewTabIdSchema)),
   operationId: Schema.optionalKey(TrimmedNonEmptyString),
+  expectedIdentity: Schema.optionalKey(PreviewAutomationExternalBrowserIdentity),
 });
 
 export const DesktopExternalBrowserStatusInputSchema = DesktopExternalBrowserOptionalTabSchema;
@@ -1222,58 +1241,76 @@ export interface DesktopBridge {
 }
 
 export interface DesktopExternalBrowserBridge {
-  status: (tabId?: string | null, operationId?: string) => Promise<PreviewAutomationStatus>;
+  status: (
+    tabId?: string | null,
+    operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
+  ) => Promise<PreviewAutomationStatus>;
   open: (
     input: PreviewAutomationOpenInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<PreviewAutomationStatus>;
   close: () => Promise<void>;
   navigate: (
     input: PreviewAutomationNavigateInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<PreviewAutomationStatus>;
   resize: (
     input: PreviewAutomationResizeInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<PreviewAutomationResizeResult>;
   setColorScheme: (
     input: PreviewAutomationSetColorSchemeInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<PreviewAutomationSetColorSchemeResult>;
-  snapshot: (tabId?: string | null, operationId?: string) => Promise<PreviewAutomationSnapshot>;
+  snapshot: (
+    tabId?: string | null,
+    operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
+  ) => Promise<PreviewAutomationSnapshot>;
   click: (
     input: PreviewAutomationClickInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<void>;
   type: (
     input: PreviewAutomationTypeInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<void>;
   press: (
     input: PreviewAutomationPressInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<void>;
   scroll: (
     input: PreviewAutomationScrollInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<void>;
   evaluate: (
     input: PreviewAutomationEvaluateInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<unknown>;
   waitFor: (
     input: PreviewAutomationWaitForInput,
     tabId?: string | null,
     operationId?: string,
+    expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
   ) => Promise<void>;
   cancel: (operationId: string) => Promise<void>;
 }
@@ -1282,7 +1319,7 @@ export interface DesktopPreviewBridge {
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
   registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
-  navigate: (tabId: string, url: string) => Promise<void>;
+  navigate: (tabId: string, url: string, operationId?: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;
   refresh: (tabId: string) => Promise<void>;
@@ -1343,14 +1380,35 @@ export interface DesktopPreviewBridge {
     onFrame: (listener: (frame: DesktopPreviewRecordingFrame) => void) => () => void;
   };
   automation: {
-    status: (tabId: string) => Promise<PreviewAutomationStatus>;
-    snapshot: (tabId: string) => Promise<PreviewAutomationSnapshot>;
-    click: (tabId: string, input: PreviewAutomationClickInput) => Promise<void>;
-    type: (tabId: string, input: PreviewAutomationTypeInput) => Promise<void>;
-    press: (tabId: string, input: PreviewAutomationPressInput) => Promise<void>;
-    scroll: (tabId: string, input: PreviewAutomationScrollInput) => Promise<void>;
-    evaluate: (tabId: string, input: PreviewAutomationEvaluateInput) => Promise<unknown>;
-    waitFor: (tabId: string, input: PreviewAutomationWaitForInput) => Promise<void>;
+    status: (tabId: string, operationId?: string) => Promise<PreviewAutomationStatus>;
+    snapshot: (tabId: string, operationId?: string) => Promise<PreviewAutomationSnapshot>;
+    click: (
+      tabId: string,
+      input: PreviewAutomationClickInput,
+      operationId?: string,
+    ) => Promise<void>;
+    type: (tabId: string, input: PreviewAutomationTypeInput, operationId?: string) => Promise<void>;
+    press: (
+      tabId: string,
+      input: PreviewAutomationPressInput,
+      operationId?: string,
+    ) => Promise<void>;
+    scroll: (
+      tabId: string,
+      input: PreviewAutomationScrollInput,
+      operationId?: string,
+    ) => Promise<void>;
+    evaluate: (
+      tabId: string,
+      input: PreviewAutomationEvaluateInput,
+      operationId?: string,
+    ) => Promise<unknown>;
+    waitFor: (
+      tabId: string,
+      input: PreviewAutomationWaitForInput,
+      operationId?: string,
+    ) => Promise<void>;
+    cancel: (tabId: string, operationId: string) => Promise<void>;
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;

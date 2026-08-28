@@ -3226,6 +3226,76 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("cancels a named built-in browser operation inside Electron", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const stop = vi.fn();
+        let debuggerAttached = false;
+        const sendCommand = vi.fn(async (method: string) => {
+          if (method === "Runtime.evaluate") {
+            return { result: { value: { matched: false } } };
+          }
+          return undefined;
+        });
+        fromId.mockReturnValue({
+          id: 42,
+          isDestroyed: () => false,
+          getType: () => "webview",
+          getURL: () => "https://example.com",
+          getTitle: () => "Example",
+          isLoading: () => false,
+          isDevToolsOpened: () => false,
+          getZoomFactor: () => 1,
+          setZoomFactor: vi.fn(),
+          setAudioMuted: vi.fn(),
+          isCurrentlyAudible: () => false,
+          stop,
+          on: vi.fn(),
+          off: vi.fn(),
+          ipc: { on: vi.fn(), off: vi.fn() },
+          send: webviewSend,
+          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+          setWindowOpenHandler: vi.fn(),
+          debugger: {
+            isAttached: () => debuggerAttached,
+            attach: vi.fn(() => {
+              debuggerAttached = true;
+            }),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        } as never);
+
+        yield* manager.createTab("tab_cancel");
+        yield* manager.registerWebview("tab_cancel", 42);
+        const waiting = yield* manager
+          .automationWaitFor(
+            "tab_cancel",
+            { text: "never appears", timeoutMs: 5_000 },
+            "operation-cancel",
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.yieldNow;
+
+        yield* manager.automationCancel("tab_cancel", "operation-cancel");
+        yield* TestClock.adjust(100);
+
+        const exit = yield* Fiber.await(waiting);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) return;
+        expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toMatchObject({
+          _tag: "PreviewAutomationControlInterruptedError",
+          operation: "waitFor",
+          tabId: "tab_cancel",
+        });
+        expect(stop).toHaveBeenCalledOnce();
+        expect(sendCommand).toHaveBeenCalledWith("Page.stopLoading");
+        expect(sendCommand).toHaveBeenCalledWith("Runtime.terminateExecution");
+      }),
+    ),
+  );
+
   effectIt.effect("derives evaluation detail kind and length from the same non-empty source", () =>
     withManager((manager) =>
       Effect.gen(function* () {

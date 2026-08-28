@@ -392,6 +392,30 @@ function PreviewAutomationHost(props: {
             runtimeTabId,
           };
         };
+        const runBuiltInOperation = async <A,>(
+          ready: Awaited<ReturnType<typeof requireReadyTab>>,
+          run: () => Promise<A>,
+        ): Promise<A> => {
+          signal.throwIfAborted();
+          let abort: (() => void) | undefined;
+          const interrupted = new Promise<never>((_resolve, reject) => {
+            abort = () => {
+              void ready.bridge.automation
+                .cancel(ready.runtimeTabId, request.requestId)
+                .then(
+                  () => reject(signal.reason ?? new DOMException("Aborted", "AbortError")),
+                  reject,
+                );
+            };
+            signal.addEventListener("abort", abort, { once: true });
+          });
+          try {
+            signal.throwIfAborted();
+            return await Promise.race([run(), interrupted]);
+          } finally {
+            if (abort) signal.removeEventListener("abort", abort);
+          }
+        };
         switch (request.operation) {
           case "status":
             return await currentStatus(threadRef, tabId);
@@ -494,17 +518,31 @@ function PreviewAutomationHost(props: {
               // operation failure.
               await waitForPreviewPresentation(activeRuntimeTabId);
             }
-            if (reusedExistingTab && resolvedInputUrl && previewBridge) {
+            const activePreviewBridge = previewBridge;
+            if (reusedExistingTab && resolvedInputUrl && activePreviewBridge) {
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
-              await previewBridge.navigate(activeRuntimeTabId, resolvedInputUrl);
-              await waitForNavigationReadiness(
-                threadRef,
-                request.requestId,
-                activeTabId,
-                activeRuntimeTabId,
-                request.operation,
-                "load",
-                request.timeoutMs,
+              await runBuiltInOperation(
+                {
+                  bridge: activePreviewBridge,
+                  tabId: activeTabId,
+                  runtimeTabId: activeRuntimeTabId,
+                },
+                async () => {
+                  await activePreviewBridge.navigate(
+                    activeRuntimeTabId,
+                    resolvedInputUrl,
+                    request.requestId,
+                  );
+                  await waitForNavigationReadiness(
+                    threadRef,
+                    request.requestId,
+                    activeTabId,
+                    activeRuntimeTabId,
+                    request.operation,
+                    "load",
+                    request.timeoutMs,
+                  );
+                },
               );
             }
             return await currentStatus(threadRef, activeTabId);
@@ -519,16 +557,22 @@ function PreviewAutomationHost(props: {
                 url: input.url!,
               },
             );
-            await ready.bridge.navigate(ready.runtimeTabId, resolution.resolvedUrl);
-            await waitForNavigationReadiness(
-              threadRef,
-              request.requestId,
-              ready.tabId,
-              ready.runtimeTabId,
-              request.operation,
-              input.readiness ?? "load",
-              input.timeoutMs ?? request.timeoutMs,
-            );
+            await runBuiltInOperation(ready, async () => {
+              await ready.bridge.navigate(
+                ready.runtimeTabId,
+                resolution.resolvedUrl,
+                request.requestId,
+              );
+              await waitForNavigationReadiness(
+                threadRef,
+                request.requestId,
+                ready.tabId,
+                ready.runtimeTabId,
+                request.operation,
+                input.readiness ?? "load",
+                input.timeoutMs ?? request.timeoutMs,
+              );
+            });
             return await currentStatus(threadRef, ready.tabId);
           }
           case "resize": {
@@ -622,48 +666,68 @@ function PreviewAutomationHost(props: {
           }
           case "snapshot": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.snapshot(ready.runtimeTabId);
+            return await runBuiltInOperation(ready, () =>
+              ready.bridge.automation.snapshot(ready.runtimeTabId, request.requestId),
+            );
           }
           case "click": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.click(
-              ready.runtimeTabId,
-              request.input as Parameters<typeof ready.bridge.automation.click>[1],
+            return await runBuiltInOperation(ready, () =>
+              ready.bridge.automation.click(
+                ready.runtimeTabId,
+                request.input as Parameters<typeof ready.bridge.automation.click>[1],
+                request.requestId,
+              ),
             );
           }
           case "type": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.type(
-              ready.runtimeTabId,
-              request.input as Parameters<typeof ready.bridge.automation.type>[1],
+            return await runBuiltInOperation(ready, () =>
+              ready.bridge.automation.type(
+                ready.runtimeTabId,
+                request.input as Parameters<typeof ready.bridge.automation.type>[1],
+                request.requestId,
+              ),
             );
           }
           case "press": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.press(
-              ready.runtimeTabId,
-              request.input as Parameters<typeof ready.bridge.automation.press>[1],
+            return await runBuiltInOperation(ready, () =>
+              ready.bridge.automation.press(
+                ready.runtimeTabId,
+                request.input as Parameters<typeof ready.bridge.automation.press>[1],
+                request.requestId,
+              ),
             );
           }
           case "scroll": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.scroll(
-              ready.runtimeTabId,
-              request.input as Parameters<typeof ready.bridge.automation.scroll>[1],
+            return await runBuiltInOperation(ready, () =>
+              ready.bridge.automation.scroll(
+                ready.runtimeTabId,
+                request.input as Parameters<typeof ready.bridge.automation.scroll>[1],
+                request.requestId,
+              ),
             );
           }
           case "evaluate": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.evaluate(
-              ready.runtimeTabId,
-              request.input as Parameters<typeof ready.bridge.automation.evaluate>[1],
+            return await runBuiltInOperation(ready, () =>
+              ready.bridge.automation.evaluate(
+                ready.runtimeTabId,
+                request.input as Parameters<typeof ready.bridge.automation.evaluate>[1],
+                request.requestId,
+              ),
             );
           }
           case "waitFor": {
             const ready = await requireReadyTab();
-            return await ready.bridge.automation.waitFor(
-              ready.runtimeTabId,
-              request.input as Parameters<typeof ready.bridge.automation.waitFor>[1],
+            return await runBuiltInOperation(ready, () =>
+              ready.bridge.automation.waitFor(
+                ready.runtimeTabId,
+                request.input as Parameters<typeof ready.bridge.automation.waitFor>[1],
+                request.requestId,
+              ),
             );
           }
           case "recordingStart": {

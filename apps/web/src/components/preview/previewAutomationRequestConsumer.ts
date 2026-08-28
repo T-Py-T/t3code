@@ -42,12 +42,19 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
     let connectionExplicitlyAnnounced = false;
     let reportedConnectionId: PreviewAutomationStreamEvent["connectionId"] | null = null;
     let requestsVersion = 0;
-    const activeRequests = new Map<string, AbortController>();
+    const activeRequests = new Map<
+      string,
+      { readonly controller: AbortController; cancelledByBroker: boolean }
+    >();
 
     const consume = (result: AutomationStreamResult<E>) => {
       if (!AsyncResult.isSuccess(result)) return;
       const event = result.value;
       if (event.type === "connected") {
+        if (activeConnectionId !== null && activeConnectionId !== event.connectionId) {
+          for (const { controller } of activeRequests.values()) controller.abort();
+          activeRequests.clear();
+        }
         activeConnectionId = event.connectionId;
         connectionExplicitlyAnnounced = true;
       } else if (activeConnectionId === null) {
@@ -64,19 +71,35 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
         return;
       }
       if (event.type === "cancel") {
-        activeRequests.get(event.requestId)?.abort();
-        activeRequests.delete(event.requestId);
+        const active = activeRequests.get(event.requestId);
+        if (active) {
+          active.cancelledByBroker = true;
+          active.controller.abort();
+        }
         return;
       }
       const request = event.request;
       const controller = new AbortController();
-      activeRequests.set(request.requestId, controller);
+      const active = { controller, cancelledByBroker: false };
+      activeRequests.set(request.requestId, active);
       void get
         .once(options.requestHandlerAtom)
         .handle(request, controller.signal)
         .then(
           (value) => {
-            if (controller.signal.aborted) return;
+            if (active.cancelledByBroker) {
+              return options.respond({
+                clientId: options.clientId,
+                connectionId: event.connectionId,
+                requestId: request.requestId,
+                ok: false,
+                error: {
+                  _tag: "PreviewAutomationControlInterruptedError",
+                  message: `Preview automation ${request.operation} was interrupted.`,
+                },
+              });
+            }
+            if (disposed || controller.signal.aborted) return;
             return options.respond({
               clientId: options.clientId,
               connectionId: event.connectionId,
@@ -86,7 +109,19 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
             });
           },
           (error) => {
-            if (controller.signal.aborted) return;
+            if (active.cancelledByBroker) {
+              return options.respond({
+                clientId: options.clientId,
+                connectionId: event.connectionId,
+                requestId: request.requestId,
+                ok: false,
+                error: {
+                  _tag: "PreviewAutomationControlInterruptedError",
+                  message: `Preview automation ${request.operation} was interrupted.`,
+                },
+              });
+            }
+            if (disposed || controller.signal.aborted) return;
             return options.respond({
               clientId: options.clientId,
               connectionId: event.connectionId,
@@ -103,7 +138,7 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
           },
         )
         .finally(() => {
-          if (activeRequests.get(request.requestId) === controller) {
+          if (activeRequests.get(request.requestId) === active) {
             activeRequests.delete(request.requestId);
           }
         });
@@ -111,7 +146,7 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
 
     get.addFinalizer(() => {
       disposed = true;
-      for (const controller of activeRequests.values()) controller.abort();
+      for (const { controller } of activeRequests.values()) controller.abort();
       activeRequests.clear();
     });
     const initialRequest = get.once(options.requestsAtom);

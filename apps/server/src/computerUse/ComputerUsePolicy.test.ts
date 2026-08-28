@@ -501,3 +501,56 @@ it.effect("pauses future target access until the user explicitly resumes it", ()
     ).toEqual({ _tag: "allow" });
   }),
 );
+
+it.effect("purges turn and thread-scoped grants, confirmations, and approvals", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+    const input: ComputerUsePolicy.ComputerUsePolicyInput = {
+      scope,
+      target,
+      access: "operate",
+      risk: "external-side-effect",
+      runtimeMode: "full-access",
+      action: firstAction,
+    };
+    const reversibleInput: ComputerUsePolicy.ComputerUsePolicyInput = {
+      scope,
+      target,
+      access: "operate",
+      risk: "reversible-local",
+      runtimeMode: "full-access",
+    };
+    yield* policy.grant({ scope, target, access: "operate", duration: "turn" });
+    const confirmationId = yield* policy.requestApproval({
+      input,
+      decision: { _tag: "request-action-confirmation", risk: "external-side-effect" },
+    });
+    yield* policy.resolveApproval({ approvalId: confirmationId, decision: "accept" });
+    const pendingId = yield* policy.requestApproval({
+      input,
+      decision: { _tag: "request-app-grant", access: "operate" },
+    });
+
+    yield* policy.finishTurn(scope.threadId, scope.turnId);
+
+    expect(yield* policy.resolveApproval({ approvalId: pendingId, decision: "accept" })).toBe(
+      false,
+    );
+    expect(yield* policy.evaluate(input)).toEqual({
+      _tag: "request-app-grant",
+      access: "operate",
+    });
+
+    yield* policy.grant({ scope, target, access: "operate", duration: "session" });
+    expect(yield* policy.evaluate(reversibleInput)).toEqual({ _tag: "allow" });
+    yield* policy.finishThread(scope.threadId);
+    expect(yield* policy.evaluate(reversibleInput)).toEqual({
+      _tag: "request-app-grant",
+      access: "operate",
+    });
+
+    yield* policy.grant({ scope, target, access: "operate", duration: "persistent" });
+    yield* policy.finishThread(scope.threadId);
+    expect(yield* policy.evaluate(reversibleInput)).toEqual({ _tag: "allow" });
+  }),
+);

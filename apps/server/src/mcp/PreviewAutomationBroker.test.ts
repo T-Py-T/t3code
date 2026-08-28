@@ -7,6 +7,7 @@ import {
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
   PreviewAutomationTargetNotEditableError,
+  PreviewAutomationTimeoutError,
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
@@ -19,6 +20,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
@@ -81,6 +83,42 @@ it.effect("atomically registers a connected host and correlates its response", (
       });
 
       expect(result).toEqual({ available: true });
+    }),
+  ),
+);
+
+it.effect("carries the approved external browser identity to the selected host", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const expectedExternalBrowserIdentity = {
+        profileId: "profile:one",
+        tabId: PreviewTabId.make("external_1"),
+        origin: "https://example.com",
+      } as const;
+      const requests = requestsFrom(
+        yield* broker.connect(makeHost({ supportedBrowsers: ["external"] })),
+      );
+      yield* Stream.runForEach(requests, (request) => {
+        expect(request.expectedExternalBrowserIdentity).toEqual(expectedExternalBrowserIdentity);
+        return broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "ready",
+        });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(
+        yield* broker.invoke({
+          scope,
+          operation: "snapshot",
+          input: { browser: "external" },
+          expectedExternalBrowserIdentity,
+        }),
+      ).toBe("ready");
     }),
   ),
 );
@@ -308,7 +346,20 @@ it.effect("cancels in-flight browser work and releases its control lease", () =>
       const cancelSeen = yield* Deferred.make<string>();
       yield* Stream.runForEach(events, (event) => {
         if (event.type === "request") return Deferred.succeed(requestSeen, undefined);
-        if (event.type === "cancel") return Deferred.succeed(cancelSeen, event.requestId);
+        if (event.type === "cancel") {
+          return broker
+            .respond({
+              clientId: "client-1",
+              connectionId: event.connectionId,
+              requestId: event.requestId,
+              ok: false,
+              error: {
+                _tag: "PreviewAutomationControlInterruptedError",
+                message: "cancelled",
+              },
+            })
+            .pipe(Effect.andThen(Deferred.succeed(cancelSeen, event.requestId)));
+        }
         return Effect.void;
       }).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
@@ -324,6 +375,44 @@ it.effect("cancels in-flight browser work and releases its control lease", () =>
       expect(yield* Deferred.await(cancelSeen)).toBe("preview-0");
       expect((yield* Fiber.join(invocation))._tag).toBe("Failure");
       expect(yield* broker.activeControlFor(scope.environmentId)).toBeUndefined();
+    }),
+  ),
+);
+
+it.effect("cancels and drains timed-out browser work before returning", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requestSeen = yield* Deferred.make<void>();
+      const cancelSeen = yield* Deferred.make<void>();
+      const events = yield* broker.connect(makeHost());
+      yield* Stream.runForEach(events, (event) => {
+        if (event.type === "request") return Deferred.succeed(requestSeen, undefined);
+        if (event.type !== "cancel") return Effect.void;
+        return broker
+          .respond({
+            clientId: "client-1",
+            connectionId: event.connectionId,
+            requestId: event.requestId,
+            ok: false,
+            error: {
+              _tag: "PreviewAutomationControlInterruptedError",
+              message: "timed out",
+            },
+          })
+          .pipe(Effect.andThen(Deferred.succeed(cancelSeen, undefined)));
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const invocation = yield* broker
+        .invoke<void>({ scope, operation: "waitFor", input: { text: "never" }, timeoutMs: 1_000 })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(requestSeen);
+      yield* TestClock.adjust("1 second");
+
+      const error = yield* Fiber.join(invocation).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(PreviewAutomationTimeoutError);
+      expect(yield* Deferred.isDone(cancelSeen)).toBe(true);
     }),
   ),
 );

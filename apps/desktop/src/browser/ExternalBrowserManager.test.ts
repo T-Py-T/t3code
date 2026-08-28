@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   externalBrowserConnectionState,
   externalBrowserExecutableCandidates,
+  externalBrowserIdentityMatches,
   normalizeExternalBrowserUrl,
 } from "./ExternalBrowserManager.ts";
 
@@ -61,5 +62,48 @@ describe("externalBrowserConnectionState", () => {
     expect(externalBrowserConnectionState(false, false)).toBe("unavailable");
     expect(externalBrowserConnectionState(true, false)).toBe("disconnected");
     expect(externalBrowserConnectionState(true, true)).toBe("connected");
+  });
+});
+
+describe("externalBrowserIdentityMatches", () => {
+  const expected = {
+    profileId: "profile:one",
+    tabId: "external_1",
+    origin: "https://example.com",
+  } as const;
+
+  it("rejects profile, tab, and origin changes after policy approval", () => {
+    expect(
+      externalBrowserIdentityMatches(
+        "profile:one",
+        expected,
+        "external_1",
+        "https://example.com/account",
+      ),
+    ).toBe(true);
+    expect(
+      externalBrowserIdentityMatches(
+        "profile:two",
+        expected,
+        "external_1",
+        "https://example.com/account",
+      ),
+    ).toBe(false);
+    expect(
+      externalBrowserIdentityMatches(
+        "profile:one",
+        expected,
+        "external_2",
+        "https://example.com/account",
+      ),
+    ).toBe(false);
+    expect(
+      externalBrowserIdentityMatches(
+        "profile:one",
+        expected,
+        "external_1",
+        "https://attacker.example/account",
+      ),
+    ).toBe(false);
   });
 });

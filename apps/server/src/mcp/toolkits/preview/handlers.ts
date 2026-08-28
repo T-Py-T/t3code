@@ -80,6 +80,11 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   const crypto = yield* Crypto.Crypto;
   const details = typeof input === "object" && input !== null ? input : {};
   const browser = "browser" in details && details.browser === "external" ? "external" : "built-in";
+  const opensNewExternalTab =
+    browser === "external" &&
+    operation === "open" &&
+    "reuseExistingTab" in details &&
+    details.reuseExistingTab === false;
   const displayName = browser === "external" ? "External browser" : "Built-in browser";
   const externalStatus =
     browser === "external"
@@ -104,7 +109,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
     browser === "external"
       ? {
           profileId,
-          tabId: tabId ?? externalStatus?.tabId ?? "new-tab",
+          tabId: opensNewExternalTab ? "new-tab" : (tabId ?? externalStatus?.tabId ?? "new-tab"),
           destination:
             operation === "open" || operation === "navigate"
               ? {
@@ -122,7 +127,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
     kind: "browser-tab",
     displayName:
       browser === "external"
-        ? `${displayName} — ${browserOrigin(externalStatus?.url ?? null)}`
+        ? `${displayName} — ${opensNewExternalTab ? "new tab" : browserOrigin(externalStatus?.url ?? null)}`
         : displayName,
     applicationId:
       browser === "external" ? `t3.preview.external.${profileId}` : "t3.preview.built-in",
@@ -219,6 +224,15 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
         scope,
         operation,
         input,
+        ...(browser === "external" && profileId !== undefined
+          ? {
+              expectedExternalBrowserIdentity: {
+                profileId,
+                tabId: opensNewExternalTab ? null : (externalStatus?.tabId ?? null),
+                origin: browserOrigin(externalStatus?.url ?? null),
+              },
+            }
+          : {}),
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
         ...(tabId === undefined ? {} : { tabId }),
       }),

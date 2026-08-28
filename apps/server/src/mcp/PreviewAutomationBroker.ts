@@ -16,6 +16,7 @@ import {
   PreviewTabId,
   type PreviewAutomationError,
   type PreviewAutomationOperation,
+  type PreviewAutomationExternalBrowserIdentity,
   type PreviewAutomationHost,
   type PreviewAutomationHostFocus,
   type PreviewAutomationResponse,
@@ -41,6 +42,7 @@ export interface PreviewAutomationInvokeInput {
   readonly scope: McpInvocationContext.McpInvocationScope;
   readonly operation: PreviewAutomationOperation;
   readonly input: unknown;
+  readonly expectedExternalBrowserIdentity?: PreviewAutomationExternalBrowserIdentity;
   readonly tabId?: PreviewTabId;
   readonly timeoutMs?: number;
 }
@@ -124,6 +126,8 @@ interface BrokerState {
   readonly requestSequence: number;
   readonly focusSequence: number;
 }
+
+const CANCELLATION_DRAIN_MS = 1_000;
 
 const removeConnectionFromState = (
   current: BrokerState,
@@ -559,6 +563,9 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
           tabIdExplicit: input.tabId !== undefined,
           operation: input.operation,
           input: input.input,
+          ...(input.expectedExternalBrowserIdentity === undefined
+            ? {}
+            : { expectedExternalBrowserIdentity: input.expectedExternalBrowserIdentity }),
           timeoutMs,
         },
       });
@@ -571,7 +578,20 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       }
       const result = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeoutMs));
       return yield* Option.match(result, {
-        onNone: () => Effect.fail(new PreviewAutomationTimeoutError(requestContext)),
+        onNone: () =>
+          Effect.gen(function* () {
+            yield* Queue.offer(connection.queue, {
+              type: "cancel",
+              connectionId: connection.connectionId,
+              requestId,
+            });
+            yield* Deferred.await(deferred).pipe(
+              Effect.exit,
+              Effect.timeoutOption(CANCELLATION_DRAIN_MS),
+              Effect.asVoid,
+            );
+            return yield* new PreviewAutomationTimeoutError(requestContext);
+          }),
         onSome: (value) => Effect.succeed(value as A),
       });
     });
@@ -611,38 +631,53 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   ) {
     const stopped = yield* SynchronizedRef.modify(state, (current) => {
       const assignments = new Map(current.assignments);
-      const pending = new Map(current.pending);
       const stoppedAssignments = new Set<string>();
-      const stoppedRequests: PendingRequest[] = [];
+      const stoppedRequests: Array<readonly [string, PendingRequest]> = [];
       for (const [key, assignment] of assignments) {
         if (!matches(assignment.scope)) continue;
         assignments.delete(key);
         stoppedAssignments.add(key);
       }
-      for (const [requestId, request] of pending) {
+      for (const [requestId, request] of current.pending) {
         if (!matches(request.scope)) continue;
-        pending.delete(requestId);
-        stoppedRequests.push(request);
+        stoppedRequests.push([requestId, request]);
       }
       return [
         { count: stoppedAssignments.size, requests: stoppedRequests },
-        { ...current, assignments, pending },
+        { ...current, assignments },
       ] as const;
     });
     yield* Effect.forEach(
       stopped.requests,
-      (request) =>
+      ([, request]) =>
         Queue.offer(request.queue, {
           type: "cancel",
           connectionId: request.context.connectionId,
           requestId: request.context.requestId,
-        }).pipe(
-          Effect.andThen(
-            Deferred.fail(
-              request.deferred,
-              new PreviewAutomationControlInterruptedError(request.context),
-            ),
-          ),
+        }),
+      { discard: true },
+    );
+    yield* Effect.forEach(
+      stopped.requests,
+      ([, request]) => Deferred.await(request.deferred).pipe(Effect.exit),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.timeoutOption(CANCELLATION_DRAIN_MS), Effect.asVoid);
+    const unacknowledged = yield* SynchronizedRef.modify(state, (current) => {
+      const pending = new Map(current.pending);
+      const remaining: PendingRequest[] = [];
+      for (const [requestId, request] of stopped.requests) {
+        if (pending.get(requestId) !== request) continue;
+        pending.delete(requestId);
+        remaining.push(request);
+      }
+      return [remaining, { ...current, pending }] as const;
+    });
+    yield* Effect.forEach(
+      unacknowledged,
+      (request) =>
+        Deferred.fail(
+          request.deferred,
+          new PreviewAutomationControlInterruptedError(request.context),
         ),
       { discard: true },
     );

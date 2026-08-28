@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import ComputerUseMacOSCore
 
 @Test func requestAndCancellationRoundTrip() throws {
@@ -99,6 +100,15 @@ import Testing
     #expect(macOsSessionIsLocked(nil))
     #expect(macOsSessionIsLocked([:]) == false)
     #expect(macOsSessionIsLocked(["CGSSessionScreenIsLocked": true]))
+}
+
+@Test func inputPermissionRequiresAccessibilityAndTheHumanInputMonitor() {
+    #expect(
+        macOsInputPermission(accessibilityTrusted: true, inputMonitorAvailable: true) == "granted")
+    #expect(
+        macOsInputPermission(accessibilityTrusted: true, inputMonitorAvailable: false) == "denied")
+    #expect(
+        macOsInputPermission(accessibilityTrusted: false, inputMonitorAvailable: true) == "denied")
 }
 
 @Test func unsignedExecutableIdentityBindsPathAndContent() throws {

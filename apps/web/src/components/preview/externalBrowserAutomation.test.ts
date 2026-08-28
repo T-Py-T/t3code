@@ -3,6 +3,7 @@ import {
   ThreadId,
   type DesktopExternalBrowserBridge,
   type PreviewAutomationRequest,
+  type PreviewAutomationStatus,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -62,6 +63,11 @@ describe("routeExternalBrowserAutomationRequest", () => {
       request: request({
         operation: "navigate",
         tabId: "external_1",
+        expectedExternalBrowserIdentity: {
+          profileId: "profile:one",
+          tabId: "external_1",
+          origin: "https://example.com",
+        },
         input: {
           browser: "external",
           target: { kind: "environment-port", port: 5173, path: "/test" },
@@ -79,6 +85,11 @@ describe("routeExternalBrowserAutomationRequest", () => {
       }),
       "external_1",
       "request-1",
+      {
+        profileId: "profile:one",
+        tabId: "external_1",
+        origin: "https://example.com",
+      },
     );
     expect(navigate.mock.calls[0]?.[0]).not.toHaveProperty("target");
   });
@@ -101,9 +112,9 @@ describe("routeExternalBrowserAutomationRequest", () => {
   it("cancels the active desktop operation when control is interrupted", async () => {
     const controller = new AbortController();
     let rejectNavigation: ((error: Error) => void) | undefined;
-    const navigate = vi.fn(
+    const navigate: DesktopExternalBrowserBridge["navigate"] = vi.fn(
       () =>
-        new Promise((_resolve, reject) => {
+        new Promise<PreviewAutomationStatus>((_resolve, reject) => {
           rejectNavigation = reject;
         }),
     );

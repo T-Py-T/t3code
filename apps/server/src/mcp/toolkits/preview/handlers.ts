@@ -26,7 +26,10 @@ import * as ComputerUseToolkit from "../../../computerUse/ComputerUseToolkit.ts"
 import { resolvePolicyBoundary } from "../computer/handlers.ts";
 import * as Crypto from "effect/Crypto";
 import * as Encoding from "effect/Encoding";
+import * as Schema from "effect/Schema";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
+
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 /**
  * Collapses the `show` alias onto `open` and defaults tab reuse.
@@ -129,7 +132,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   const digest = yield* crypto
     .digest(
       "SHA-256",
-      new TextEncoder().encode(JSON.stringify({ operation, input, tabId: tabId ?? null })),
+      new TextEncoder().encode(encodeUnknownJsonString({ operation, input, tabId: tabId ?? null })),
     )
     .pipe(Effect.orDie);
   const computerScope = {

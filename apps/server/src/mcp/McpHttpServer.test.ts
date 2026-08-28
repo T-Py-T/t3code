@@ -23,6 +23,8 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as ComputerUseToolkit from "../computerUse/ComputerUseToolkit.ts";
 
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
 const tabId = PreviewTabId.make("tab-mcp-test");
@@ -203,6 +205,14 @@ it.effect("streams elicitation requests before the tool result that depends on t
                       content: [{ type: "text", text: approval }],
                     }),
                 ),
+                Effect.catchTag("ElicitationDeclined", () =>
+                  Effect.succeed(
+                    new McpSchema.CallToolResult({
+                      isError: true,
+                      content: [{ type: "text", text: "Approval declined." }],
+                    }),
+                  ),
+                ),
               ),
           });
         }),
@@ -310,7 +320,7 @@ it.effect("streams elicitation requests before the tool result that depends on t
           "mcp-protocol-version": protocolVersion,
         },
         body: HttpBody.text(
-          JSON.stringify({
+          encodeUnknownJsonString({
             jsonrpc: "2.0",
             id: request.id,
             result: { action: "accept", content: { approval: "once" } },

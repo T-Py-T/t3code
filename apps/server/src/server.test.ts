@@ -109,6 +109,7 @@ import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
 import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
+import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
@@ -442,6 +443,7 @@ const buildAppUnderTest = (options?: {
     computerUseBroker?: Partial<ComputerUseBroker.ComputerUseBroker["Service"]>;
     computerUseHistory?: Partial<ComputerUseHistory.ComputerUseHistory["Service"]>;
     computerUsePolicy?: Partial<ComputerUsePolicy.ComputerUsePolicy["Service"]>;
+    computerUseToolkit?: Partial<ComputerUseToolkit.ComputerUseToolkit["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -980,28 +982,42 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ComputerUseHistory.ComputerUseHistory)({
-          append: (input) =>
-            Effect.succeed({
-              ...input,
-              entryId: ComputerUseHistoryEntryId.make("history-test-1"),
-              createdAt: "2026-08-27T20:00:00.000Z",
-              ...(input.target === undefined
-                ? {}
-                : {
-                    target: {
-                      kind: input.target.kind,
-                      displayName: input.target.displayName,
-                      applicationId: input.target.applicationId,
-                      stableIdentity: input.target.stableIdentity,
-                    },
-                  }),
-            }),
-          list: () => Effect.succeed([]),
-          clear: () => Effect.succeed(0),
-          changes: Stream.empty,
-          ...options?.layers?.computerUseHistory,
-        }),
+        Layer.mergeAll(
+          Layer.mock(ComputerUseHistory.ComputerUseHistory)({
+            append: (input) =>
+              Effect.succeed({
+                ...input,
+                entryId: ComputerUseHistoryEntryId.make("history-test-1"),
+                createdAt: "2026-08-27T20:00:00.000Z",
+                ...(input.target === undefined
+                  ? {}
+                  : {
+                      target: {
+                        kind: input.target.kind,
+                        displayName: input.target.displayName,
+                        applicationId: input.target.applicationId,
+                        stableIdentity: input.target.stableIdentity,
+                      },
+                    }),
+              }),
+            list: () => Effect.succeed([]),
+            clear: () => Effect.succeed(0),
+            changes: Stream.empty,
+            ...options?.layers?.computerUseHistory,
+          }),
+          Layer.mock(ComputerUseToolkit.ComputerUseToolkit)({
+            status: () => Effect.die("Computer Use status is not stubbed in this test"),
+            listTargets: () =>
+              Effect.die("Computer Use target listing is not stubbed in this test"),
+            observe: () => Effect.die("Computer Use observation is not stubbed in this test"),
+            act: () => Effect.die("Computer Use action is not stubbed in this test"),
+            stop: () => Effect.void,
+            resolveApproval: () => Effect.succeed(false),
+            executeGoverned: (_input, effect) =>
+              effect.pipe(Effect.map((value) => ({ _tag: "success", value }) as const)),
+            ...options?.layers?.computerUseToolkit,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
@@ -4757,9 +4773,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       };
       const respondToRequest = vi.fn<
         ProviderService.ProviderService["Service"]["respondToRequest"]
-      >(() => Effect.void);
+      >(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "atomic",
+            method: "respondToRequest",
+            detail: "simulated provider cancellation failure",
+          }),
+        ),
+      );
       const appendHistory = vi.fn<ComputerUseHistory.ComputerUseHistory["Service"]["append"]>(
-        () => Effect.void,
+        (input) =>
+          Effect.succeed({
+            ...input,
+            entryId: ComputerUseHistoryEntryId.make("history-computer-use-approval"),
+            createdAt: "2026-01-01T00:00:02.000Z",
+          }),
       );
 
       yield* buildAppUnderTest({
@@ -4770,7 +4799,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           },
           computerUseHistory: { append: appendHistory },
           projectionSnapshotQuery: {
-            getShellSnapshot: () => Effect.succeed({ ...readModel, threads: [thread] }),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: readModel.snapshotSequence,
+                projects: [],
+                threads: [
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    hasPendingApprovals: true,
+                  }),
+                ],
+                updatedAt: readModel.updatedAt,
+              }),
             getThreadDetailById: (candidateThreadId) =>
               Effect.succeed(candidateThreadId === threadId ? Option.some(thread) : Option.none()),
           },

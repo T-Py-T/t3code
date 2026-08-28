@@ -299,6 +299,14 @@ type McpElicitationPersistenceDecision = Extract<
   "acceptForTurn" | "acceptForSession" | "acceptAlways"
 >;
 
+function toCodexApprovalDecision(
+  decision: ProviderApprovalDecision,
+): EffectCodexSchema.FileChangeRequestApprovalResponse__FileChangeApprovalDecision {
+  if (decision === "acceptAlways") return "acceptForSession";
+  if (decision === "acceptForTurn") return "accept";
+  return decision;
+}
+
 function mcpElicitationPersistenceDecision(
   value: string,
 ): McpElicitationPersistenceDecision | null {
@@ -1793,7 +1801,7 @@ export const makeCodexSessionRuntime = (
           ),
         );
         return {
-          decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
+          decision: toCodexApprovalDecision(resolved),
         } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
       }),
     );
@@ -1851,7 +1859,7 @@ export const makeCodexSessionRuntime = (
           ),
         );
         return {
-          decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
+          decision: toCodexApprovalDecision(resolved),
         } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
       }),
     );

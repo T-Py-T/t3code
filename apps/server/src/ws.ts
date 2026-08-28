@@ -527,11 +527,13 @@ const makeWsRpcLayer = (
         yield* Effect.forEach(
           pending.values(),
           ({ threadId, requestId }) =>
-            providerService.respondToRequest({
-              threadId,
-              requestId,
-              decision: "cancel",
-            }),
+            providerService
+              .respondToRequest({
+                threadId,
+                requestId,
+                decision: "cancel",
+              })
+              .pipe(Effect.ignore({ log: true })),
           { concurrency: 1, discard: true },
         );
       });
@@ -1906,7 +1908,7 @@ const makeWsRpcLayer = (
               Effect.flatMap((environmentId) =>
                 Effect.gen(function* () {
                   yield* computerUsePolicy.pause(environmentId);
-                  yield* cancelPendingComputerUseApprovals();
+                  yield* cancelPendingComputerUseApprovals().pipe(Effect.ignore({ log: true }));
                   return yield* Effect.all([
                     computerUseBroker.stopEnvironment(environmentId, "user"),
                     previewAutomationBroker.stopEnvironment(environmentId),
@@ -1936,7 +1938,7 @@ const makeWsRpcLayer = (
               Effect.flatMap((environmentId) =>
                 Effect.gen(function* () {
                   yield* computerUsePolicy.pause(environmentId);
-                  yield* cancelPendingComputerUseApprovals();
+                  yield* cancelPendingComputerUseApprovals().pipe(Effect.ignore({ log: true }));
                   return yield* Effect.all([
                     computerUseBroker.stopEnvironment(environmentId, "takeover"),
                     previewAutomationBroker.stopEnvironment(environmentId),
@@ -1966,7 +1968,7 @@ const makeWsRpcLayer = (
               Effect.flatMap((environmentId) =>
                 Effect.gen(function* () {
                   yield* computerUsePolicy.pause(environmentId);
-                  yield* cancelPendingComputerUseApprovals();
+                  yield* cancelPendingComputerUseApprovals().pipe(Effect.ignore({ log: true }));
                   return yield* Effect.all([
                     computerUseBroker.stopEnvironment(environmentId, "interrupted"),
                     previewAutomationBroker.stopEnvironment(environmentId),

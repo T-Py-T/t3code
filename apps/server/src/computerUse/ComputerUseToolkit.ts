@@ -39,6 +39,8 @@ import {
 import { ComputerUsePolicy } from "./ComputerUsePolicy.ts";
 import { ComputerUseHistory } from "./ComputerUseHistory.ts";
 
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
 export interface ComputerUsePolicyBoundary {
   readonly _tag: "policy";
   readonly approvalId?: ComputerUseApprovalId;
@@ -183,7 +185,7 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
       .digest(
         "SHA-256",
         new TextEncoder().encode(
-          JSON.stringify({
+          encodeUnknownJsonString({
             target: input.target.stableIdentity,
             observationId: input.observationId,
             actions: input.batch.actions,

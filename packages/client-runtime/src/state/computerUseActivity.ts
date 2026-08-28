@@ -2,6 +2,9 @@ import {
   ComputerUseActionRisk,
   ComputerUseHistoryOperation,
   ComputerUseHistoryState,
+  type ComputerUseActionRisk as ComputerUseActionRiskValue,
+  type ComputerUseHistoryOperation as ComputerUseHistoryOperationValue,
+  type ComputerUseHistoryState as ComputerUseHistoryStateValue,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -11,13 +14,13 @@ const isHistoryOperation = Schema.is(ComputerUseHistoryOperation);
 const isActionRisk = Schema.is(ComputerUseActionRisk);
 
 export interface ComputerUseActivityState {
-  readonly state: typeof ComputerUseHistoryState.Type;
-  readonly operation?: typeof ComputerUseHistoryOperation.Type;
+  readonly state: ComputerUseHistoryStateValue;
+  readonly operation?: ComputerUseHistoryOperationValue;
   readonly target?: {
     readonly displayName: string;
     readonly stableIdentity: string;
   };
-  readonly risk?: typeof ComputerUseActionRisk.Type;
+  readonly risk?: ComputerUseActionRiskValue;
   readonly providerInstanceId?: string;
   readonly resultTag?: string;
 }

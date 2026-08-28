@@ -407,14 +407,15 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
         return true;
       }
       if (pendingDecision._tag === "request-action-confirmation") {
-        if (pending.input.action === undefined) return true;
+        const action = pending.input.action;
+        if (action === undefined) return true;
         yield* SynchronizedRef.update(confirmations, (current) => [
           ...current,
           {
             scope: pending.input.scope,
             target: pending.input.target,
             risk: pendingDecision.risk,
-            requestIdentity: pending.input.action.requestIdentity,
+            requestIdentity: action.requestIdentity,
           },
         ]);
       }

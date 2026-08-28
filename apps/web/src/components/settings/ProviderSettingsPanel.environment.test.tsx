@@ -152,7 +152,7 @@ describe("EnvironmentProviderSettings routing", () => {
 
   it("routes refresh and provider update commands to the selected environment", async () => {
     atoms.providers = [provider()];
-    const panel = renderPanel();
+    let panel = renderPanel();
     const refreshButton = visitElements(
       panel,
       (element) => element.props["aria-label"] === "Refresh provider status",
@@ -163,10 +163,20 @@ describe("EnvironmentProviderSettings routing", () => {
 
     expect(commands.refresh).toHaveBeenCalledWith({ environmentId, input: {} });
 
+    const codexRow = visitElements(
+      panel,
+      (element) => element.props.instanceId === codexId && element.props.mode === "list",
+    );
+    expect(codexRow).not.toBeNull();
+    (codexRow?.props.onSelect as (() => void) | undefined)?.();
+    panel = renderPanel();
+
     const providerCard = visitElements(
       panel,
       (element) =>
-        element.props.instanceId === codexId && typeof element.props.onRunUpdate === "function",
+        element.props.instanceId === codexId &&
+        element.props.mode === "editor" &&
+        typeof element.props.onRunUpdate === "function",
     );
     expect(providerCard).not.toBeNull();
     (providerCard?.props.onRunUpdate as (() => void) | undefined)?.();

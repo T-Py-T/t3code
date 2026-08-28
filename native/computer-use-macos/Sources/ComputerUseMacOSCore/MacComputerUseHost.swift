@@ -33,6 +33,14 @@ private struct ObservationRecord {
     let elements: [String: AXUIElement]
 }
 
+struct LeaseCancellationRegistry: Sendable {
+    private var cancelled: Set<String> = []
+
+    mutating func cancel(_ leaseId: String) { cancelled.insert(leaseId) }
+    mutating func complete(_ leaseId: String) { cancelled.remove(leaseId) }
+    func contains(_ leaseId: String) -> Bool { cancelled.contains(leaseId) }
+}
+
 private enum HostFailure: Error {
     case permissionMissing(String)
     case targetNotFound
@@ -230,18 +238,18 @@ private func postKey(key: String, modifiers: [JSONValue], phase: String) throws 
 
 public actor MacComputerUseHost {
     private var observations: [String: ObservationRecord] = [:]
-    private var cancelledLeases: Set<String> = []
+    private var cancellations = LeaseCancellationRegistry()
 
     public init() {}
 
     public func cancel(_ cancel: HostCancel) {
-        cancelledLeases.insert(cancel.leaseId)
+        cancellations.cancel(cancel.leaseId)
         releaseSyntheticInput()
     }
 
     public func handle(_ request: HostRequest) async -> HostResponse {
+        defer { cancellations.complete(request.leaseId) }
         do {
-            cancelledLeases.remove(request.leaseId)
             let result: JSONValue
             switch request.operation {
             case "status": result = status()
@@ -463,7 +471,7 @@ public actor MacComputerUseHost {
     }
 
     private func requireActive(_ leaseId: String) throws {
-        if cancelledLeases.contains(leaseId) { throw HostFailure.interrupted }
+        if cancellations.contains(leaseId) { throw HostFailure.interrupted }
         if screenIsLocked() { throw HostFailure.interrupted }
     }
 
@@ -602,17 +610,21 @@ public actor MacComputerUseHost {
     }
 
     private func act(_ request: HostRequest) async throws -> JSONValue {
+        defer { releaseSyntheticInput() }
         guard AXIsProcessTrusted() else { throw HostFailure.permissionMissing("accessibility") }
         guard let requestedTargetId = request.targetId else {
             throw HostFailure.malformedRequest("targetId")
         }
         guard let observationId = request.observationId,
-              let observation = observations[observationId]
+              let observation = observations.removeValue(forKey: observationId)
         else { throw HostFailure.staleObservation }
         let target = try requireTarget(requestedTargetId)
-        guard observation.target.targetId == target.targetId else {
+        guard observation.target.targetId == target.targetId,
+              observation.target.stableIdentity == target.stableIdentity
+        else {
             throw HostFailure.targetIdentityChanged
         }
+        guard observation.target.bounds == target.bounds else { throw HostFailure.staleObservation }
         guard let actionsValue = request.input.object?["actions"],
               case .array(let actions) = actionsValue,
               !actions.isEmpty,

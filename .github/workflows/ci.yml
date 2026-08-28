@@ -183,6 +183,36 @@ jobs:
       - name: Test resource monitor
         run: cargo test --locked --manifest-path native/resource-monitor/Cargo.toml
 
+  computer_use_windows:
+    name: Windows Computer Use
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check Windows Computer Use formatting
+        run: dotnet format native/computer-use-windows/T3CodeComputerUse.csproj --verify-no-changes
+
+      - name: Build Windows Computer Use helper
+        run: dotnet build native/computer-use-windows/T3CodeComputerUse.csproj --configuration Release
+
+      - name: Test Windows Computer Use protocol and policy
+        run: dotnet run --project native/computer-use-windows/Tests/T3CodeComputerUse.Tests.csproj --configuration Release
+
+      - name: Publish Windows Computer Use helper
+        run: dotnet publish native/computer-use-windows/T3CodeComputerUse.csproj --configuration Release --runtime win-x64 --self-contained true --output native/computer-use-windows/publish/win-x64 -p:PublishSingleFile=true
+
   # The static analysis below needs a macOS runner, which bills ~6.7x a Linux
   # minute, so gate it on the native sources it actually lints instead of paying
   # for it on every push. Detection is API-only (no checkout) and fails open: if

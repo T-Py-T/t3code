@@ -22,6 +22,7 @@ import {
   DESKTOP_EXTRA_RESOURCES,
   MAC_FILE_EXCLUSIONS,
   MAC_COMPUTER_USE_EXTRA_RESOURCES,
+  WINDOWS_COMPUTER_USE_EXTRA_RESOURCES,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -44,6 +45,7 @@ import {
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
   resolveMacComputerUseSwiftArchitectures,
+  resolveWindowsComputerUseRuntimeIdentifier,
   resolveWindowsServerAsarIgnoreGlobs,
   resourceMonitorExecutableName,
   resolveGitHubPublishConfig,
@@ -54,6 +56,7 @@ import {
   stageDesktopDmgBackground,
   stageResourceMonitor,
   stageMacComputerUseHelper,
+  stageWindowsComputerUseHelper,
   STAGE_INSTALL_ARGS,
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
@@ -70,7 +73,9 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
-function mockProcess(exitCode: number) {
+function mockProcess(exitCode: number, stdout = "", stderr = "") {
+  const encode = (value: string) =>
+    value.length === 0 ? Stream.empty : Stream.succeed(new TextEncoder().encode(value));
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(1),
     exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(exitCode)),
@@ -78,9 +83,9 @@ function mockProcess(exitCode: number) {
     kill: () => Effect.void,
     unref: Effect.succeed(Effect.void),
     stdin: Sink.drain,
-    stdout: Stream.empty,
-    stderr: Stream.empty,
-    all: Stream.empty,
+    stdout: encode(stdout),
+    stderr: encode(stderr),
+    all: encode(`${stdout}${stderr}`),
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
   });
@@ -131,6 +136,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   const packagedAppDir = path.join(stageDistDir, "win-unpacked");
   const resourcesDir = path.join(packagedAppDir, "resources");
   yield* fs.makeDirectory(path.join(resourcesDir, "resource-monitor"), { recursive: true });
+  yield* fs.makeDirectory(path.join(resourcesDir, "computer-use"), { recursive: true });
   yield* fs.copyFile(generatedAsarPath, path.join(resourcesDir, WINDOWS_SERVER_ASAR_RESOURCE));
   if (input.copyUnpackedNatives) {
     yield* fs.copy(
@@ -141,6 +147,10 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.writeFileString(
     path.join(resourcesDir, "resource-monitor/t3-resource-monitor.exe"),
     "monitor",
+  );
+  yield* fs.writeFileString(
+    path.join(resourcesDir, "computer-use/T3CodeComputerUse.exe"),
+    "computer-use",
   );
   const appExecutableName = "t3code.exe";
   yield* fs.writeFileString(path.join(packagedAppDir, appExecutableName), "electron");
@@ -495,6 +505,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           from: "apps/desktop/prod-resources/resource-monitor",
           to: "resource-monitor",
         },
+        ...WINDOWS_COMPUTER_USE_EXTRA_RESOURCES,
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
@@ -731,6 +742,47 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("stages a cached Windows Computer Use helper without invoking dotnet", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-windows-computer-use-helper-cache-test-",
+        });
+        const binaryPath = path.join(
+          repoRoot,
+          "native/computer-use-windows/publish/win-x64/T3CodeComputerUse.exe",
+        );
+        const stageResourcesDir = path.join(repoRoot, "stage");
+        yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+        yield* fs.writeFileString(binaryPath, "cached windows helper");
+
+        yield* stageWindowsComputerUseHelper({
+          repoRoot,
+          stageResourcesDir,
+          arch: "x64",
+          verbose: false,
+        }).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { T3CODE_DESKTOP_REUSE_COMPUTER_USE_HELPER: "true" },
+              }),
+            ),
+          ),
+        );
+
+        assert.equal(
+          yield* fs.readFileString(
+            path.join(stageResourcesDir, "computer-use/T3CodeComputerUse.exe"),
+          ),
+          "cached windows helper",
+        );
+      }),
+    ),
+  );
+
   it.effect("validates every ASAR-unpacked native in the packaged Windows payload", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -959,6 +1011,26 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.equal(resourceMonitorError.reason, "resource-monitor-missing");
         assert.deepStrictEqual(resourceMonitorError.missingFiles, [
           "resource-monitor/t3-resource-monitor.exe",
+        ]);
+
+        yield* fs.remove(resourceMonitorPath, { recursive: true });
+        yield* fs.writeFileString(resourceMonitorPath, "monitor");
+        const computerUseHelperPath = path.join(
+          fixture.packagedAppDir,
+          "resources/computer-use/T3CodeComputerUse.exe",
+        );
+        yield* fs.remove(computerUseHelperPath);
+        yield* fs.makeDirectory(computerUseHelperPath);
+
+        const computerUseError = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+        }).pipe(Effect.flip);
+        assert.instanceOf(computerUseError, WindowsPackagedPayloadValidationError);
+        assert.equal(computerUseError.reason, "computer-use-helper-missing");
+        assert.deepStrictEqual(computerUseError.missingFiles, [
+          "computer-use/T3CodeComputerUse.exe",
         ]);
       }),
     ),
@@ -1279,9 +1351,90 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const win = config.win as Record<string, unknown>;
       assert.equal(win.icon, "icon.ico");
       assert.equal(win.signAndEditExecutable, true);
+      assert.deepStrictEqual(win.signExts, [".exe", ".dll"]);
       assert.notProperty(win, "azureSignOptions");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
+
+  it.effect(
+    "requires a valid signature on the packaged Computer Use helper for signed builds",
+    () => {
+      const commands: Array<{
+        readonly command: string;
+        readonly args: ReadonlyArray<string>;
+      }> = [];
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make((command) => {
+          const invoked = command as unknown as (typeof commands)[number];
+          commands.push(invoked);
+          return Effect.succeed(
+            invoked.command === "powershell.exe" ? mockProcess(0, "Valid\r\n") : mockProcess(0),
+          );
+        }),
+      );
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+          yield* validateWindowsPackagedPayload({
+            stageDistDir: fixture.stageDistDir,
+            appExecutableName: fixture.appExecutableName,
+            targetArch: "x64",
+            signed: true,
+          });
+
+          const signatureProbe = commands.find((command) => command.command === "powershell.exe");
+          if (signatureProbe === undefined) return assert.fail("Signature probe was not spawned");
+          assert.include(signatureProbe.args, "-NonInteractive");
+          assert.equal(signatureProbe.args.at(-1)?.endsWith("T3CodeComputerUse.exe"), true);
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            spawnerLayer,
+            Layer.succeed(HostProcessPlatform, "win32"),
+            Layer.succeed(HostProcessArchitecture, "x64"),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect("rejects an unsigned Computer Use helper from a signed package", () => {
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make((command) => {
+        const invoked = command as unknown as { readonly command: string };
+        return Effect.succeed(
+          invoked.command === "powershell.exe" ? mockProcess(0, "NotSigned\r\n") : mockProcess(0),
+        );
+      }),
+    );
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+        const error = yield* validateWindowsPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+          appExecutableName: fixture.appExecutableName,
+          targetArch: "x64",
+          signed: true,
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+        assert.equal(error.reason, "computer-use-helper-unsigned");
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          spawnerLayer,
+          Layer.succeed(HostProcessPlatform, "win32"),
+          Layer.succeed(HostProcessArchitecture, "x64"),
+        ),
+      ),
+    );
+  });
 
   it("stages the resource monitor as an external executable resource", () => {
     assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
@@ -1316,6 +1469,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.deepStrictEqual(resolveMacComputerUseSwiftArchitectures("arm64"), ["arm64"]);
     assert.deepStrictEqual(resolveMacComputerUseSwiftArchitectures("x64"), ["x86_64"]);
+  });
+  it("stages the Windows Computer Use helper as an external executable resource", () => {
+    assert.deepStrictEqual(WINDOWS_COMPUTER_USE_EXTRA_RESOURCES, [
+      {
+        from: "apps/desktop/prod-resources/computer-use",
+        to: "computer-use",
+      },
+    ]);
+    assert.equal(resolveWindowsComputerUseRuntimeIdentifier("x64"), "win-x64");
+    assert.equal(resolveWindowsComputerUseRuntimeIdentifier("arm64"), "win-arm64");
   });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {

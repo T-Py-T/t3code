@@ -185,22 +185,45 @@ const resolveComputerUseHelperPath = Effect.fn(
 )(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
-  if (environment.platform !== "darwin") return Option.none<string>();
+  if (environment.platform !== "darwin" && environment.platform !== "win32") {
+    return Option.none<string>();
+  }
 
-  const binaryName = "T3CodeComputerUse";
+  const isWindows = environment.platform === "win32";
+  const binaryName = isWindows ? "T3CodeComputerUse.exe" : "T3CodeComputerUse";
+  const nativeProject = isWindows ? "computer-use-windows" : "computer-use-macos";
+  const windowsRuntimeIdentifier = environment.processArch === "arm64" ? "win-arm64" : "win-x64";
   const candidates = environment.isDevelopment
-    ? [
-        environment.path.join(
-          environment.rootDir,
-          "native/computer-use-macos/.build/debug",
-          binaryName,
-        ),
-        environment.path.join(
-          environment.rootDir,
-          "native/computer-use-macos/.build/release",
-          binaryName,
-        ),
-      ]
+    ? isWindows
+      ? [
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/publish/${windowsRuntimeIdentifier}`,
+            binaryName,
+          ),
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/bin/Debug/net10.0-windows/${windowsRuntimeIdentifier}`,
+            binaryName,
+          ),
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/bin/Release/net10.0-windows/${windowsRuntimeIdentifier}`,
+            binaryName,
+          ),
+        ]
+      : [
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/.build/debug`,
+            binaryName,
+          ),
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/.build/release`,
+            binaryName,
+          ),
+        ]
     : environment.isPackaged
       ? [environment.path.join(environment.resourcesPath, "computer-use", binaryName)]
       : environment.resolveResourcePathCandidates(

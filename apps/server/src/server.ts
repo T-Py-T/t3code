@@ -15,6 +15,7 @@ import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ComputerUseProjection from "./computerUse/ComputerUseProjection.ts";
 import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
 import * as MacOsComputerUseHost from "./computerUse/MacOsComputerUseHost.ts";
+import * as WindowsComputerUseHost from "./computerUse/WindowsComputerUseHost.ts";
 import * as ServerConfig from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
@@ -162,6 +163,9 @@ const ComputerUseCoreLayerLive = Layer.mergeAll(
   ComputerUseToolkit.layer.pipe(Layer.provide(ComputerUseDependenciesLive)),
 );
 const MacOsComputerUseHostLive = MacOsComputerUseHost.layer.pipe(
+  Layer.provide(ProcessRunner.layer),
+);
+const WindowsComputerUseHostLive = WindowsComputerUseHost.layer.pipe(
   Layer.provide(ProcessRunner.layer),
 );
 
@@ -701,6 +705,7 @@ export const makeServerLayer = Layer.unwrap(
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
       MacOsComputerUseHostLive,
+      WindowsComputerUseHostLive,
       ComputerUseProjection.layer,
     );
 

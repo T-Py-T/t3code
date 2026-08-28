@@ -43,3 +43,11 @@ import Testing
     )
     #expect(error.message.count == 4_096)
 }
+
+@Test func cancellationSurvivesUntilItsRequestCompletes() {
+    var cancellations = LeaseCancellationRegistry()
+    cancellations.cancel("lease-1")
+    #expect(cancellations.contains("lease-1"))
+    cancellations.complete("lease-1")
+    #expect(!cancellations.contains("lease-1"))
+}

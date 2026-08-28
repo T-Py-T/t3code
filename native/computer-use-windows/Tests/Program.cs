@@ -85,8 +85,7 @@ static void ProtectedTargets()
                 false,
                 []
             )
-        ),
-        "Coordinate-only applications must remain available when no terminal identity is present."
+        )
     );
     Assert(
         TargetPolicy.IsForbidden(

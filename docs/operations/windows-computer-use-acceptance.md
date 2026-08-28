@@ -127,8 +127,8 @@ development-signed installation only; the unsigned development installer is not 
 
 ## Remaining release gates
 
-UTM is required development evidence, not the complete Windows release gate. Before declaring the
-feature complete, retain evidence for:
+UTM is required development evidence, not the complete Windows release gate. Before general
+availability, retain evidence for:
 
 - a production-signed artifact on physical Windows hardware;
 - multiple displays, scaling, sleep/wake, and foreground-input latency;

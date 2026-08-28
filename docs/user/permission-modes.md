@@ -35,11 +35,11 @@ Computer Use permissions are separate from the thread's permission mode. **Full 
 bypasses an app grant or a point-of-risk confirmation.
 
 Computer Use is a feature-complete preview for unlocked native-app and browser workflows. Native
-release signing, physical-platform acceptance, Office add-in parity, and unattended locked use
-remain outside that supported preview scope. On web or desktop, turn on **Settings** →
-**Integrations** → **Computer Use (preview)** before starting a new Codex, Pi, or Atomic
-session. The setting is off by default, and an existing session keeps the tools it started with. T3
-Code asks separately before observing or operating an app. An app grant can last
+release signing, physical-platform acceptance, in-app macOS permission setup, Office add-in parity,
+and unattended locked use remain outside that supported preview scope. On web or desktop, turn on
+**Settings** → **Integrations** → **Computer Use (preview)** before starting a new Codex, Pi, or
+Atomic session. The setting is off by default, and an existing session keeps the tools it started
+with. T3 Code asks separately before observing or operating an app. An app grant can last
 for one action, the current turn, the provider session, or permanently on that verified computer.
 Actions that may have an external effect require another confirmation immediately before execution.
 
@@ -58,9 +58,13 @@ scopes. Pair that client again if it can see the environment but cannot use the 
 approval or lifecycle controls.
 
 Web, desktop, and mobile thread settings also show the connected native host and recent bounded
-activity metadata. Web and desktop settings additionally show permanent app grants and 30 days of
-bounded activity metadata. You can revoke a permanent grant or clear that history there. Screenshots,
+activity metadata, and all three can clear that history. Web and desktop settings additionally show
+permanent app grants and let you revoke them. Activity metadata is retained for 30 days. Screenshots,
 page contents, accessibility trees, clipboard values, and typed text are not kept in the history.
+
+On macOS, the preview does not yet show the helper's Accessibility or Screen Recording state or an
+**Open System Settings** shortcut in T3 settings. Missing permissions are reported through the
+Computer Use tool result and must be granted in macOS System Settings.
 
 ## Browser Tools
 

@@ -100,6 +100,9 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
+        # Keep the denominator in matrix context: GitHub exposes
+        # strategy.job-total, but local ACT does not populate it.
+        total: [3]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -123,7 +126,7 @@ jobs:
         env:
           T3CODE_TRANSFER_BUDGET_REPORT_PATH: ${{ runner.temp }}/t3code-transfer-budget.md
           T3CODE_TRANSFER_BUDGET_RESULT_PATH: ${{ runner.temp }}/thread-transfer-result.json
-        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ matrix.total }}
 
       # src/server.test.ts writes the budget report, so exactly one shard
       # produces these files. Gating the upload on their presence keeps a

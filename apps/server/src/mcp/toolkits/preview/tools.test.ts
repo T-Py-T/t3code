@@ -60,7 +60,7 @@ it("exports provider-compatible object schemas with described parameters", () =>
   }
 });
 
-it("exports exact object result schemas for preview actions", () => {
+it("exports governed result schemas for preview actions", () => {
   const actionNames = [
     "preview_click",
     "preview_type",
@@ -69,10 +69,25 @@ it("exports exact object result schemas for preview actions", () => {
     "preview_wait_for",
   ] as const;
   for (const name of actionNames) {
-    expect(Tool.getJsonSchemaFromSchema(PreviewToolkit.tools[name].successSchema)).toEqual({
+    const schema = Tool.getJsonSchemaFromSchema(PreviewToolkit.tools[name].successSchema) as {
+      readonly anyOf?: ReadonlyArray<unknown>;
+    };
+    expect(schema.anyOf).toHaveLength(2);
+    expect(schema.anyOf?.[0]).toMatchObject({
       type: "object",
       additionalProperties: false,
       description: "The preview action completed successfully.",
+    });
+    expect(schema.anyOf?.[1]).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        _tag: { type: "string", enum: ["policy"] },
+        decision: {},
+        target: {},
+        risk: {},
+      },
+      required: ["_tag", "decision", "target", "risk"],
     });
   }
 });

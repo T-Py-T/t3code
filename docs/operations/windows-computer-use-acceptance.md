@@ -125,6 +125,17 @@ A fresh interactive Notepad run completed five actions, exposed 44 accessibility
 a 49,949-byte PNG, and returned distinct pre/post observation IDs. These hashes record the modified
 development-signed installation only; the unsigned development installer is not a release artifact.
 
+The post-review native rerun used helper commit `717f2fc0b` in the same Windows 11 ARM64 guest. It
+passed .NET formatting, Release build, all eight native tests, self-contained ARM64 publication,
+and development signing. The resulting helper SHA-256 was
+`BBA98639260D89228711BB1E71595063A8CAF8E5F576CD53F6294ED92733B194`. It replaced the helper in
+the installed T3 Code Alpha 0.0.37 package and passed the packaged server, native file-finder,
+valid-signature, same-session, and parent-process attachment checks. A new interactive Notepad run
+completed all five actions, exposed 44 accessibility elements, captured a 38,345-byte PNG, and
+returned distinct pre/post observation IDs. This rerun validates the current native helper changes;
+the installed outer application remains the development package recorded above rather than a new
+production-signed release artifact.
+
 ## Remaining release gates
 
 UTM is required development evidence, not the complete Windows release gate. Before general

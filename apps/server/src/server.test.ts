@@ -5015,7 +5015,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("shares one preview automation broker across websocket sessions", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        yield* buildAppUnderTest();
+        const previewAutomationBroker = yield* PreviewAutomationBroker.make;
+        yield* buildAppUnderTest({
+          layers: { previewAutomationBroker },
+        });
 
         const wsUrl = yield* getWsServerUrl("/ws");
         const firstConnected = yield* Deferred.make<string>();

@@ -58,6 +58,11 @@ import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
+import {
+  annotateCodexComputerUseAvailability,
+  codexComputerUseAppServerArgs,
+  resolveCodexComputerUse,
+} from "./CodexComputerUse.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -124,6 +129,10 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const modelManifest = yield* ModelManifest.ModelManifest;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const homeLayout = yield* resolveCodexHomeLayout(config);
+      const computerUse = yield* resolveCodexComputerUse({
+        enabled: config.enableComputerUse,
+        sharedHomePath: homeLayout.sharedHomePath,
+      });
       const continuationIdentity = codexContinuationIdentity(homeLayout);
       const stampIdentity = withInstanceIdentity({
         instanceId,
@@ -161,6 +170,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const adapter = yield* makeCodexAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        additionalAppServerArgs: codexComputerUseAppServerArgs(computerUse),
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
@@ -178,7 +188,10 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
             modelManifest.current,
             (draft, manifest) =>
-              stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+              annotateCodexComputerUseAvailability(
+                stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+                computerUse,
+              ),
             { concurrent: true },
           ),
         ),

@@ -29,7 +29,7 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
   readonly connectionAtom: Atom.Writable<PreviewAutomationStreamEvent["connectionId"] | null>;
   readonly environmentId: PreviewAutomationHost["environmentId"];
   readonly requestHandlerAtom: Atom.Atom<{
-    readonly handle: (request: PreviewAutomationRequest) => Promise<unknown>;
+    readonly handle: (request: PreviewAutomationRequest, signal: AbortSignal) => Promise<unknown>;
   }>;
   readonly respond: (response: PreviewAutomationResponse) => Promise<unknown>;
   readonly label: string;
@@ -42,11 +42,19 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
     let connectionExplicitlyAnnounced = false;
     let reportedConnectionId: PreviewAutomationStreamEvent["connectionId"] | null = null;
     let requestsVersion = 0;
+    const activeRequests = new Map<
+      string,
+      { readonly controller: AbortController; cancelledByBroker: boolean }
+    >();
 
     const consume = (result: AutomationStreamResult<E>) => {
       if (!AsyncResult.isSuccess(result)) return;
       const event = result.value;
       if (event.type === "connected") {
+        if (activeConnectionId !== null && activeConnectionId !== event.connectionId) {
+          for (const { controller } of activeRequests.values()) controller.abort();
+          activeRequests.clear();
+        }
         activeConnectionId = event.connectionId;
         connectionExplicitlyAnnounced = true;
       } else if (activeConnectionId === null) {
@@ -62,21 +70,59 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
       if (event.type === "connected") {
         return;
       }
+      if (event.type === "cancel") {
+        const active = activeRequests.get(event.requestId);
+        if (active) {
+          active.cancelledByBroker = true;
+          active.controller.abort();
+        }
+        return;
+      }
       const request = event.request;
+      const controller = new AbortController();
+      const active = { controller, cancelledByBroker: false };
+      activeRequests.set(request.requestId, active);
       void get
         .once(options.requestHandlerAtom)
-        .handle(request)
+        .handle(request, controller.signal)
         .then(
-          (value) =>
-            options.respond({
+          (value) => {
+            if (active.cancelledByBroker) {
+              return options.respond({
+                clientId: options.clientId,
+                connectionId: event.connectionId,
+                requestId: request.requestId,
+                ok: false,
+                error: {
+                  _tag: "PreviewAutomationControlInterruptedError",
+                  message: `Preview automation ${request.operation} was interrupted.`,
+                },
+              });
+            }
+            if (disposed || controller.signal.aborted) return;
+            return options.respond({
               clientId: options.clientId,
               connectionId: event.connectionId,
               requestId: request.requestId,
               ok: true,
               ...(value === undefined ? {} : { result: value }),
-            }),
-          (error) =>
-            options.respond({
+            });
+          },
+          (error) => {
+            if (active.cancelledByBroker) {
+              return options.respond({
+                clientId: options.clientId,
+                connectionId: event.connectionId,
+                requestId: request.requestId,
+                ok: false,
+                error: {
+                  _tag: "PreviewAutomationControlInterruptedError",
+                  message: `Preview automation ${request.operation} was interrupted.`,
+                },
+              });
+            }
+            if (disposed || controller.signal.aborted) return;
+            return options.respond({
               clientId: options.clientId,
               connectionId: event.connectionId,
               requestId: request.requestId,
@@ -88,12 +134,20 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
                 threadId: request.threadId,
                 tabId: request.tabId ?? null,
               }),
-            }),
-        );
+            });
+          },
+        )
+        .finally(() => {
+          if (activeRequests.get(request.requestId) === active) {
+            activeRequests.delete(request.requestId);
+          }
+        });
     };
 
     get.addFinalizer(() => {
       disposed = true;
+      for (const { controller } of activeRequests.values()) controller.abort();
+      activeRequests.clear();
     });
     const initialRequest = get.once(options.requestsAtom);
     if (AsyncResult.isSuccess(initialRequest)) {

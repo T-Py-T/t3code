@@ -20,6 +20,32 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("Computer Use settings", () => {
+  it("defaults agent computer access off until the user enables it", () => {
+    expect(decodeServerSettings({}).enableComputerUse).toBe(false);
+  });
+
+  it("accepts an explicit Computer Use toggle in settings and patches", () => {
+    expect(decodeServerSettings({ enableComputerUse: true }).enableComputerUse).toBe(true);
+    expect(decodeServerSettingsPatch({ enableComputerUse: true }).enableComputerUse).toBe(true);
+  });
+});
+
+describe("External browser settings", () => {
+  it("defaults signed-in external browser access off until the user enables it", () => {
+    expect(decodeServerSettings({}).enableExternalBrowserAccess).toBe(false);
+  });
+
+  it("accepts an explicit external browser toggle in settings and patches", () => {
+    expect(
+      decodeServerSettings({ enableExternalBrowserAccess: true }).enableExternalBrowserAccess,
+    ).toBe(true);
+    expect(
+      decodeServerSettingsPatch({ enableExternalBrowserAccess: true }).enableExternalBrowserAccess,
+    ).toBe(true);
+  });
+});
+
 describe("ClaudeSettings auto-compaction", () => {
   it("uses Claude's default threshold when no override is configured", () => {
     expect(decodeClaudeSettings({}).autoCompactWindow).toBe("");
@@ -193,6 +219,7 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     // Legacy `providers` struct is still hydrated with its per-driver defaults
     // so existing call sites keep working through the migration.
     expect(decoded.providers.codex.enabled).toBe(true);
+    expect(decoded.providers.codex.enableComputerUse).toBe(false);
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
@@ -383,6 +410,7 @@ describe("ServerSettingsPatch string normalization", () => {
         codex: {
           binaryPath: "  /opt/homebrew/bin/codex  ",
           homePath: "  ~/.codex  ",
+          enableComputerUse: true,
           launchArgs: "  --strict-config --enable foo  ",
         },
       },
@@ -400,6 +428,7 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.observability?.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
     expect(patch.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
     expect(patch.providers?.codex?.homePath).toBe("~/.codex");
+    expect(patch.providers?.codex?.enableComputerUse).toBe(true);
     expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");
     expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.driver).toBe(
       "codex",

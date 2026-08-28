@@ -180,6 +180,65 @@ const resolveResourceMonitorPath = Effect.fn(
   return Option.none<string>();
 });
 
+const resolveComputerUseHelperPath = Effect.fn(
+  "desktop.backendConfiguration.resolveComputerUseHelperPath",
+)(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  if (environment.platform !== "darwin" && environment.platform !== "win32") {
+    return Option.none<string>();
+  }
+
+  const isWindows = environment.platform === "win32";
+  const binaryName = isWindows ? "T3CodeComputerUse.exe" : "T3CodeComputerUse";
+  const nativeProject = isWindows ? "computer-use-windows" : "computer-use-macos";
+  const windowsRuntimeIdentifier = environment.processArch === "arm64" ? "win-arm64" : "win-x64";
+  const candidates = environment.isDevelopment
+    ? isWindows
+      ? [
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/publish/${windowsRuntimeIdentifier}`,
+            binaryName,
+          ),
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/bin/Debug/net10.0-windows/${windowsRuntimeIdentifier}`,
+            binaryName,
+          ),
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/bin/Release/net10.0-windows/${windowsRuntimeIdentifier}`,
+            binaryName,
+          ),
+        ]
+      : [
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/.build/debug`,
+            binaryName,
+          ),
+          environment.path.join(
+            environment.rootDir,
+            `native/${nativeProject}/.build/release`,
+            binaryName,
+          ),
+        ]
+    : environment.isPackaged
+      ? [environment.path.join(environment.resourcesPath, "computer-use", binaryName)]
+      : environment.resolveResourcePathCandidates(
+          environment.path.join("computer-use", binaryName),
+        );
+
+  for (const candidate of candidates) {
+    if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+      return Option.some(candidate);
+    }
+  }
+
+  return Option.none<string>();
+});
+
 const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -367,6 +426,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   function* (
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
+      readonly computerUseHelperPath: Option.Option<string>;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -391,6 +451,14 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       ...Option.match(input.resourceMonitorPath, {
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
+      }),
+      ...Option.match(input.computerUseHelperPath, {
+        onNone: () => ({}),
+        onSome: (computerUseHelperPath) => ({
+          computerUseHelperPath,
+          computerUseHostExecutablePath: process.execPath,
+          ...(environment.isDevelopment ? { computerUseHelperDevelopment: true } : {}),
+        }),
       }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
@@ -680,7 +748,15 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
+    const computerUseHelperPath = yield* resolveComputerUseHelperPath().pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+    );
+    return yield* resolvePrimaryStartConfig({
+      ...shared,
+      resourceMonitorPath,
+      computerUseHelperPath,
+    }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
     );

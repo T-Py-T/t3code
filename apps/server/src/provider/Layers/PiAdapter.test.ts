@@ -6,7 +6,13 @@ import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { PiSettings, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PiSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -15,6 +21,7 @@ import * as Stream from "effect/Stream";
 import { assert, describe } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makePiAdapter } from "./PiAdapter.ts";
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
@@ -35,7 +42,75 @@ ${expectedTrustFlag === undefined ? "" : `case " $* " in\n  *" ${expectedTrustFl
   return wrapper;
 }
 
+function writeCapturingMockWrapper(capturePath: string): string {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pi-adapter-mcp-test-"));
+  const wrapper = NodePath.join(dir, "mock-pi.sh");
+  NodeFS.writeFileSync(
+    wrapper,
+    `#!/bin/sh
+printf '%s\n' "$T3CODE_MCP_ENDPOINT" "$T3CODE_MCP_AUTHORIZATION" "$T3CODE_MCP_CAPABILITIES" > ${JSON.stringify(capturePath)}
+printf '%s\n' "$@" >> ${JSON.stringify(capturePath)}
+exec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"
+`,
+    "utf8",
+  );
+  NodeFS.chmodSync(wrapper, 0o755);
+  return wrapper;
+}
+
 describe("PiAdapter", () => {
+  it.live("attaches the private T3 Computer Use extension to bare Pi sessions", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("pi-computer-use-extension");
+      const capturePath = NodePath.join(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pi-adapter-mcp-capture-")),
+        "launch.txt",
+      );
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-1"),
+        threadId,
+        providerSessionId: "provider-session-1",
+        providerInstanceId: ProviderInstanceId.make("pi"),
+        capabilities: new Set(["computer", "preview"]),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer test-session-token",
+      });
+
+      const adapter = yield* makePiAdapter(
+        decodePiSettings({ enabled: true, binaryPath: writeCapturingMockWrapper(capturePath) }),
+      ).pipe(
+        Effect.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "pi-adapter-mcp-test-" }).pipe(
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("pi"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const launch = NodeFS.readFileSync(capturePath, "utf8").trim().split("\n");
+      assert.equal(launch[0], "http://127.0.0.1:43123/mcp");
+      assert.equal(launch[1], "Bearer test-session-token");
+      assert.equal(launch[2], "computer,preview");
+      const extensionFlag = launch.indexOf("--extension");
+      assert.isAtLeast(extensionFlag, 3);
+      const extensionPath = launch[extensionFlag + 1];
+      assert.isString(extensionPath);
+      assert.isTrue(NodeFS.existsSync(extensionPath!));
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "computer_status");
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "preview_snapshot");
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "t3-workflow-action");
+
+      yield* adapter.stopSession(threadId);
+      assert.isFalse(NodeFS.existsSync(extensionPath!));
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("uses the shared Pi lifecycle for thinking, tools, queued runs, and completion", () =>
     Effect.gen(function* () {
       const adapter = yield* makePiAdapter(

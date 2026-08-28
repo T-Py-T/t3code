@@ -80,6 +80,9 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
         "terminal:operate",
         "review:write",
         "relay:read",
+        "computer:read",
+        "computer:operate",
+        "computer:approve",
       ]);
       expect(first.subject).toBe("one-time-token");
       expect(first.label).toBe("Julius iPhone");
@@ -151,6 +154,9 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
         "terminal:operate",
         "review:write",
         "relay:read",
+        "computer:read",
+        "computer:operate",
+        "computer:approve",
         "access:read",
         "access:write",
         "relay:write",

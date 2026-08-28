@@ -48,6 +48,7 @@ import {
 } from "./CodexSessionRuntime.ts";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const encodeUnknownJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
 class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
@@ -436,6 +437,45 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("attaches additional app-server configuration to the session runtime", () => {
+    const runtimeFactory = makeRuntimeFactory();
+    const computerUseArgs = [
+      "-c",
+      'mcp_servers.computer-use.command="/Applications/Codex Computer Use"',
+      "-c",
+      "mcp_servers.computer-use.enabled=true",
+    ];
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({});
+        return yield* makeCodexAdapter(codexConfig, {
+          additionalAppServerArgs: computerUseArgs,
+          makeRuntime: runtimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-computer-use"),
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.deepStrictEqual(
+        runtimeFactory.lastRuntime?.options.appServerArgs,
+        computerUseArgs,
+      );
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for the session runtime", () => {
     const runtimeFactory = makeRuntimeFactory();
     const layer = Layer.effect(
@@ -661,7 +701,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("labels MCP lifecycle entries with server and tool names", () =>
+  it.effect("labels T3 MCP lifecycle entries without persisting private arguments or results", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
@@ -684,10 +724,13 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             id: "mcp_1",
             server: "t3-code",
             tool: "preview_status",
-            arguments: {},
+            arguments: { text: "TYPED_SECRET" },
             durationMs: 12,
             error: null,
-            result: { content: [{ type: "text", text: "attached" }] },
+            result: {
+              content: [{ type: "image", data: "SCREENSHOT_SENTINEL" }],
+              structuredContent: { accessibility: "ACCESSIBILITY_SECRET" },
+            },
             status: "completed",
           },
         },
@@ -709,13 +752,18 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           id: "mcp_1",
           server: "t3-code",
           tool: "preview_status",
-          arguments: {},
           durationMs: 12,
           error: null,
-          result: { content: [{ type: "text", text: "attached" }] },
           status: "completed",
         },
       });
+      const persisted = yield* encodeUnknownJson({
+        data: firstEvent.value.payload.data,
+        raw: firstEvent.value.raw,
+      });
+      NodeAssert.equal(persisted.includes("TYPED_SECRET"), false);
+      NodeAssert.equal(persisted.includes("SCREENSHOT_SENTINEL"), false);
+      NodeAssert.equal(persisted.includes("ACCESSIBILITY_SECRET"), false);
     }),
   );
 
@@ -1083,7 +1131,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         turnId: asTurnId("turn-1"),
         payload: {
           mode: "form",
-          message: "Allow ChatGPT to use Safari?",
+          message: "Allow T3 Computer Use to operate Safari?",
           serverName: "computer-use",
           threadId: "provider-thread-1",
           turnId: "turn-1",
@@ -1100,7 +1148,8 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       NodeAssert.equal(firstEvent.value.payload.requestType, "mcp_elicitation_approval");
       NodeAssert.equal(firstEvent.value.payload.appName, "Safari");
-      NodeAssert.equal(firstEvent.value.payload.detail, "Allow ChatGPT to use Safari?");
+      NodeAssert.equal(firstEvent.value.payload.detail, "Allow T3 Computer Use to operate Safari?");
+      NodeAssert.equal(firstEvent.value.payload.computerUseApproval, true);
       NodeAssert.deepStrictEqual(firstEvent.value.payload.options, [
         { decision: "cancel", label: "Cancel" },
         { decision: "decline", label: "Decline" },

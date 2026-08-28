@@ -66,6 +66,16 @@ export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | un
   return appServerArgs?.some((argument) => argument.includes("mcp_servers.")) === true;
 }
 
+export function hasConfiguredT3McpServer(
+  appServerArgs: ReadonlyArray<string> | undefined,
+): boolean {
+  return appServerArgs?.some((argument) => argument.includes("mcp_servers.t3-code.")) === true;
+}
+
+export function buildCodexSessionInitializeParams(): EffectCodexSchema.V1InitializeParams {
+  return buildCodexInitializeParams({ mcpServerOpenaiFormElicitation: true });
+}
+
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
 });
@@ -286,13 +296,22 @@ interface PendingUserInput {
 
 type McpElicitationPersistenceDecision = Extract<
   ProviderApprovalDecision,
-  "acceptForSession" | "acceptAlways"
+  "acceptForTurn" | "acceptForSession" | "acceptAlways"
 >;
+
+function toCodexApprovalDecision(
+  decision: ProviderApprovalDecision,
+): EffectCodexSchema.FileChangeRequestApprovalResponse__FileChangeApprovalDecision {
+  if (decision === "acceptAlways") return "acceptForSession";
+  if (decision === "acceptForTurn") return "accept";
+  return decision;
+}
 
 function mcpElicitationPersistenceDecision(
   value: string,
 ): McpElicitationPersistenceDecision | null {
   const normalized = value.toLowerCase();
+  if (normalized.includes("turn")) return "acceptForTurn";
   if (normalized.includes("session")) return "acceptForSession";
   if (
     normalized.includes("always") ||
@@ -347,6 +366,8 @@ export function describeMcpElicitation(
     metadata?.target?.name ??
     metadata?.tool_params?.app_name ??
     metadata?.tool_params?.app ??
+    payload.message.match(/^Allow T3 Computer Use to (?:observe|operate) (.+?)\?$/i)?.[1] ??
+    payload.message.match(/^Confirm T3 Computer Use: .+ in (.+?)\.$/i)?.[1] ??
     payload.message.match(/^Allow ChatGPT to use (.+?)\?$/i)?.[1] ??
     metadata?.connector_name ??
     metadata?.connectorName ??
@@ -377,6 +398,15 @@ export function describeMcpElicitation(
     options: [
       { decision: "cancel", label: "Cancel" },
       { decision: "decline", label: "Decline" },
+      ...(persistenceOptions.has("acceptForTurn") &&
+      toMcpElicitationResponse(payload, "acceptForTurn").action === "accept"
+        ? [
+            {
+              decision: "acceptForTurn" as const,
+              label: persistenceOptions.get("acceptForTurn") || "Allow for this turn",
+            },
+          ]
+        : []),
       ...(persistenceOptions.has("acceptForSession") &&
       toMcpElicitationResponse(payload, "acceptForSession").action === "accept"
         ? [
@@ -414,11 +444,13 @@ export function toMcpElicitationResponse(
   }
 
   const persist =
-    decision === "acceptForSession"
-      ? "session"
-      : decision === "acceptAlways"
-        ? "always"
-        : undefined;
+    decision === "acceptForTurn"
+      ? "turn"
+      : decision === "acceptForSession"
+        ? "session"
+        : decision === "acceptAlways"
+          ? "always"
+          : undefined;
   const form = mcpElicitationFormFields(payload);
   const content: Record<string, unknown> = {};
 
@@ -513,7 +545,13 @@ function runtimeModeToThreadConfig(input: RuntimeMode): {
     case "full-access":
     default:
       return {
-        approvalPolicy: "never",
+        approvalPolicy: {
+          granular: {
+            mcp_elicitations: true,
+            rules: false,
+            sandbox_approval: false,
+          },
+        },
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       };
@@ -1763,7 +1801,7 @@ export const makeCodexSessionRuntime = (
           ),
         );
         return {
-          decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
+          decision: toCodexApprovalDecision(resolved),
         } satisfies EffectCodexSchema.CommandExecutionRequestApprovalResponse;
       }),
     );
@@ -1821,7 +1859,7 @@ export const makeCodexSessionRuntime = (
           ),
         );
         return {
-          decision: resolved === "acceptAlways" ? "acceptForSession" : resolved,
+          decision: toCodexApprovalDecision(resolved),
         } satisfies EffectCodexSchema.FileChangeRequestApprovalResponse;
       }),
     );
@@ -2027,7 +2065,7 @@ export const makeCodexSessionRuntime = (
 
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
-      yield* client.request("initialize", buildCodexInitializeParams());
+      yield* client.request("initialize", buildCodexSessionInitializeParams());
       yield* client.notify("initialized", undefined);
 
       const requestedModel = normalizeCodexModelSlug(options.model);
@@ -2117,7 +2155,7 @@ export const makeCodexSessionRuntime = (
             // Derived from the session's own MCP configuration rather than the
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.
-            browserToolsAvailable: hasConfiguredMcpServer(options.appServerArgs),
+            browserToolsAvailable: hasConfiguredT3McpServer(options.appServerArgs),
           });
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(

@@ -10,8 +10,10 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
+  ApprovalRequestId,
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AuthAccessStreamError,
+  AuthComputerApproveScope,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
@@ -69,6 +71,11 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
+import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
+import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
+import * as ComputerUseScreenshotStore from "./computerUse/ComputerUseScreenshotStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -462,6 +469,12 @@ const makeWsRpcLayer = (
         }
       };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+      const computerUseBroker = yield* ComputerUseBroker.ComputerUseBroker;
+      const computerUseControl = yield* ComputerUseControl.ComputerUseControl;
+      const computerUseHistory = yield* ComputerUseHistory.ComputerUseHistory;
+      const computerUsePolicy = yield* ComputerUsePolicy.ComputerUsePolicy;
+      const computerUseScreenshotStore =
+        yield* ComputerUseScreenshotStore.ComputerUseScreenshotStore;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
@@ -485,6 +498,50 @@ const makeWsRpcLayer = (
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+      const cancelPendingComputerUseApprovals = Effect.fn(
+        "WsRpc.cancelPendingComputerUseApprovals",
+      )(function* () {
+        const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+        const pending = new Map<
+          string,
+          { readonly threadId: ThreadId; readonly requestId: ApprovalRequestId }
+        >();
+        for (const threadShell of shell.threads) {
+          if (!threadShell.hasPendingApprovals) continue;
+          const thread = yield* projectionSnapshotQuery.getThreadDetailById(threadShell.id);
+          if (Option.isNone(thread)) continue;
+          for (const activity of thread.value.activities) {
+            const payload =
+              activity.payload && typeof activity.payload === "object"
+                ? (activity.payload as Record<string, unknown>)
+                : undefined;
+            const requestId =
+              typeof payload?.requestId === "string" ? payload.requestId : undefined;
+            if (requestId === undefined) continue;
+            const key = `${thread.value.id}:${requestId}`;
+            if (activity.kind === "approval.requested" && payload?.computerUseApproval === true) {
+              pending.set(key, {
+                threadId: thread.value.id,
+                requestId: ApprovalRequestId.make(requestId),
+              });
+            } else if (activity.kind === "approval.resolved") {
+              pending.delete(key);
+            }
+          }
+        }
+        yield* Effect.forEach(
+          pending.values(),
+          ({ threadId, requestId }) =>
+            providerService
+              .respondToRequest({
+                threadId,
+                requestId,
+                decision: "cancel",
+              })
+              .pipe(Effect.ignore({ log: true })),
+          { concurrency: 1, discard: true },
+        );
+      });
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
         Ref.get(rpcClientIds).pipe(
@@ -1178,6 +1235,31 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
+              if (normalizedCommand.type === "thread.approval.respond") {
+                const requiresComputerApproval = yield* projectionSnapshotQuery
+                  .getThreadDetailById(normalizedCommand.threadId)
+                  .pipe(
+                    Effect.map(
+                      Option.match({
+                        onNone: () => false,
+                        onSome: (thread) =>
+                          thread.activities.some((activity) => {
+                            if (activity.kind !== "approval.requested") return false;
+                            const payload =
+                              activity.payload && typeof activity.payload === "object"
+                                ? (activity.payload as Record<string, unknown>)
+                                : undefined;
+                            if (payload?.requestId !== normalizedCommand.requestId) return false;
+                            return payload.computerUseApproval === true;
+                          }),
+                      }),
+                    ),
+                    Effect.catchCause(() => Effect.succeed(true)),
+                  );
+                if (requiresComputerApproval) {
+                  yield* authorizeEffect(AuthComputerApproveScope, Effect.void);
+                }
+              }
               // Archive and settle both mean "done with this thread", so a
               // live provider session must not keep running background work
               // (PR monitors, dev servers, subagent fleets) after either
@@ -1761,6 +1843,195 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.computerUseGetControlState]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseGetControlState,
+            Effect.gen(function* () {
+              const environmentId = yield* serverEnvironment.getEnvironmentId;
+              const [host, status, activeControl, persistentGrants, paused] = yield* Effect.all([
+                computerUseBroker.hostFor(environmentId).pipe(Effect.map(Option.getOrUndefined)),
+                computerUseBroker
+                  .hostStatusFor(environmentId)
+                  .pipe(Effect.map(Option.getOrUndefined)),
+                computerUseControl.activeFor(environmentId),
+                computerUsePolicy.listPersistent(environmentId),
+                computerUsePolicy.isPaused(environmentId),
+              ]);
+              return {
+                environmentId,
+                paused,
+                ...(host === undefined ? {} : { host }),
+                ...(status === undefined ? {} : { status }),
+                ...(activeControl === undefined ? {} : { activeControl }),
+                persistentGrants,
+              };
+            }),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseGetHistory]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseGetHistory,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUseHistory.list(environmentId, input.limit),
+              ),
+              Effect.map((entries) => ({ entries })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseRevealScreenshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseRevealScreenshot,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUseScreenshotStore.reveal(environmentId, input.token),
+              ),
+              Effect.map((screenshot) =>
+                Option.isSome(screenshot) ? { screenshot: screenshot.value } : {},
+              ),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseClearHistory]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseClearHistory,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                Effect.all({
+                  deleted: computerUseHistory.clear(environmentId),
+                  clearedScreenshots: computerUseScreenshotStore.clear(environmentId),
+                }),
+              ),
+              Effect.map(({ deleted }) => ({ deleted })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseRevokePersistentGrant]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseRevokePersistentGrant,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUsePolicy.revoke({ environmentId, ...input }),
+              ),
+              Effect.map((removed) => ({ removed })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseStop]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseStop,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                Effect.gen(function* () {
+                  yield* computerUsePolicy.pause(environmentId);
+                  yield* cancelPendingComputerUseApprovals().pipe(Effect.ignore({ log: true }));
+                  return yield* Effect.all([
+                    computerUseBroker.stopEnvironment(environmentId, "user"),
+                    previewAutomationBroker.stopEnvironment(environmentId),
+                    computerUseControl.releaseEnvironment(environmentId),
+                  ]).pipe(Effect.map(([native, browser]) => native + browser));
+                }).pipe(
+                  Effect.tap((stopped) =>
+                    computerUseHistory.append({
+                      environmentId,
+                      state: "stopped",
+                      summary:
+                        stopped > 0
+                          ? `Stopped ${stopped} active Computer Use session${stopped === 1 ? "" : "s"}.`
+                          : "Stopped Computer Use before the next action.",
+                      resultTag: "user",
+                    }),
+                  ),
+                ),
+              ),
+              Effect.map((stopped) => ({ stopped })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseTakeOver]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseTakeOver,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                Effect.gen(function* () {
+                  yield* computerUsePolicy.pause(environmentId);
+                  yield* cancelPendingComputerUseApprovals().pipe(Effect.ignore({ log: true }));
+                  return yield* Effect.all([
+                    computerUseBroker.stopEnvironment(environmentId, "takeover"),
+                    previewAutomationBroker.stopEnvironment(environmentId),
+                    computerUseControl.releaseEnvironment(environmentId),
+                  ]).pipe(Effect.map(([native, browser]) => native + browser));
+                }).pipe(
+                  Effect.tap((stopped) =>
+                    computerUseHistory.append({
+                      environmentId,
+                      state: "taken-over",
+                      summary:
+                        stopped > 0
+                          ? `Released ${stopped} Computer Use session${stopped === 1 ? "" : "s"} for human takeover.`
+                          : "Released Computer Use for human takeover.",
+                      resultTag: "takeover",
+                    }),
+                  ),
+                ),
+              ),
+              Effect.map((stopped) => ({ stopped })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUsePause]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUsePause,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                Effect.gen(function* () {
+                  yield* computerUsePolicy.pause(environmentId);
+                  yield* cancelPendingComputerUseApprovals().pipe(Effect.ignore({ log: true }));
+                  return yield* Effect.all([
+                    computerUseBroker.stopEnvironment(environmentId, "interrupted"),
+                    previewAutomationBroker.stopEnvironment(environmentId),
+                    computerUseControl.releaseEnvironment(environmentId),
+                  ]).pipe(Effect.map(([native, browser]) => native + browser));
+                }).pipe(
+                  Effect.tap((stopped) =>
+                    computerUseHistory.append({
+                      environmentId,
+                      state: "paused",
+                      summary:
+                        stopped > 0
+                          ? "Paused active Computer Use control."
+                          : "Paused Computer Use before the next action.",
+                      resultTag: "user",
+                    }),
+                  ),
+                ),
+              ),
+              Effect.map((stopped) => ({ stopped })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
+        [WS_METHODS.computerUseResume]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseResume,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUsePolicy.resume(environmentId).pipe(
+                  Effect.tap((resumed) =>
+                    resumed
+                      ? computerUseHistory.append({
+                          environmentId,
+                          state: "resumed",
+                          summary: "Computer Use can start a new controlled action.",
+                          resultTag: "user",
+                        })
+                      : Effect.void,
+                  ),
+                ),
+              ),
+              Effect.map((resumed) => ({ resumed })),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
             const next = new Set(clientIds);

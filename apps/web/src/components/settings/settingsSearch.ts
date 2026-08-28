@@ -214,10 +214,23 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/providers",
   },
   {
+    id: "agent-computer-use",
+    title: "Agent computer use",
+    to: "/settings/integrations",
+    targetId: "computer-use",
+  },
+  {
     id: "agent-browser-access",
     title: "Agent browser access",
     to: "/settings/integrations",
     targetId: "browser",
+  },
+  {
+    id: "external-browser-access",
+    title: "Signed-in browser access",
+    to: "/settings/integrations",
+    targetId: "browser",
+    desktopOnly: true,
   },
   {
     id: "browser-default-viewport",

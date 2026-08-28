@@ -361,6 +361,15 @@ export const CodexSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    enableComputerUse: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "OpenAI Computer Use bridge",
+        description:
+          "Attach the OpenAI Computer Use client installed in CODEX_HOME. Requires its desktop service and macOS permissions.",
+        providerSettingsForm: { control: "switch", clearWhenEmpty: "omit" },
+      }),
+    ),
     launchArgs: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
@@ -374,7 +383,7 @@ export const CodexSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "shadowHomePath", "enableComputerUse", "launchArgs"],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;
@@ -738,6 +747,21 @@ export const ServerSettings = Schema.Struct({
    * between a desktop window and a phone attached to the same server.
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Whether agents may open and control T3 Code's dedicated persistent
+   * external browser profile. Kept separate from the built-in preview gate
+   * because this surface can retain signed-in sessions across app launches.
+   */
+  enableExternalBrowserAccess: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  /**
+   * Whether provider sessions may receive governed access to the host
+   * computer. Off by default because this capability can operate applications
+   * outside T3 Code; enabling it only exposes tools and never bypasses policy
+   * grants or per-action confirmation.
+   */
+  enableComputerUse: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -911,6 +935,7 @@ const CodexSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
+  enableComputerUse: Schema.optionalKey(Schema.Boolean),
   launchArgs: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
@@ -972,6 +997,8 @@ export const ServerSettingsPatch = Schema.Struct({
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  enableExternalBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  enableComputerUse: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

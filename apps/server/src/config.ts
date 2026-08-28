@@ -33,6 +33,8 @@ export interface ServerDerivedPaths {
   readonly dbPath: string;
   readonly keybindingsConfigPath: string;
   readonly settingsPath: string;
+  readonly computerUsePolicyPath: string;
+  readonly computerUseHistoryPath: string;
   readonly providerStatusCacheDir: string;
   readonly worktreesDir: string;
   readonly attachmentsDir: string;
@@ -82,6 +84,9 @@ export class ServerConfig extends Context.Service<
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
+    readonly computerUseHelperPath?: string | undefined;
+    readonly computerUseHostExecutablePath?: string | undefined;
+    readonly computerUseHelperDevelopment?: boolean | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
@@ -119,6 +124,8 @@ export const deriveServerPaths = Effect.fn(function* (
     dbPath,
     keybindingsConfigPath: join(stateDir, "keybindings.json"),
     settingsPath: join(stateDir, "settings.json"),
+    computerUsePolicyPath: join(stateDir, "computer-use-policy.json"),
+    computerUseHistoryPath: join(stateDir, "computer-use-history.json"),
     providerStatusCacheDir,
     worktreesDir: join(baseDir, "worktrees"),
     attachmentsDir,
@@ -149,6 +156,8 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(derivedPaths.worktreesDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.keybindingsConfigPath), { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true }),
+      fs.makeDirectory(path.dirname(derivedPaths.computerUsePolicyPath), { recursive: true }),
+      fs.makeDirectory(path.dirname(derivedPaths.computerUseHistoryPath), { recursive: true }),
       fs.makeDirectory(derivedPaths.providerStatusCacheDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.anonymousIdPath), { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.serverRuntimeStatePath), { recursive: true }),
@@ -203,6 +212,9 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     desktopTelemetryFd: undefined,
     desktopTelemetryControlFd: undefined,
     resourceMonitorPath: undefined,
+    computerUseHelperPath: undefined,
+    computerUseHostExecutablePath: undefined,
+    computerUseHelperDevelopment: undefined,
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],

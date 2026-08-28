@@ -3,6 +3,7 @@ import type {
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
+  PreviewAutomationExternalBrowserIdentity,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
@@ -26,6 +27,16 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
   }
   return result as Awaited<ReturnType<DesktopBridge["ensureSshEnvironment"]>>;
 }
+
+const externalBrowserTabPayload = (
+  tabId: string | null | undefined,
+  operationId?: string,
+  expectedIdentity?: PreviewAutomationExternalBrowserIdentity,
+) => ({
+  ...(tabId === undefined ? {} : { tabId }),
+  ...(operationId === undefined ? {} : { operationId }),
+  ...(expectedIdentity === undefined ? {} : { expectedIdentity }),
+});
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getAppBranding: () => {
@@ -164,6 +175,71 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
   },
+  externalBrowser: {
+    status: (tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(
+        IpcChannels.EXTERNAL_BROWSER_STATUS_CHANNEL,
+        externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      ),
+    open: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_OPEN_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    close: () => ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_CLOSE_CHANNEL),
+    navigate: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_NAVIGATE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    resize: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_RESIZE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    setColorScheme: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_SET_COLOR_SCHEME_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    snapshot: (tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(
+        IpcChannels.EXTERNAL_BROWSER_SNAPSHOT_CHANNEL,
+        externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      ),
+    click: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_CLICK_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    type: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_TYPE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    press: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_PRESS_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    scroll: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_SCROLL_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    evaluate: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_EVALUATE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    waitFor: (input, tabId, operationId, expectedIdentity) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_WAIT_FOR_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId, operationId, expectedIdentity),
+      }),
+    cancel: (operationId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_CANCEL_CHANNEL, { operationId }),
+  },
   preview: {
     createTab: (tabId, defaults) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
@@ -174,8 +250,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     closeTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
     registerWebview: (tabId, webContentsId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, { tabId, webContentsId }),
-    navigate: (tabId, url) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_NAVIGATE_CHANNEL, { tabId, url }),
+    navigate: (tabId, url, operationId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_NAVIGATE_CHANNEL, {
+        tabId,
+        url,
+        ...(operationId === undefined ? {} : { operationId }),
+      }),
     goBack: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_GO_BACK_CHANNEL, { tabId }),
     goForward: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_GO_FORWARD_CHANNEL, { tabId }),
     refresh: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_REFRESH_CHANNEL, { tabId }),
@@ -232,22 +312,57 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       },
     },
     automation: {
-      status: (tabId) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_STATUS_CHANNEL, { tabId }),
-      snapshot: (tabId) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_SNAPSHOT_CHANNEL, { tabId }),
-      click: (tabId, input) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_CLICK_CHANNEL, { tabId, input }),
-      type: (tabId, input) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_TYPE_CHANNEL, { tabId, input }),
-      press: (tabId, input) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_PRESS_CHANNEL, { tabId, input }),
-      scroll: (tabId, input) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_SCROLL_CHANNEL, { tabId, input }),
-      evaluate: (tabId, input) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_EVALUATE_CHANNEL, { tabId, input }),
-      waitFor: (tabId, input) =>
-        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL, { tabId, input }),
+      status: (tabId, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_STATUS_CHANNEL, {
+          tabId,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      snapshot: (tabId, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_SNAPSHOT_CHANNEL, {
+          tabId,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      click: (tabId, input, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_CLICK_CHANNEL, {
+          tabId,
+          input,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      type: (tabId, input, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_TYPE_CHANNEL, {
+          tabId,
+          input,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      press: (tabId, input, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_PRESS_CHANNEL, {
+          tabId,
+          input,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      scroll: (tabId, input, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_SCROLL_CHANNEL, {
+          tabId,
+          input,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      evaluate: (tabId, input, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_EVALUATE_CHANNEL, {
+          tabId,
+          input,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      waitFor: (tabId, input, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL, {
+          tabId,
+          input,
+          ...(operationId === undefined ? {} : { operationId }),
+        }),
+      cancel: (tabId, operationId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_CANCEL_CHANNEL, {
+          tabId,
+          operationId,
+        }),
     },
     onStateChange: (listener) => {
       const wrappedListener = (

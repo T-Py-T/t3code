@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -10,6 +11,7 @@ import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
+import * as ComputerUseToolkit from "../computerUse/ComputerUseToolkit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -17,6 +19,8 @@ import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
 } from "./toolkits/preview/handlers.ts";
+import { ComputerToolkitHandlersLive } from "./toolkits/computer/handlers.ts";
+import { ComputerToolkit } from "./toolkits/computer/tools.ts";
 import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
@@ -36,6 +40,11 @@ const unauthorized = HttpServerResponse.jsonUnsafe(
     },
   },
 );
+
+const boundedWorkflowHeader = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length <= 512 ? trimmed : undefined;
+};
 
 type AuthenticatedHttpEffect = Effect.Effect<
   HttpServerResponse.HttpServerResponse,
@@ -83,8 +92,14 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
           });
           return unauthorized;
         }
+        const workflowRunId = boundedWorkflowHeader(request.headers["x-t3-workflow-run-id"]);
+        const workflowStageId = boundedWorkflowHeader(request.headers["x-t3-workflow-stage-id"]);
         return yield* httpEffect.pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...invocation,
+            ...(workflowRunId === undefined ? {} : { workflowRunId }),
+            ...(workflowStageId === undefined ? {} : { workflowStageId }),
+          }),
           Effect.map(normalizeMcpHttpResponse),
         );
       }),
@@ -130,6 +145,8 @@ const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+  const computerUseToolkit = yield* ComputerUseToolkit.ComputerUseToolkit;
+  const crypto = yield* Crypto.Crypto;
   const built = yield* PreviewSnapshotToolkit;
   const tool = PreviewSnapshotTool;
   yield* server.addTool({
@@ -160,10 +177,26 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
           Stream.run(Sink.last()),
           Effect.flatMap(Effect.fromOption),
           Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, broker),
+          Effect.provideService(ComputerUseToolkit.ComputerUseToolkit, computerUseToolkit),
+          Effect.provideService(Crypto.Crypto, crypto),
           Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
           Effect.matchCauseEffect({
             onFailure: previewSnapshotFailure,
             onSuccess: ({ encodedResult }) => {
+              if (
+                typeof encodedResult === "object" &&
+                encodedResult !== null &&
+                "_tag" in encodedResult &&
+                encodedResult._tag === "policy"
+              ) {
+                return Effect.succeed(
+                  new McpSchema.CallToolResult({
+                    isError: false,
+                    structuredContent: encodedResult,
+                    content: [{ type: "text", text: JSON.stringify(encodedResult) }],
+                  }),
+                );
+              }
               const snapshot = encodedResult as {
                 readonly screenshot: {
                   readonly mimeType: "image/png";
@@ -216,6 +249,15 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
+export const ComputerToolkitRegistrationLive = McpServer.toolkit(ComputerToolkit).pipe(
+  Layer.provide(ComputerToolkitHandlersLive),
+);
+
+export const ProviderToolkitRegistrationLive = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  ComputerToolkitRegistrationLive,
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "T3 Code",
   version: packageJson.version,
@@ -223,4 +265,4 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = ProviderToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));

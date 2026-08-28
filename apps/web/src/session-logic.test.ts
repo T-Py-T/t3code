@@ -2239,6 +2239,59 @@ describe("rerun workflows", () => {
   });
 });
 
+describe("Computer Use work log", () => {
+  it("collapses one target's lifecycle into a single live card entry", () => {
+    const commonPayload = {
+      operation: "act",
+      providerInstanceId: "atomic",
+      risk: "reversible-local",
+      target: {
+        displayName: "TextEdit",
+        stableIdentity: "macos:com.apple.TextEdit:APPLE",
+      },
+    };
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "computer-use-requested",
+        kind: "computer-use.requested",
+        summary: "Requested an action in TextEdit.",
+        turnId: "turn-computer-use",
+        sequence: 1,
+        payload: { ...commonPayload, state: "requested" },
+      }),
+      makeActivity({
+        id: "computer-use-acting",
+        kind: "computer-use.acting",
+        summary: "Acting in TextEdit.",
+        turnId: "turn-computer-use",
+        sequence: 2,
+        payload: { ...commonPayload, state: "acting" },
+      }),
+      makeActivity({
+        id: "computer-use-completed",
+        kind: "computer-use.completed",
+        summary: "Completed 1 action in TextEdit.",
+        turnId: "turn-computer-use",
+        sequence: 3,
+        payload: { ...commonPayload, state: "completed", resultTag: "success" },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "computer-use-requested",
+      label: "Completed 1 action in TextEdit.",
+      computerUse: {
+        state: "completed",
+        operation: "act",
+        providerInstanceId: "atomic",
+        resultTag: "success",
+        target: { displayName: "TextEdit" },
+      },
+    });
+  });
+});
+
 describe("session activity performance", () => {
   it("reuses entries for unchanged activities", () => {
     const activities = ["status", "diff", "log"].map((command, index) =>

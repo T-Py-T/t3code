@@ -12,6 +12,10 @@ import type {
   TurnId,
   UserInputQuestion,
 } from "@t3tools/contracts";
+import {
+  decodeComputerUseActivity,
+  type ComputerUseActivityState,
+} from "@t3tools/client-runtime/state/computerUseActivity";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 
 import * as Arr from "effect/Array";
@@ -29,6 +33,8 @@ export interface PendingApproval {
 
 const isProviderRequestKind = Schema.is(ProviderRequestKind);
 const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
+
+export type ThreadFeedComputerUseState = ComputerUseActivityState;
 
 export interface PendingUserInput {
   readonly requestId: ApprovalRequestId;
@@ -65,6 +71,7 @@ export interface ThreadFeedActivity {
     | "zap";
   readonly toolLike: boolean;
   readonly status: "success" | "failure" | "neutral" | null;
+  readonly computerUse?: ThreadFeedComputerUseState;
 }
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
@@ -86,6 +93,7 @@ interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   toolData?: unknown;
+  computerUse?: ThreadFeedComputerUseState;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -449,6 +457,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (requestKind) {
     entry.requestKind = requestKind;
   }
+  const computerUse = decodeComputerUseActivity(activity);
+  if (computerUse) {
+    entry.computerUse = computerUse;
+  }
   let toolLifecycleStatus = extractWorkLogToolLifecycleStatus(payload);
   if (!toolLifecycleStatus && activity.kind === "tool.completed") {
     toolLifecycleStatus = "completed";
@@ -470,7 +482,29 @@ function collapseDerivedWorkLogEntries(
   // Subagent rows collapse by identity, not adjacency (quiet-timeline
   // guarantee; mirrors web's session-logic).
   const taskRowIndex = new Map<string, number>();
+  const computerUseRowIndex = new Map<string, number>();
   for (const entry of entries) {
+    if (entry.computerUse) {
+      const computerUseKey = [
+        "computer-use",
+        entry.turnId ?? "no-turn",
+        entry.computerUse.target?.stableIdentity ?? entry.computerUse.operation ?? "control",
+      ].join(":");
+      const existingIndex = computerUseRowIndex.get(computerUseKey);
+      if (existingIndex !== undefined) {
+        const existing = collapsed[existingIndex]!;
+        collapsed[existingIndex] = {
+          ...mergeDerivedWorkLogEntries(existing, entry),
+          id: existing.id,
+          createdAt: existing.createdAt,
+          turnId: existing.turnId,
+        };
+        continue;
+      }
+      computerUseRowIndex.set(computerUseKey, collapsed.length);
+      collapsed.push(entry);
+      continue;
+    }
     const isTaskRow =
       entry.taskId !== undefined &&
       (entry.activityKind === "task.progress" ||
@@ -1614,6 +1648,7 @@ export function buildThreadFeed(
               icon: workEntryIcon(entry),
               toolLike: workLogEntryIsToolLike(entry),
               status: workEntryStatus(entry),
+              ...(entry.computerUse ? { computerUse: entry.computerUse } : {}),
             },
           };
         }),

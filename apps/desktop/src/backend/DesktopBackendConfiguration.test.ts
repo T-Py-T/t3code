@@ -514,6 +514,7 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.bootstrap.tailscaleServeEnabled, false);
           assert.notProperty(config.bootstrap, "desktopTelemetryFd");
           assert.notProperty(config.bootstrap, "resourceMonitorPath");
+          assert.notProperty(config.bootstrap, "computerUseHelperPath");
           // httpBaseUrl uses the resolved distro IP from the test stub,
           // not localhost — the renderer reaches the backend directly to
           // avoid relying on wslhost forwarding.
@@ -897,6 +898,181 @@ describe("DesktopBackendConfiguration", () => {
                 dirname,
                 devServerUrl: "http://127.0.0.1:5733",
                 isPackaged: false,
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("passes the packaged macOS Computer Use helper to the local backend", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-computer-use-helper-test-",
+      });
+      const resourcesPath = `${baseDir}/resources`;
+      const helperPath = `${resourcesPath}/computer-use/T3CodeComputerUse`;
+      yield* fileSystem.makeDirectory(`${resourcesPath}/computer-use`, { recursive: true });
+      yield* fileSystem.writeFileString(helperPath, "helper");
+      yield* fileSystem.chmod(helperPath, 0o755);
+
+      yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        assert.equal(config.bootstrap.computerUseHelperPath, helperPath);
+        assert.equal(config.bootstrap.computerUseHostExecutablePath, process.execPath);
+        assert.notProperty(config.bootstrap, "computerUseHelperDevelopment");
+      }).pipe(
+        Effect.provide(
+          DesktopBackendConfiguration.layer.pipe(
+            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(DesktopWslServerTree.layerTest()),
+            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+            Layer.provideMerge(
+              makeEnvironmentLayer(baseDir, {
+                appPath: `${resourcesPath}/app.asar`,
+                dirname: `${resourcesPath}/app.asar/apps/desktop/dist-electron`,
+                isPackaged: true,
+                platform: "darwin",
+                resourcesPath,
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("marks the debug macOS Computer Use helper as development-only", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-computer-use-helper-dev-test-",
+      });
+      const dirname = path.join(baseDir, "apps/desktop/src");
+      const debugHelperPath = path.join(
+        baseDir,
+        "native/computer-use-macos/.build/debug/T3CodeComputerUse",
+      );
+      const releaseHelperPath = path.join(
+        baseDir,
+        "native/computer-use-macos/.build/release/T3CodeComputerUse",
+      );
+      yield* fileSystem.makeDirectory(path.dirname(debugHelperPath), { recursive: true });
+      yield* fileSystem.makeDirectory(path.dirname(releaseHelperPath), { recursive: true });
+      yield* fileSystem.writeFileString(debugHelperPath, "debug");
+      yield* fileSystem.writeFileString(releaseHelperPath, "release");
+      yield* fileSystem.chmod(debugHelperPath, 0o755);
+      yield* fileSystem.chmod(releaseHelperPath, 0o755);
+
+      yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        assert.equal(config.bootstrap.computerUseHelperPath, debugHelperPath);
+        assert.equal(config.bootstrap.computerUseHelperDevelopment, true);
+      }).pipe(
+        Effect.provide(
+          DesktopBackendConfiguration.layer.pipe(
+            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(DesktopWslServerTree.layerTest()),
+            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+            Layer.provideMerge(
+              makeEnvironmentLayer(baseDir, {
+                dirname,
+                devServerUrl: "http://127.0.0.1:5733",
+                isPackaged: false,
+                platform: "darwin",
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("passes the packaged Windows Computer Use helper to the local backend", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-windows-computer-use-helper-test-",
+      });
+      const resourcesPath = `${baseDir}/resources`;
+      const helperPath = `${resourcesPath}/computer-use/T3CodeComputerUse.exe`;
+      yield* fileSystem.makeDirectory(`${resourcesPath}/computer-use`, { recursive: true });
+      yield* fileSystem.writeFileString(helperPath, "helper");
+
+      yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        assert.equal(config.bootstrap.computerUseHelperPath, helperPath);
+        assert.equal(config.bootstrap.computerUseHostExecutablePath, process.execPath);
+        assert.notProperty(config.bootstrap, "computerUseHelperDevelopment");
+      }).pipe(
+        Effect.provide(
+          DesktopBackendConfiguration.layer.pipe(
+            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(DesktopWslServerTree.layerTest()),
+            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+            Layer.provideMerge(
+              makeEnvironmentLayer(baseDir, {
+                appPath: `${resourcesPath}/app.asar`,
+                dirname: `${resourcesPath}/app.asar/apps/desktop/dist-electron`,
+                isPackaged: true,
+                platform: "win32",
+                resourcesPath,
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("marks the debug Windows Computer Use helper as development-only", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-windows-computer-use-helper-dev-test-",
+      });
+      const dirname = path.join(baseDir, "apps/desktop/src");
+      const debugHelperPath = path.join(
+        baseDir,
+        "native/computer-use-windows/publish/win-x64/T3CodeComputerUse.exe",
+      );
+      const releaseHelperPath = path.join(
+        baseDir,
+        "native/computer-use-windows/bin/Release/net10.0-windows/win-x64/T3CodeComputerUse.exe",
+      );
+      yield* fileSystem.makeDirectory(path.dirname(debugHelperPath), { recursive: true });
+      yield* fileSystem.makeDirectory(path.dirname(releaseHelperPath), { recursive: true });
+      yield* fileSystem.writeFileString(debugHelperPath, "debug");
+      yield* fileSystem.writeFileString(releaseHelperPath, "release");
+
+      yield* Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        assert.equal(config.bootstrap.computerUseHelperPath, debugHelperPath);
+        assert.equal(config.bootstrap.computerUseHelperDevelopment, true);
+      }).pipe(
+        Effect.provide(
+          DesktopBackendConfiguration.layer.pipe(
+            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(DesktopWslServerTree.layerTest()),
+            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+            Layer.provideMerge(
+              makeEnvironmentLayer(baseDir, {
+                dirname,
+                devServerUrl: "http://127.0.0.1:5733",
+                isPackaged: false,
+                platform: "win32",
               }),
             ),
           ),

@@ -1,16 +1,29 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PreviewTabId,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as ComputerUseToolkit from "../computerUse/ComputerUseToolkit.ts";
+
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -19,10 +32,12 @@ const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
 const invocation = {
   environmentId,
   threadId,
+  turnId: TurnId.make("turn-mcp-test"),
   providerSessionId: "provider-session-mcp-test",
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
+  runtimeMode: "full-access" as const,
 };
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -34,9 +49,24 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
+const ComputerUseToolkitTest = Layer.succeed(
+  ComputerUseToolkit.ComputerUseToolkit,
+  ComputerUseToolkit.ComputerUseToolkit.of({
+    status: () => Effect.die("unused"),
+    listTargets: () => Effect.die("unused"),
+    observe: () => Effect.die("unused"),
+    act: () => Effect.die("unused"),
+    stop: () => Effect.void,
+    resolveApproval: () => Effect.succeed(false),
+    executeGoverned: (_input, effect) =>
+      effect.pipe(Effect.map((value) => ({ _tag: "success", value }) as const)),
+  }),
+);
 const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.provideMerge(ComputerUseToolkitTest),
+  Layer.provide(NodeServices.layer),
 );
 
 it("normalizes empty successful notification responses to accepted", () => {
@@ -61,7 +91,7 @@ it.effect("returns bounded structural preview snapshot failures", () =>
         environmentId,
       });
       yield* Stream.runForEach(events, (event) =>
-        event.type === "connected"
+        event.type !== "request"
           ? Effect.void
           : broker.respond({
               clientId: "mcp-failure-client",
@@ -151,6 +181,162 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
+it.effect("streams elicitation requests before the tool result that depends on them", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ElicitationTool = Layer.effectDiscard(
+        Effect.gen(function* () {
+          const server = yield* McpServer.McpServer;
+          yield* server.addTool({
+            tool: new McpSchema.Tool({
+              name: "approval_probe",
+              description: "Exercises a nested MCP elicitation.",
+              inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            }),
+            annotations: Context.empty(),
+            handle: () =>
+              McpServer.elicit({
+                message: "Allow the probe?",
+                schema: Schema.Struct({ approval: Schema.Literal("once") }),
+              }).pipe(
+                Effect.map(
+                  ({ approval }) =>
+                    new McpSchema.CallToolResult({
+                      content: [{ type: "text", text: approval }],
+                    }),
+                ),
+                Effect.catchTag("ElicitationDeclined", () =>
+                  Effect.succeed(
+                    new McpSchema.CallToolResult({
+                      isError: true,
+                      content: [{ type: "text", text: "Approval declined." }],
+                    }),
+                  ),
+                ),
+              ),
+          });
+        }),
+      );
+      const serverLayer = ElicitationTool.pipe(
+        Layer.provideMerge(
+          McpServer.layerHttp({
+            name: "MCP elicitation transport test",
+            version: "1.0.0",
+            path: "/mcp",
+            protocols: [McpProtocol.v2025_06_18],
+          }),
+        ),
+      );
+      yield* HttpRouter.serve(serverLayer, {
+        disableListenLog: true,
+        disableLogger: true,
+      }).pipe(Layer.build);
+      const httpClient = yield* HttpClient.HttpClient;
+
+      const initializeResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{"form":{}}},"clientInfo":{"name":"mcp-test","version":"1.0.0"}}}`,
+          "application/json",
+        ),
+      });
+      const sessionId = initializeResponse.headers["mcp-session-id"]!;
+      const protocolVersion = initializeResponse.headers["mcp-protocol-version"]!;
+      expect(sessionId).toBeDefined();
+
+      yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId,
+          "mcp-protocol-version": protocolVersion,
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`,
+          "application/json",
+        ),
+      });
+
+      const elicitationRequest = yield* Deferred.make<{
+        readonly id: string | number;
+        readonly method: string;
+      }>();
+      const toolResult = yield* Deferred.make<unknown>();
+      yield* httpClient
+        .post("/mcp", {
+          headers: {
+            accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+            "mcp-session-id": sessionId,
+            "mcp-protocol-version": protocolVersion,
+          },
+          body: HttpBody.text(
+            `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"approval_probe","arguments":{}}}`,
+            "application/json",
+          ),
+        })
+        .pipe(
+          Effect.flatMap((response) =>
+            response.stream.pipe(
+              Stream.decodeText(),
+              Stream.splitLines,
+              Stream.runForEach((line) => {
+                if (!line.startsWith("data:")) return Effect.void;
+                const message = JSON.parse(line.slice("data:".length).trim()) as {
+                  readonly id?: string | number;
+                  readonly method?: string;
+                  readonly result?: unknown;
+                };
+                if (message.method === "elicitation/create" && message.id !== undefined) {
+                  return Deferred.succeed(elicitationRequest, {
+                    id: message.id,
+                    method: message.method,
+                  }).pipe(Effect.asVoid);
+                }
+                if (message.id === 2 && message.result !== undefined) {
+                  return Deferred.succeed(toolResult, message.result).pipe(Effect.asVoid);
+                }
+                return Effect.void;
+              }),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+
+      const request = yield* Deferred.await(elicitationRequest).pipe(
+        Effect.timeout("2 seconds"),
+        TestClock.withLive,
+      );
+      expect(request.method).toBe("elicitation/create");
+
+      const elicitationResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId,
+          "mcp-protocol-version": protocolVersion,
+        },
+        body: HttpBody.text(
+          encodeUnknownJsonString({
+            jsonrpc: "2.0",
+            id: request.id,
+            result: { action: "accept", content: { approval: "once" } },
+          }),
+          "application/json",
+        ),
+      });
+      expect(elicitationResponse.status).toBe(202);
+
+      expect(
+        yield* Deferred.await(toolResult).pipe(Effect.timeout("2 seconds"), TestClock.withLive),
+      ).toMatchObject({ content: [{ type: "text", text: "once" }] });
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
 it.effect("registers annotated tools and preserves authenticated request context", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -165,7 +351,7 @@ it.effect("registers annotated tools and preserves authenticated request context
         environmentId,
       });
       yield* Stream.runForEach(events, (event) => {
-        if (event.type === "connected") return Effect.void;
+        if (event.type !== "request") return Effect.void;
         routedRequests.push(event.request);
         return broker.respond({
           clientId: "mcp-test-client",
@@ -219,11 +405,6 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(clickTool?.tool.annotations?.readOnlyHint).toBe(false);
       expect(clickTool?.tool.annotations?.destructiveHint).toBe(true);
       expect(clickTool?.tool.annotations?.openWorldHint).toBe(true);
-      expect(clickTool?.tool.outputSchema).toEqual({
-        type: "object",
-        additionalProperties: false,
-        description: "The preview action completed successfully.",
-      });
 
       const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);

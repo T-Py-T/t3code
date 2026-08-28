@@ -7,6 +7,7 @@ import {
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
   PreviewAutomationTargetNotEditableError,
+  PreviewAutomationTimeoutError,
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
@@ -19,6 +20,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
@@ -53,6 +55,7 @@ const requestsFrom = (
         onConnected(event.connectionId);
         return Result.failVoid;
       }
+      if (event.type === "cancel") return Result.failVoid;
       return Result.succeed({ ...event.request, connectionId: event.connectionId });
     }),
   );
@@ -80,6 +83,42 @@ it.effect("atomically registers a connected host and correlates its response", (
       });
 
       expect(result).toEqual({ available: true });
+    }),
+  ),
+);
+
+it.effect("carries the approved external browser identity to the selected host", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const expectedExternalBrowserIdentity = {
+        profileId: "profile:one",
+        tabId: PreviewTabId.make("external_1"),
+        origin: "https://example.com",
+      } as const;
+      const requests = requestsFrom(
+        yield* broker.connect(makeHost({ supportedBrowsers: ["external"] })),
+      );
+      yield* Stream.runForEach(requests, (request) => {
+        expect(request.expectedExternalBrowserIdentity).toEqual(expectedExternalBrowserIdentity);
+        return broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "ready",
+        });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(
+        yield* broker.invoke({
+          scope,
+          operation: "snapshot",
+          input: { browser: "external" },
+          expectedExternalBrowserIdentity,
+        }),
+      ).toBe("ready");
     }),
   ),
 );
@@ -275,7 +314,7 @@ it.effect("announces a live replacement stream before delivering requests", () =
         Stream.take(2),
         Stream.runForEach((event) => {
           receivedTypes.push(event.type);
-          return event.type === "connected"
+          return event.type !== "request"
             ? Effect.void
             : broker.respond({
                 clientId: "client-1",
@@ -294,6 +333,112 @@ it.effect("announces a live replacement stream before delivering requests", () =
 
       expect(receivedTypes).toEqual(["connected", "request"]);
       expect(result).toBe("ready");
+    }),
+  ),
+);
+
+it.effect("cancels in-flight browser work and releases its control lease", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const events = yield* broker.connect(makeHost());
+      const requestSeen = yield* Deferred.make<void>();
+      const cancelSeen = yield* Deferred.make<string>();
+      yield* Stream.runForEach(events, (event) => {
+        if (event.type === "request") return Deferred.succeed(requestSeen, undefined);
+        if (event.type === "cancel") {
+          return broker
+            .respond({
+              clientId: "client-1",
+              connectionId: event.connectionId,
+              requestId: event.requestId,
+              ok: false,
+              error: {
+                _tag: "PreviewAutomationControlInterruptedError",
+                message: "cancelled",
+              },
+            })
+            .pipe(Effect.andThen(Deferred.succeed(cancelSeen, event.requestId)));
+        }
+        return Effect.void;
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const invocation = yield* broker
+        .invoke({ scope, operation: "click", input: { locator: "role=button" } })
+        .pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(requestSeen);
+      expect(yield* broker.activeControlFor(scope.environmentId)).toMatchObject({
+        threadId: scope.threadId,
+      });
+      expect(yield* broker.stopEnvironment(scope.environmentId)).toBe(1);
+      expect(yield* Deferred.await(cancelSeen)).toBe("preview-0");
+      expect((yield* Fiber.join(invocation))._tag).toBe("Failure");
+      expect(yield* broker.activeControlFor(scope.environmentId)).toBeUndefined();
+    }),
+  ),
+);
+
+it.effect("cancels and drains timed-out browser work before returning", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requestSeen = yield* Deferred.make<void>();
+      const cancelSeen = yield* Deferred.make<void>();
+      const events = yield* broker.connect(makeHost());
+      yield* Stream.runForEach(events, (event) => {
+        if (event.type === "request") return Deferred.succeed(requestSeen, undefined);
+        if (event.type !== "cancel") return Effect.void;
+        return broker
+          .respond({
+            clientId: "client-1",
+            connectionId: event.connectionId,
+            requestId: event.requestId,
+            ok: false,
+            error: {
+              _tag: "PreviewAutomationControlInterruptedError",
+              message: "timed out",
+            },
+          })
+          .pipe(Effect.andThen(Deferred.succeed(cancelSeen, undefined)));
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const invocation = yield* broker
+        .invoke<void>({ scope, operation: "waitFor", input: { text: "never" }, timeoutMs: 1_000 })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(requestSeen);
+      yield* TestClock.adjust("1 second");
+
+      const error = yield* Fiber.join(invocation).pipe(Effect.flip);
+      expect(error).toBeInstanceOf(PreviewAutomationTimeoutError);
+      expect(yield* Deferred.isDone(cancelSeen)).toBe(true);
+    }),
+  ),
+);
+
+it.effect("releases browser control when its provider thread stops", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const events = yield* broker.connect(makeHost());
+      yield* Stream.runForEach(events, (event) =>
+        event.type !== "request"
+          ? Effect.void
+          : broker.respond({
+              clientId: "client-1",
+              connectionId: event.connectionId,
+              requestId: event.request.requestId,
+              ok: true,
+              result: "ready",
+            }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("ready");
+      yield* broker.stopThread(scope.threadId);
+
+      expect(yield* broker.activeControlFor(scope.environmentId)).toBeUndefined();
     }),
   ),
 );
@@ -669,6 +814,49 @@ it.effect("does not route new operations to legacy hosts that did not advertise 
 
       expect(error).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
       expect(error).toMatchObject({ operation: "resize", environmentId: scope.environmentId });
+    }),
+  ),
+);
+
+it.effect("routes external-browser work only to a host that advertises that profile", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const builtInRequests = requestsFrom(
+        yield* broker.connect(makeHost({ clientId: "client-built-in" })),
+      );
+      const externalRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({ clientId: "client-external", supportedBrowsers: ["external"] }),
+        ),
+      );
+      yield* Stream.runForEach(builtInRequests, (request) =>
+        broker.respond({
+          clientId: "client-built-in",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "built-in",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Stream.runForEach(externalRequests, (request) =>
+        broker.respond({
+          clientId: "client-external",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "external",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(
+        yield* broker.invoke<string>({
+          scope,
+          operation: "status",
+          input: { browser: "external" },
+        }),
+      ).toBe("external");
     }),
   ),
 );

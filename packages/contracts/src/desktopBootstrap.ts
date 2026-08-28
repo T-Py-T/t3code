@@ -19,6 +19,12 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
+  computerUseHelperPath: Schema.optionalKey(TrimmedNonEmptyString),
+  computerUseHostExecutablePath: Schema.optionalKey(TrimmedNonEmptyString),
+  // Development helpers are locally built and verified by content hash. This
+  // marker is never emitted for packaged builds, which require a stable code
+  // signing identity.
+  computerUseHelperDevelopment: Schema.optionalKey(Schema.Boolean),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;

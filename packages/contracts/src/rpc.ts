@@ -205,6 +205,18 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  ComputerUseClearHistoryResult,
+  ComputerUseControlState,
+  ComputerUseHistoryInput,
+  ComputerUseHistoryResult,
+  ComputerUseRevokePersistentGrantInput,
+  ComputerUseRevokePersistentGrantResult,
+  ComputerUseResumeResult,
+  ComputerUseRevealScreenshotInput,
+  ComputerUseRevealScreenshotResult,
+  ComputerUseStopResult,
+} from "./computerUse.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -291,6 +303,17 @@ export const WS_METHODS = {
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
+
+  // Computer Use controls
+  computerUseGetControlState: "computerUse.getControlState",
+  computerUseGetHistory: "computerUse.getHistory",
+  computerUseRevealScreenshot: "computerUse.revealScreenshot",
+  computerUseClearHistory: "computerUse.clearHistory",
+  computerUseRevokePersistentGrant: "computerUse.revokePersistentGrant",
+  computerUseStop: "computerUse.stop",
+  computerUseTakeOver: "computerUse.takeOver",
+  computerUsePause: "computerUse.pause",
+  computerUseResume: "computerUse.resume",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -456,6 +479,63 @@ export const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSumm
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseGetControlStateRpc = Rpc.make(WS_METHODS.computerUseGetControlState, {
+  payload: Schema.Struct({}),
+  success: ComputerUseControlState,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseGetHistoryRpc = Rpc.make(WS_METHODS.computerUseGetHistory, {
+  payload: ComputerUseHistoryInput,
+  success: ComputerUseHistoryResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseRevealScreenshotRpc = Rpc.make(WS_METHODS.computerUseRevealScreenshot, {
+  payload: ComputerUseRevealScreenshotInput,
+  success: ComputerUseRevealScreenshotResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseClearHistoryRpc = Rpc.make(WS_METHODS.computerUseClearHistory, {
+  payload: Schema.Struct({}),
+  success: ComputerUseClearHistoryResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseRevokePersistentGrantRpc = Rpc.make(
+  WS_METHODS.computerUseRevokePersistentGrant,
+  {
+    payload: ComputerUseRevokePersistentGrantInput,
+    success: ComputerUseRevokePersistentGrantResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsComputerUseStopRpc = Rpc.make(WS_METHODS.computerUseStop, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseTakeOverRpc = Rpc.make(WS_METHODS.computerUseTakeOver, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUsePauseRpc = Rpc.make(WS_METHODS.computerUsePause, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
+  payload: Schema.Struct({}),
+  success: ComputerUseResumeResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1036,6 +1116,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerSignalProcessRpc,
+  WsComputerUseGetControlStateRpc,
+  WsComputerUseGetHistoryRpc,
+  WsComputerUseRevealScreenshotRpc,
+  WsComputerUseClearHistoryRpc,
+  WsComputerUseRevokePersistentGrantRpc,
+  WsComputerUseStopRpc,
+  WsComputerUseTakeOverRpc,
+  WsComputerUsePauseRpc,
+  WsComputerUseResumeRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

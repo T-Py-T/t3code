@@ -526,6 +526,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const pictureInPictureAspectRatiosRef = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
   const pictureInPictureMutationSemaphore = yield* Semaphore.make(1);
   const closingTabIdsRef = yield* Ref.make<ReadonlySet<string>>(new Set());
+  const activeAutomationOperations = new Map<
+    string,
+    { readonly tabId: string; readonly webContents: Electron.WebContents }
+  >();
+  const cancelledAutomationOperations = new Set<string>();
   let frameCaptureWindowOpen = true;
   let currentMainWindow: BrowserWindow | undefined;
   let mainWindowCleanupFiber: Fiber.Fiber<void, never> | undefined;
@@ -798,6 +803,83 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       });
     }
     return wc;
+  });
+
+  const automationInterrupted = (operation: string, tabId: string, webContentsId: number) =>
+    new PreviewAutomationControlInterruptedError({ operation, tabId, webContentsId });
+
+  const runAutomationOperation = Effect.fn("PreviewManager.runAutomationOperation")(function* <A>(
+    tabId: string,
+    operationId: string | undefined,
+    operation: string,
+    effect: Effect.Effect<A, PreviewManagerError>,
+  ): Effect.fn.Return<A, PreviewManagerError> {
+    if (operationId === undefined) return yield* effect;
+    const wc = yield* requireWebContents(tabId);
+    activeAutomationOperations.set(operationId, { tabId, webContents: wc });
+    const guarded = Effect.gen(function* () {
+      if (cancelledAutomationOperations.has(operationId)) {
+        return yield* automationInterrupted(operation, tabId, wc.id);
+      }
+      const value = yield* effect;
+      if (cancelledAutomationOperations.has(operationId)) {
+        return yield* automationInterrupted(operation, tabId, wc.id);
+      }
+      return value;
+    }).pipe(
+      Effect.catch((error) =>
+        cancelledAutomationOperations.has(operationId)
+          ? Effect.fail(automationInterrupted(operation, tabId, wc.id))
+          : Effect.fail(error),
+      ),
+    );
+    return yield* guarded.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (activeAutomationOperations.get(operationId)?.webContents === wc) {
+            activeAutomationOperations.delete(operationId);
+          }
+          cancelledAutomationOperations.delete(operationId);
+        }),
+      ),
+    );
+  });
+
+  const automationCancel = Effect.fn("PreviewManager.automationCancel")(function* (
+    tabId: string,
+    operationId: string,
+  ) {
+    cancelledAutomationOperations.add(operationId);
+    while (cancelledAutomationOperations.size > 512) {
+      const oldest = cancelledAutomationOperations.values().next().value;
+      if (oldest === undefined) break;
+      cancelledAutomationOperations.delete(oldest);
+    }
+    const active = activeAutomationOperations.get(operationId);
+    if (!active || active.tabId !== tabId || active.webContents.isDestroyed()) return;
+    yield* Ref.update(controlEpochRef, (epochs) =>
+      replaceMap(epochs, (copy) => {
+        copy.set(tabId, (epochs.get(tabId) ?? 0) + 1);
+      }),
+    );
+    yield* attempt(
+      { operation: "automationCancel.stopLoading", tabId, webContentsId: active.webContents.id },
+      () => active.webContents.stop(),
+    ).pipe(Effect.ignore);
+    if (!active.webContents.debugger.isAttached()) return;
+    yield* Effect.forEach(
+      ["Page.stopLoading", "Runtime.terminateExecution"],
+      (method) =>
+        attemptPromise(
+          {
+            operation: `automationCancel.${method}`,
+            tabId,
+            webContentsId: active.webContents.id,
+          },
+          () => active.webContents.debugger.sendCommand(method),
+        ).pipe(Effect.ignore),
+      { discard: true },
+    );
   });
 
   const resolveArtifactPath = (artifactPath: string) =>
@@ -3701,6 +3783,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     ).pipe(Effect.asVoid);
 
   const destroy = Effect.fn("PreviewManager.destroy")(function* () {
+    activeAutomationOperations.clear();
+    cancelledAutomationOperations.clear();
     const tabs = yield* SynchronizedRef.get(tabsRef);
     yield* Effect.forEach(tabs.keys(), closeTab, { discard: true });
     yield* Effect.all(
@@ -3717,14 +3801,29 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   yield* Effect.addFinalizer(() => destroy().pipe(Effect.ignore));
 
   return {
-    automationClick,
-    automationEvaluate,
-    automationPress,
-    automationScroll,
-    automationSnapshot,
-    automationStatus,
-    automationType,
-    automationWaitFor,
+    automationCancel,
+    automationClick: (tabId: string, input: PreviewAutomationClickInput, operationId?: string) =>
+      runAutomationOperation(tabId, operationId, "click", automationClick(tabId, input)),
+    automationEvaluate: (
+      tabId: string,
+      input: PreviewAutomationEvaluateInput,
+      operationId?: string,
+    ) => runAutomationOperation(tabId, operationId, "evaluate", automationEvaluate(tabId, input)),
+    automationPress: (tabId: string, input: PreviewAutomationPressInput, operationId?: string) =>
+      runAutomationOperation(tabId, operationId, "press", automationPress(tabId, input)),
+    automationScroll: (tabId: string, input: PreviewAutomationScrollInput, operationId?: string) =>
+      runAutomationOperation(tabId, operationId, "scroll", automationScroll(tabId, input)),
+    automationSnapshot: (tabId: string, operationId?: string) =>
+      runAutomationOperation(tabId, operationId, "snapshot", automationSnapshot(tabId)),
+    automationStatus: (tabId: string, operationId?: string) =>
+      runAutomationOperation(tabId, operationId, "status", automationStatus(tabId)),
+    automationType: (tabId: string, input: PreviewAutomationTypeInput, operationId?: string) =>
+      runAutomationOperation(tabId, operationId, "type", automationType(tabId, input)),
+    automationWaitFor: (
+      tabId: string,
+      input: PreviewAutomationWaitForInput,
+      operationId?: string,
+    ) => runAutomationOperation(tabId, operationId, "waitFor", automationWaitFor(tabId, input)),
     cancelPickElement,
     captureScreenshot,
     closeTab,
@@ -3733,7 +3832,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     goBack,
     goForward,
     hardReload,
-    navigate,
+    navigate: (tabId: string, rawUrl: string, operationId?: string) =>
+      runAutomationOperation(tabId, operationId, "navigate", navigate(tabId, rawUrl)),
     openPictureInPicture,
     openDevTools,
     pickElement,
@@ -4043,7 +4143,11 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       webContentsId: number,
     ) => Effect.Effect<void, PreviewManagerError>;
-    readonly navigate: (tabId: string, url: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly navigate: (
+      tabId: string,
+      url: string,
+      operationId?: string,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly goBack: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly goForward: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly refresh: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -4089,33 +4193,45 @@ export class PreviewManager extends Context.Service<
     ) => Effect.Effect<DesktopPreviewRecordingArtifact, PreviewManagerError>;
     readonly automationStatus: (
       tabId: string,
+      operationId?: string,
     ) => Effect.Effect<PreviewAutomationStatus, PreviewManagerError>;
     readonly automationSnapshot: (
       tabId: string,
+      operationId?: string,
     ) => Effect.Effect<PreviewAutomationSnapshot, PreviewManagerError>;
     readonly automationClick: (
       tabId: string,
       input: PreviewAutomationClickInput,
+      operationId?: string,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly automationType: (
       tabId: string,
       input: PreviewAutomationTypeInput,
+      operationId?: string,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly automationPress: (
       tabId: string,
       input: PreviewAutomationPressInput,
+      operationId?: string,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly automationScroll: (
       tabId: string,
       input: PreviewAutomationScrollInput,
+      operationId?: string,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly automationEvaluate: (
       tabId: string,
       input: PreviewAutomationEvaluateInput,
+      operationId?: string,
     ) => Effect.Effect<unknown, PreviewManagerError>;
     readonly automationWaitFor: (
       tabId: string,
       input: PreviewAutomationWaitForInput,
+      operationId?: string,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly automationCancel: (
+      tabId: string,
+      operationId: string,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly subscribeStateChanges: (listener: Listener) => Effect.Effect<void, never, Scope.Scope>;
     readonly subscribePointerEvents: (
@@ -4199,6 +4315,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     stopRecording: operations.stopRecording,
     saveRecording: operations.saveRecording,
     automationStatus: operations.automationStatus,
+    automationCancel: operations.automationCancel,
     automationSnapshot: operations.automationSnapshot,
     automationClick: operations.automationClick,
     automationType: operations.automationType,

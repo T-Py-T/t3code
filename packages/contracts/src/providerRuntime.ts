@@ -437,6 +437,7 @@ const RequestOpenedPayload = Schema.Struct({
   detail: Schema.optional(TrimmedNonEmptyStringSchema),
   appName: Schema.optional(TrimmedNonEmptyStringSchema),
   options: Schema.optional(Schema.Array(ProviderApprovalOption)),
+  computerUseApproval: Schema.optional(Schema.Literal(true)),
   args: Schema.optional(Schema.Unknown),
 });
 export type RequestOpenedPayload = typeof RequestOpenedPayload.Type;

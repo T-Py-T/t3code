@@ -547,6 +547,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.enableAgentBrowserAccess !== DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess
         ? ["Agent browser access"]
         : []),
+      ...(settings.enableComputerUse !== DEFAULT_UNIFIED_SETTINGS.enableComputerUse
+        ? ["Agent computer use"]
+        : []),
     ],
     [
       isTextGenerationModelDirty,
@@ -557,6 +560,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.browserAutoShowFloatingPreview,
       settings.appearanceContrast,
       settings.enableAgentBrowserAccess,
+      settings.enableComputerUse,
       settings.confirmQuit,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -694,6 +698,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       // name, so a user restoring defaults is told the agent regains access
       // rather than discovering it later.
       enableAgentBrowserAccess: DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess,
+      enableComputerUse: DEFAULT_UNIFIED_SETTINGS.enableComputerUse,
     });
     onRestored?.();
   }, [

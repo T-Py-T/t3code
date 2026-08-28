@@ -16,10 +16,14 @@ import {
   PreviewTabId,
   type PreviewAutomationError,
   type PreviewAutomationOperation,
+  type PreviewAutomationExternalBrowserIdentity,
   type PreviewAutomationHost,
   type PreviewAutomationHostFocus,
   type PreviewAutomationResponse,
   type PreviewAutomationStreamEvent,
+  type EnvironmentId,
+  type ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -38,6 +42,7 @@ export interface PreviewAutomationInvokeInput {
   readonly scope: McpInvocationContext.McpInvocationScope;
   readonly operation: PreviewAutomationOperation;
   readonly input: unknown;
+  readonly expectedExternalBrowserIdentity?: PreviewAutomationExternalBrowserIdentity;
   readonly tabId?: PreviewTabId;
   readonly timeoutMs?: number;
 }
@@ -55,6 +60,12 @@ export class PreviewAutomationBroker extends Context.Service<
     readonly invoke: <A = unknown>(
       request: PreviewAutomationInvokeInput,
     ) => Effect.Effect<A, PreviewAutomationError>;
+    readonly activeControlFor: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
+    readonly stopEnvironment: (environmentId: EnvironmentId) => Effect.Effect<number>;
+    readonly stopTurn: (threadId: ThreadId, turnId: TurnId) => Effect.Effect<void>;
+    readonly stopThread: (threadId: ThreadId) => Effect.Effect<void>;
   }
 >()("t3/mcp/PreviewAutomationBroker") {}
 
@@ -63,6 +74,7 @@ interface ClientConnection {
   readonly connectionId: string;
   readonly environmentId: PreviewAutomationHost["environmentId"];
   readonly supportedOperations: ReadonlySet<PreviewAutomationOperation>;
+  readonly supportedBrowsers: ReadonlySet<"built-in" | "external">;
   readonly focused: boolean;
   readonly focusOrder: number;
   readonly queue: Queue.Queue<PreviewAutomationStreamEvent>;
@@ -72,6 +84,7 @@ interface PendingRequest {
   readonly queue: ClientConnection["queue"];
   readonly deferred: Deferred.Deferred<unknown, PreviewAutomationError>;
   readonly context: PreviewAutomationRequestErrorContext;
+  readonly scope: McpInvocationContext.McpInvocationScope;
 }
 
 /**
@@ -88,6 +101,7 @@ interface HostAssignment {
   readonly queue: ClientConnection["queue"];
   readonly tabId?: PreviewTabId;
   readonly tabSequence?: number;
+  readonly scope: McpInvocationContext.McpInvocationScope;
 }
 
 interface PreviewAutomationRequestErrorContext {
@@ -112,6 +126,8 @@ interface BrokerState {
   readonly requestSequence: number;
   readonly focusSequence: number;
 }
+
+const CANCELLATION_DRAIN_MS = 1_000;
 
 const removeConnectionFromState = (
   current: BrokerState,
@@ -165,6 +181,14 @@ const supportsOperation = (
   connection: ClientConnection,
   operation: PreviewAutomationOperation,
 ): boolean => connection.supportedOperations.has(operation);
+
+const requestedBrowser = (input: unknown): "built-in" | "external" =>
+  typeof input === "object" && input !== null && "browser" in input && input.browser === "external"
+    ? "external"
+    : "built-in";
+
+const supportsBrowser = (connection: ClientConnection, input: unknown): boolean =>
+  connection.supportedBrowsers.has(requestedBrowser(input));
 
 type RemoteDetailKind = "null" | "array" | "object" | "string" | "number" | "boolean";
 
@@ -331,6 +355,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       connectionId,
       environmentId: host.environmentId,
       supportedOperations: new Set(host.supportedOperations ?? PREVIEW_AUTOMATION_V1_OPERATIONS),
+      supportedBrowsers: new Set(host.supportedBrowsers ?? ["built-in"]),
       focused: false,
       focusOrder: 0,
       queue,
@@ -449,7 +474,9 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       // capability failure and can deliberately start a fresh provider
       // session. A dead lease is pruned above and may fail over.
       const connection =
-        hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+        hasLiveAssignment &&
+        supportsOperation(assignedConnection, input.operation) &&
+        supportsBrowser(assignedConnection, input.input)
           ? assignedConnection
           : hasLiveAssignment
             ? undefined
@@ -457,7 +484,8 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
                 .filter(
                   (host) =>
                     host.environmentId === input.scope.environmentId &&
-                    supportsOperation(host, input.operation),
+                    supportsOperation(host, input.operation) &&
+                    supportsBrowser(host, input.input),
                 )
                 .sort(
                   (left, right) =>
@@ -477,6 +505,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         clientId: connection.clientId,
         connectionId: connection.connectionId,
         queue: connection.queue,
+        scope: input.scope,
         ...(canReuseAssignedTab && assigned.tabId !== undefined ? { tabId: assigned.tabId } : {}),
         ...(canReuseAssignedTab && assigned.tabSequence !== undefined
           ? { tabSequence: assigned.tabSequence }
@@ -501,7 +530,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         ...selectorDiagnostics,
       };
       const pending = new Map(current.pending);
-      pending.set(requestId, { queue: connection.queue, deferred, context });
+      pending.set(requestId, { queue: connection.queue, deferred, context, scope: input.scope });
       return [
         { connection, requestId, requestContext: context, requestSequence },
         { ...current, assignments, pending, requestSequence: current.requestSequence + 1 },
@@ -534,6 +563,9 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
           tabIdExplicit: input.tabId !== undefined,
           operation: input.operation,
           input: input.input,
+          ...(input.expectedExternalBrowserIdentity === undefined
+            ? {}
+            : { expectedExternalBrowserIdentity: input.expectedExternalBrowserIdentity }),
           timeoutMs,
         },
       });
@@ -546,7 +578,20 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       }
       const result = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeoutMs));
       return yield* Option.match(result, {
-        onNone: () => Effect.fail(new PreviewAutomationTimeoutError(requestContext)),
+        onNone: () =>
+          Effect.gen(function* () {
+            yield* Queue.offer(connection.queue, {
+              type: "cancel",
+              connectionId: connection.connectionId,
+              requestId,
+            });
+            yield* Deferred.await(deferred).pipe(
+              Effect.exit,
+              Effect.timeoutOption(CANCELLATION_DRAIN_MS),
+              Effect.asVoid,
+            );
+            return yield* new PreviewAutomationTimeoutError(requestContext);
+          }),
         onSome: (value) => Effect.succeed(value as A),
       });
     });
@@ -581,7 +626,127 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     return result;
   });
 
-  return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke });
+  const stopMatching = Effect.fn("PreviewAutomationBroker.stopMatching")(function* (
+    matches: (scope: McpInvocationContext.McpInvocationScope) => boolean,
+  ) {
+    const stopped = yield* SynchronizedRef.modify(state, (current) => {
+      const assignments = new Map(current.assignments);
+      const stoppedAssignments = new Set<string>();
+      const stoppedRequests: Array<readonly [string, PendingRequest]> = [];
+      for (const [key, assignment] of assignments) {
+        if (!matches(assignment.scope)) continue;
+        assignments.delete(key);
+        stoppedAssignments.add(key);
+      }
+      for (const [requestId, request] of current.pending) {
+        if (!matches(request.scope)) continue;
+        stoppedRequests.push([requestId, request]);
+      }
+      return [
+        { count: stoppedAssignments.size, requests: stoppedRequests },
+        { ...current, assignments },
+      ] as const;
+    });
+    yield* Effect.forEach(
+      stopped.requests,
+      ([, request]) =>
+        Queue.offer(request.queue, {
+          type: "cancel",
+          connectionId: request.context.connectionId,
+          requestId: request.context.requestId,
+        }),
+      { discard: true },
+    );
+    yield* Effect.forEach(
+      stopped.requests,
+      ([, request]) => Deferred.await(request.deferred).pipe(Effect.exit),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.timeoutOption(CANCELLATION_DRAIN_MS), Effect.asVoid);
+    const unacknowledged = yield* SynchronizedRef.modify(state, (current) => {
+      const pending = new Map(current.pending);
+      const remaining: PendingRequest[] = [];
+      for (const [requestId, request] of stopped.requests) {
+        if (pending.get(requestId) !== request) continue;
+        pending.delete(requestId);
+        remaining.push(request);
+      }
+      return [remaining, { ...current, pending }] as const;
+    });
+    yield* Effect.forEach(
+      unacknowledged,
+      (request) =>
+        Deferred.fail(
+          request.deferred,
+          new PreviewAutomationControlInterruptedError(request.context),
+        ),
+      { discard: true },
+    );
+    return stopped.count;
+  });
+
+  const activeControlFor: PreviewAutomationBroker["Service"]["activeControlFor"] = Effect.fn(
+    "PreviewAutomationBroker.activeControlFor",
+  )((environmentId) =>
+    SynchronizedRef.get(state).pipe(
+      Effect.map(
+        (current) =>
+          Array.from(current.assignments.values()).find(
+            (assignment) => assignment.scope.environmentId === environmentId,
+          )?.scope,
+      ),
+    ),
+  );
+
+  const stopEnvironment: PreviewAutomationBroker["Service"]["stopEnvironment"] = Effect.fn(
+    "PreviewAutomationBroker.stopEnvironment",
+  )((environmentId) => stopMatching((scope) => scope.environmentId === environmentId));
+
+  const stopTurn: PreviewAutomationBroker["Service"]["stopTurn"] = Effect.fn(
+    "PreviewAutomationBroker.stopTurn",
+  )((threadId, turnId) =>
+    stopMatching((scope) => scope.threadId === threadId && scope.turnId === turnId).pipe(
+      Effect.asVoid,
+    ),
+  );
+
+  const stopThread: PreviewAutomationBroker["Service"]["stopThread"] = Effect.fn(
+    "PreviewAutomationBroker.stopThread",
+  )((threadId) => stopMatching((scope) => scope.threadId === threadId).pipe(Effect.asVoid));
+
+  return PreviewAutomationBroker.of({
+    connect,
+    focusHost,
+    respond,
+    invoke,
+    activeControlFor,
+    stopEnvironment,
+    stopTurn,
+    stopThread,
+  });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
-export const layer = Layer.effect(PreviewAutomationBroker, make);
+let activePreviewAutomationBroker: PreviewAutomationBroker["Service"] | undefined;
+
+const makeActive = Effect.acquireRelease(
+  make.pipe(
+    Effect.tap((broker) =>
+      Effect.sync(() => {
+        activePreviewAutomationBroker = broker;
+      }),
+    ),
+  ),
+  (broker) =>
+    Effect.sync(() => {
+      if (activePreviewAutomationBroker === broker) activePreviewAutomationBroker = undefined;
+    }),
+);
+
+export const stopActivePreviewAutomationTurn = (
+  threadId: ThreadId,
+  turnId: TurnId,
+): Effect.Effect<void> => activePreviewAutomationBroker?.stopTurn(threadId, turnId) ?? Effect.void;
+
+export const stopActivePreviewAutomationThread = (threadId: ThreadId): Effect.Effect<void> =>
+  activePreviewAutomationBroker?.stopThread(threadId) ?? Effect.void;
+
+export const layer = Layer.effect(PreviewAutomationBroker, makeActive);

@@ -9,6 +9,15 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
+import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
+import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
+import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
+import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
+import * as ComputerUseProjection from "./computerUse/ComputerUseProjection.ts";
+import * as ComputerUseScreenshotStore from "./computerUse/ComputerUseScreenshotStore.ts";
+import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
+import * as MacOsComputerUseHost from "./computerUse/MacOsComputerUseHost.ts";
+import * as WindowsComputerUseHost from "./computerUse/WindowsComputerUseHost.ts";
 import * as ServerConfig from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
@@ -142,6 +151,29 @@ const PtyAdapterLive = Layer.unwrap(
       return NodePtyAdapter.layer;
     }
   }),
+);
+
+const ComputerUseHistoryLive = ComputerUseHistory.layer;
+const ComputerUseControlLive = ComputerUseControl.layer;
+const ComputerUseScreenshotStoreLive = ComputerUseScreenshotStore.layer;
+const ComputerUsePolicyLive = ComputerUsePolicy.layer.pipe(Layer.provide(ComputerUseHistoryLive));
+const ComputerUseDependenciesLive = Layer.mergeAll(
+  ComputerUseBroker.layer,
+  ComputerUseControlLive,
+  ComputerUseHistoryLive,
+  ComputerUsePolicyLive,
+  ComputerUseScreenshotStoreLive,
+  PreviewAutomationBroker.layer,
+);
+const ComputerUseCoreLayerLive = Layer.mergeAll(
+  ComputerUseDependenciesLive,
+  ComputerUseToolkit.layer.pipe(Layer.provide(ComputerUseDependenciesLive)),
+);
+const MacOsComputerUseHostLive = MacOsComputerUseHost.layer.pipe(
+  Layer.provide(ProcessRunner.layer),
+);
+const WindowsComputerUseHostLive = WindowsComputerUseHost.layer.pipe(
+  Layer.provide(ProcessRunner.layer),
 );
 
 const ServerSettingsLayerLive = ServerSettings.layer.pipe(
@@ -473,7 +505,6 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),
@@ -679,9 +710,13 @@ export const makeServerLayer = Layer.unwrap(
       runtimeStateLayer,
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
+      MacOsComputerUseHostLive,
+      WindowsComputerUseHostLive,
+      ComputerUseProjection.layer,
     );
 
     return serverApplicationLayer.pipe(
+      Layer.provideMerge(ComputerUseCoreLayerLive),
       Layer.provideMerge(runtimeServicesLive),
       Layer.provide(activationLayer),
       Layer.provideMerge(serverRelayBrokerTracingLayer),

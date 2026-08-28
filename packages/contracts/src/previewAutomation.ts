@@ -48,7 +48,35 @@ export const PREVIEW_AUTOMATION_OPERATIONS = [
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
 
+export const PreviewAutomationBrowser = Schema.Literals(["built-in", "external"]);
+export type PreviewAutomationBrowser = typeof PreviewAutomationBrowser.Type;
+
+export const PreviewAutomationConnectionState = Schema.Literals([
+  "unavailable",
+  "disconnected",
+  "connected",
+]);
+export type PreviewAutomationConnectionState = typeof PreviewAutomationConnectionState.Type;
+
+/** Identity authorized by policy immediately before an external-browser operation. */
+export const PreviewAutomationExternalBrowserIdentity = Schema.Struct({
+  profileId: TrimmedNonEmptyString,
+  tabId: Schema.NullOr(PreviewTabId),
+  origin: TrimmedNonEmptyString,
+});
+export type PreviewAutomationExternalBrowserIdentity =
+  typeof PreviewAutomationExternalBrowserIdentity.Type;
+
 const PreviewAutomationTabTargetFields = {
+  browser: Schema.optional(
+    PreviewAutomationBrowser.annotate({
+      description:
+        "Browser surface to control. Defaults to built-in. Use external for T3 Code's dedicated signed-in browser profile.",
+    }),
+  ).annotate({
+    description:
+      "Browser surface to control. Defaults to built-in. Use external for T3 Code's dedicated signed-in browser profile.",
+  }),
   tabId: Schema.optional(
     PreviewTabId.annotate({
       description:
@@ -66,6 +94,10 @@ export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetI
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
   visible: Schema.Boolean,
+  browser: Schema.optional(PreviewAutomationBrowser),
+  connectionState: Schema.optional(PreviewAutomationConnectionState),
+  profileName: Schema.optional(Schema.String),
+  profileId: Schema.optional(TrimmedNonEmptyString),
   tabId: Schema.NullOr(PreviewTabId),
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
@@ -581,6 +613,7 @@ export const PreviewAutomationHost = Schema.Struct({
    * a newer server safely coexist with an older desktop during rollout.
    */
   supportedOperations: Schema.optional(Schema.Array(PreviewAutomationOperation)),
+  supportedBrowsers: Schema.optional(Schema.Array(PreviewAutomationBrowser)),
 });
 export type PreviewAutomationHost = typeof PreviewAutomationHost.Type;
 
@@ -598,6 +631,7 @@ export const PreviewAutomationRequest = Schema.Struct({
   tabIdExplicit: Schema.optional(Schema.Boolean),
   operation: PreviewAutomationOperation,
   input: Schema.Unknown,
+  expectedExternalBrowserIdentity: Schema.optional(PreviewAutomationExternalBrowserIdentity),
   timeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 export type PreviewAutomationRequest = typeof PreviewAutomationRequest.Type;
@@ -611,6 +645,11 @@ export const PreviewAutomationStreamEvent = Schema.Union([
     type: Schema.Literal("request"),
     connectionId: PreviewAutomationConnectionId,
     request: PreviewAutomationRequest,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("cancel"),
+    connectionId: PreviewAutomationConnectionId,
+    requestId: TrimmedNonEmptyString,
   }),
 ]);
 export type PreviewAutomationStreamEvent = typeof PreviewAutomationStreamEvent.Type;
@@ -743,7 +782,7 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
   "PreviewAutomationControlInterruptedError",
   {
     ...PreviewAutomationRequestErrorFields,
-    ...PreviewAutomationRemoteDiagnosticFields,
+    ...PreviewAutomationOptionalRemoteDiagnosticFields,
   },
 ) {
   override get message(): string {

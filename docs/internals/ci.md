@@ -10,6 +10,10 @@ and pushes to `main`:
   builds the desktop pipeline (`vp run build:desktop`) and verifies the preload bundle exists and
   still exports its expected symbols.
 - **Test**: `vp run test` across the workspace.
+- **Windows Computer Use**: verifies .NET formatting, builds and tests the native helper, and
+  publishes a self-contained `win-x64` executable as a packaging smoke check. ARM64 package and
+  interactive acceptance remain in the
+  [Windows Computer Use runbook](../operations/windows-computer-use-acceptance.md).
 - **Mobile Native Static Analysis**: `vp run lint:mobile` on macOS, wrapping
   `scripts/mobile-native-static-check.ts`. A cheap Linux **Mobile Native Changes** job gates it:
   the macOS runner only boots when the diff touches `apps/mobile` Swift/Kotlin sources, the

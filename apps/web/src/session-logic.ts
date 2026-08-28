@@ -3,6 +3,10 @@ import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
+  decodeComputerUseActivity,
+  type ComputerUseActivityState,
+} from "@t3tools/client-runtime/state/computerUseActivity";
+import {
   ApprovalRequestId,
   isToolLifecycleItemType,
   type OrchestrationLatestTurn,
@@ -111,6 +115,7 @@ export interface WorkLogEntry {
     workflowId: string | null;
     agentTaskIds: ReadonlyArray<string>;
   };
+  computerUse?: ComputerUseActivityState;
 }
 
 const workLogCollapseKey = Symbol();
@@ -140,7 +145,6 @@ export interface PendingApproval {
 
 const isProviderRequestKind = Schema.is(ProviderRequestKind);
 const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
-
 export interface PendingUserInput {
   requestId: ApprovalRequestId;
   createdAt: string;
@@ -1002,6 +1006,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (requestKind) {
     entry.requestKind = requestKind;
   }
+  const computerUse = decodeComputerUseActivity(activity);
+  if (computerUse) {
+    entry.computerUse = computerUse;
+  }
   if (toolCallId) {
     entry.toolCallId = toolCallId;
   }
@@ -1089,7 +1097,27 @@ function collapseDerivedWorkLogEntries(
   // rows (live-test finding, thread 7ac7ef05).
   const groupKeyByTaskId = new Map<string, string>();
   const toolLifecycleRowIndex = new Map<string, number>();
+  const computerUseRowIndex = new Map<string, number>();
   for (const entry of entries) {
+    if (entry.computerUse) {
+      const computerUseKey = `computer-use:${entry.turnId ?? "no-turn"}:${
+        entry.computerUse.target?.stableIdentity ?? entry.computerUse.operation ?? "control"
+      }`;
+      const existingIndex = computerUseRowIndex.get(computerUseKey);
+      if (existingIndex !== undefined) {
+        const existing = collapsed[existingIndex]!;
+        collapsed[existingIndex] = {
+          ...mergeDerivedWorkLogEntries(existing, entry),
+          id: existing.id,
+          createdAt: existing.createdAt,
+          turnId: existing.turnId ?? null,
+        };
+        continue;
+      }
+      computerUseRowIndex.set(computerUseKey, collapsed.length);
+      collapsed.push(entry);
+      continue;
+    }
     const isTaskRow =
       entry.taskId !== undefined &&
       !entry.isBackgroundTask &&

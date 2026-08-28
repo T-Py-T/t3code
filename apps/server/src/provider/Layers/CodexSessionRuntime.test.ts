@@ -17,8 +17,10 @@ import {
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
+  buildCodexSessionInitializeParams,
   describeMcpElicitation,
   hasConfiguredMcpServer,
+  hasConfiguredT3McpServer,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
@@ -67,6 +69,24 @@ function makeThreadOpenResponse(
 }
 
 describe("buildTurnStartParams", () => {
+  it.effect("enables only MCP elicitations in full-access mode", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Observe Safari",
+      });
+
+      NodeAssert.deepStrictEqual(params.approvalPolicy, {
+        granular: {
+          mcp_elicitations: true,
+          rules: false,
+          sandbox_approval: false,
+        },
+      });
+    }),
+  );
+
   it("keeps invalid turn values only in the schema cause", () => {
     const secret = "codex-turn-input-secret-sentinel";
     const error = Effect.runSync(
@@ -107,7 +127,13 @@ describe("buildTurnStartParams", () => {
 
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
-      approvalPolicy: "never",
+      approvalPolicy: {
+        granular: {
+          mcp_elicitations: true,
+          rules: false,
+          sandbox_approval: false,
+        },
+      },
       approvalsReviewer: "user",
       sandboxPolicy: {
         type: "dangerFullAccess",
@@ -251,6 +277,13 @@ describe("buildTurnStartParams", () => {
 });
 
 describe("Codex MCP elicitation approvals", () => {
+  it("advertises form elicitation support to Codex", () => {
+    NodeAssert.equal(
+      buildCodexSessionInitializeParams().capabilities?.mcpServerOpenaiFormElicitation,
+      true,
+    );
+  });
+
   const request = {
     mode: "form",
     message: "Allow ChatGPT to use Safari?",
@@ -259,7 +292,7 @@ describe("Codex MCP elicitation approvals", () => {
     turnId: "turn-1",
     _meta: {
       app_name: "Safari",
-      persist: ["session", "always"],
+      persist: ["turn", "session", "always"],
     },
     requestedSchema: {
       type: "object",
@@ -268,6 +301,7 @@ describe("Codex MCP elicitation approvals", () => {
           type: "string",
           oneOf: [
             { const: "once", title: "Allow once" },
+            { const: "turn", title: "Allow for this turn" },
             { const: "session", title: "Allow for this session" },
             { const: "always", title: "Always allow Safari" },
           ],
@@ -283,6 +317,7 @@ describe("Codex MCP elicitation approvals", () => {
       options: [
         { decision: "cancel", label: "Cancel" },
         { decision: "decline", label: "Decline" },
+        { decision: "acceptForTurn", label: "Allow for this turn" },
         { decision: "acceptForSession", label: "Allow for this session" },
         { decision: "acceptAlways", label: "Always allow Safari" },
         { decision: "accept", label: "Approve" },
@@ -308,6 +343,14 @@ describe("Codex MCP elicitation approvals", () => {
       action: "accept",
       _meta: { persist: "session" },
       content: { approval: "session" },
+    });
+  });
+
+  it("returns turn-scoped approval in the MCP response", () => {
+    NodeAssert.deepStrictEqual(toMcpElicitationResponse(request, "acceptForTurn"), {
+      action: "accept",
+      _meta: { persist: "turn" },
+      content: { approval: "turn" },
     });
   });
 
@@ -539,12 +582,26 @@ describe("T3 browser developer instructions", () => {
   });
 });
 
-describe("hasConfiguredMcpServer", () => {
+describe("Codex MCP configuration detection", () => {
   it("detects inline Codex MCP configuration arguments", () => {
     NodeAssert.equal(hasConfiguredMcpServer(undefined), false);
     NodeAssert.equal(hasConfiguredMcpServer(["--model", "gpt-5.4"]), false);
     NodeAssert.equal(
       hasConfiguredMcpServer(["-c", 'mcp_servers.t3-code.url="http://127.0.0.1/mcp"']),
+      true,
+    );
+  });
+
+  it("does not mistake Computer Use for T3's collaborative browser", () => {
+    NodeAssert.equal(
+      hasConfiguredT3McpServer([
+        "-c",
+        'mcp_servers.computer-use.command="/Applications/Computer Use"',
+      ]),
+      false,
+    );
+    NodeAssert.equal(
+      hasConfiguredT3McpServer(["-c", 'mcp_servers.t3-code.url="http://127.0.0.1/mcp"']),
       true,
     );
   });

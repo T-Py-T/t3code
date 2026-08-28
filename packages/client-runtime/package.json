@@ -59,6 +59,10 @@
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"
     },
+    "./state/computerUseActivity": {
+      "types": "./src/state/computerUseActivity.ts",
+      "default": "./src/state/computerUseActivity.ts"
+    },
     "./state/entities": {
       "types": "./src/state/entities.ts",
       "default": "./src/state/entities.ts"

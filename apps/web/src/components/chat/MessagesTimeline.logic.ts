@@ -857,6 +857,7 @@ export function deriveMessagesTimelineRows(input: {
           (entry) =>
             workLogEntryIsToolLike(entry) &&
             entry.agentSpawn === undefined &&
+            entry.computerUse === undefined &&
             entry.tone !== "error",
         );
         const activeInProgressToolEntries = visibleGroupedEntries.filter(workEntryIsInActiveRun);
@@ -925,19 +926,22 @@ export function deriveMessagesTimelineRows(input: {
         } else {
           const groupId = workGroupId(timelineEntry.id, timelineEntry.entry);
           const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
-          // Agent-spawn CTA rows are always visible: a running fleet must
-          // never hide behind a "+N tool calls" toggle. Selection is by
-          // membership (spawn OR recent-tail), preserving the group's
+          // Agent-spawn CTA and Computer Use control rows are always visible:
+          // active control must never hide behind a "+N tool calls" toggle.
+          // Selection is by membership (special row OR recent-tail), preserving the group's
           // chronological order in both collapsed and expanded states
           // (review finding: concatenating two filtered lists moved a
           // mid-group spawn row above earlier tool rows).
           const overflowCandidates = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn === undefined,
+            (entry) => entry.agentSpawn === undefined && entry.computerUse === undefined,
           );
           const hiddenEntries = overflowCandidates.slice(0, -MAX_VISIBLE_WORK_LOG_ENTRIES);
           const hiddenIds = new Set(hiddenEntries.map((entry) => entry.id));
           const visibleEntries = visibleGroupedEntries.filter(
-            (entry) => entry.agentSpawn !== undefined || !hiddenIds.has(entry.id),
+            (entry) =>
+              entry.agentSpawn !== undefined ||
+              entry.computerUse !== undefined ||
+              !hiddenIds.has(entry.id),
           );
           const renderedEntries = expanded ? visibleGroupedEntries : visibleEntries;
 

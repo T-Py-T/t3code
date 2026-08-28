@@ -47,6 +47,10 @@ it("exports provider-compatible object schemas with described parameters", () =>
       schema.properties?.tabId,
       `${tool.name} must allow an explicit collaborative browser tab target`,
     ).toBeDefined();
+    expect(
+      schema.properties?.browser,
+      `${tool.name} must expose built-in and dedicated external browser routing`,
+    ).toBeDefined();
     for (const [field, fieldSchema] of Object.entries(schema.properties ?? {})) {
       expect(
         schemaHasDescription(fieldSchema),
@@ -56,7 +60,7 @@ it("exports provider-compatible object schemas with described parameters", () =>
   }
 });
 
-it("exports exact object result schemas for preview actions", () => {
+it("exports governed result schemas for preview actions", () => {
   const actionNames = [
     "preview_click",
     "preview_type",
@@ -65,10 +69,25 @@ it("exports exact object result schemas for preview actions", () => {
     "preview_wait_for",
   ] as const;
   for (const name of actionNames) {
-    expect(Tool.getJsonSchemaFromSchema(PreviewToolkit.tools[name].successSchema)).toEqual({
+    const schema = Tool.getJsonSchemaFromSchema(PreviewToolkit.tools[name].successSchema) as {
+      readonly anyOf?: ReadonlyArray<unknown>;
+    };
+    expect(schema.anyOf).toHaveLength(2);
+    expect(schema.anyOf?.[0]).toMatchObject({
       type: "object",
       additionalProperties: false,
       description: "The preview action completed successfully.",
+    });
+    expect(schema.anyOf?.[1]).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        _tag: { type: "string", enum: ["policy"] },
+        decision: {},
+        target: {},
+        risk: {},
+      },
+      required: ["_tag", "decision", "target", "risk"],
     });
   }
 });

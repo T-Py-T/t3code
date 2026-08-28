@@ -77,6 +77,7 @@ const PROVIDER = ProviderDriverKind.make("codex");
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly additionalAppServerArgs?: ReadonlyArray<string>;
   readonly makeRuntime?: (
     options: CodexSessionRuntimeOptions,
   ) => Effect.Effect<
@@ -128,6 +129,45 @@ function mapCodexRuntimeError(
 type CodexLifecycleItem =
   | EffectCodexSchema.V2ItemStartedNotification["item"]
   | EffectCodexSchema.V2ItemCompletedNotification["item"];
+
+const PRIVATE_T3_TOOL_PREFIXES = ["computer_", "preview_"] as const;
+
+export function sanitizeCodexPrivateToolPayload(
+  payload: ProviderEvent["payload"],
+): ProviderEvent["payload"] {
+  if (typeof payload !== "object" || payload === null || !("item" in payload)) return payload;
+  const item = payload.item;
+  const tool = typeof item === "object" && item !== null && "tool" in item ? item.tool : undefined;
+  if (
+    typeof item !== "object" ||
+    item === null ||
+    !("type" in item) ||
+    item.type !== "mcpToolCall" ||
+    !("server" in item) ||
+    item.server !== "t3-code" ||
+    typeof tool !== "string" ||
+    !PRIVATE_T3_TOOL_PREFIXES.some((prefix) => tool.startsWith(prefix))
+  ) {
+    return payload;
+  }
+  const value = payload as Record<string, unknown>;
+  const metadata = item as Record<string, unknown>;
+  return {
+    ...(typeof value.startedAtMs === "number" ? { startedAtMs: value.startedAtMs } : {}),
+    ...(typeof value.completedAtMs === "number" ? { completedAtMs: value.completedAtMs } : {}),
+    ...(typeof value.threadId === "string" ? { threadId: value.threadId.slice(0, 512) } : {}),
+    ...(typeof value.turnId === "string" ? { turnId: value.turnId.slice(0, 512) } : {}),
+    item: {
+      type: "mcpToolCall",
+      ...(typeof metadata.id === "string" ? { id: metadata.id.slice(0, 512) } : {}),
+      server: "t3-code",
+      tool: tool.slice(0, 512),
+      ...(typeof metadata.status === "string" ? { status: metadata.status.slice(0, 64) } : {}),
+      ...(typeof metadata.durationMs === "number" ? { durationMs: metadata.durationMs } : {}),
+      ...(metadata.error === null ? { error: null } : {}),
+    },
+  };
+}
 
 type CodexToolUserInputQuestion =
   | EffectCodexSchema.ServerRequest__ToolRequestUserInputQuestion
@@ -458,7 +498,7 @@ function runtimeEventBase(
     raw: {
       source: eventRawSource(event),
       method: event.method,
-      payload: event.payload ?? {},
+      payload: sanitizeCodexPrivateToolPayload(event.payload) ?? {},
     },
   };
 }
@@ -498,7 +538,9 @@ function mapItemLifecycle(
       ...(status ? { status } : {}),
       ...(itemTitle(itemType, item) ? { title: itemTitle(itemType, item) } : {}),
       ...(detail ? { detail } : {}),
-      ...(event.payload !== undefined ? { data: event.payload } : {}),
+      ...(event.payload !== undefined
+        ? { data: sanitizeCodexPrivateToolPayload(event.payload) }
+        : {}),
     },
   };
 }
@@ -866,6 +908,16 @@ function mapToRuntimeEvents(
                 appName: elicitationApproval.appName,
                 options: elicitationApproval.options,
               }
+            : {}),
+          ...(event.method === "mcpServer/elicitation/request" &&
+          event.payload !== undefined &&
+          typeof event.payload === "object" &&
+          event.payload !== null &&
+          "message" in event.payload &&
+          typeof event.payload.message === "string" &&
+          (event.payload.message.startsWith("Allow T3 Computer Use") ||
+            event.payload.message.startsWith("Confirm T3 Computer Use"))
+            ? { computerUseApproval: true as const }
             : {}),
           ...(event.payload !== undefined ? { args: event.payload } : {}),
         },
@@ -1678,6 +1730,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const appServerArgs = [
+          ...(options?.additionalAppServerArgs ?? []),
+          ...(mcpSession
+            ? [
+                "-c",
+                `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
+                "-c",
+                'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+              ]
+            : []),
+        ];
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -1700,14 +1763,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   ...(options?.environment ?? process.env),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
-                appServerArgs: [
-                  "-c",
-                  `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
-                  "-c",
-                  'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
-                ],
               }
             : {}),
+          ...(appServerArgs.length > 0 ? { appServerArgs } : {}),
         };
         const sessionScope = yield* Scope.make("sequential");
         let sessionScopeTransferred = false;

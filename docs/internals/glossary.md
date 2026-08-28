@@ -10,6 +10,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
+- [Computer Use](#computer-use)
 - [Checkpointing](#checkpointing)
 
 ## Concepts
@@ -120,6 +121,63 @@ A point-in-time view of state. The word is used in multiple layers, including or
 
 The per-driver list of current model slugs that decides which models land in the model picker's legacy section. Bundled at `apps/server/src/provider/model-manifest.json` and refreshed at runtime from the same file on `main`, so classification updates ship as commits instead of releases. See the [provider architecture][16] model manifest section.
 
+### Computer Use
+
+Computer Use is the T3 environment capability that lets an agent inspect and operate graphical
+applications while an authorized user observes and controls access. See the
+[T3 Computer Use specification][25].
+
+#### Computer Use host
+
+The signed T3 process on the environment machine that owns OS permissions and performs UI
+operations. A remote client can direct the host but is not itself the host.
+
+#### Agent caller
+
+The provider session asking T3 Computer Use to observe or act. The caller does not own OS
+permission, app grants, or persistent history.
+
+#### Control lease
+
+The exclusive, short-lived grant binding one provider turn to one Computer Use host. Stop,
+interruption, disconnect, completion, or takeover ends it.
+
+#### Computer target
+
+The app, window, browser tab, or structured add-in surface being inspected or operated. Policy uses
+stable platform identity rather than the display name alone.
+
+#### Observation
+
+A point-in-time screenshot and structured description of a computer target. Actions derived from an
+observation identify it so T3 can reject stale coordinates or state.
+
+#### Action batch
+
+An ordered group of UI actions applied to one computer target. A batch stops at the first failure or
+policy decision that requires the user.
+
+#### App grant
+
+A user decision allowing inspection or operation of one computer target for a bounded duration or
+persistently on one environment host.
+
+#### Action confirmation
+
+A point-of-risk user decision for a consequential action. It is separate from and never implied by
+an app grant.
+
+#### Takeover
+
+The user ending the active control lease and reclaiming exclusive physical control. Agent control
+does not resume without a new lease.
+
+#### Semantic browser control
+
+Browser automation using DOM, accessibility, extension, or browser-protocol semantics rather than
+visual coordinates alone. It shares Computer Use policy and history but has a separate tool
+interface.
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].
@@ -183,3 +241,4 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ./computer-use.md

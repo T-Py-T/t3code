@@ -41,6 +41,13 @@ describe("PreviewAutomationOpenInput", () => {
   it("retains the legacy show visibility alias", () => {
     expect(decodeOpenInput({ show: false })).toEqual({ show: false });
   });
+
+  it("can select the dedicated signed-in external browser profile", () => {
+    expect(decodeOpenInput({ browser: "external", url: "https://example.com" })).toEqual({
+      browser: "external",
+      url: "https://example.com",
+    });
+  });
 });
 
 describe("PreviewNavStatus", () => {
@@ -220,6 +227,18 @@ describe("PreviewAutomationStatus", () => {
         viewport: { width: 412, height: 915 },
       }).viewport,
     ).toEqual({ width: 412, height: 915 });
+    expect(
+      decodeAutomationStatus({
+        ...base,
+        browser: "external",
+        connectionState: "connected",
+        profileName: "T3 Code Computer Use",
+      }),
+    ).toMatchObject({
+      browser: "external",
+      connectionState: "connected",
+      profileName: "T3 Code Computer Use",
+    });
   });
 });
 

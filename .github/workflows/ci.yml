@@ -100,6 +100,9 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3]
+        # Keep the denominator in matrix context: GitHub exposes
+        # strategy.job-total, but local ACT does not populate it.
+        total: [3]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -123,7 +126,7 @@ jobs:
         env:
           T3CODE_TRANSFER_BUDGET_REPORT_PATH: ${{ runner.temp }}/t3code-transfer-budget.md
           T3CODE_TRANSFER_BUDGET_RESULT_PATH: ${{ runner.temp }}/thread-transfer-result.json
-        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ matrix.total }}
 
       # src/server.test.ts writes the budget report, so exactly one shard
       # produces these files. Gating the upload on their presence keeps a
@@ -149,7 +152,10 @@ jobs:
           fi
 
       - name: Upload thread transfer result
-        if: always() && steps.transfer_budget.outputs.present == 'true'
+        # ACT 0.2.89's local artifact server cannot decode the v7 action's
+        # `mime_type` field. The report is still generated and published above;
+        # only the GitHub-hosted artifact transfer is skipped locally.
+        if: always() && steps.transfer_budget.outputs.present == 'true' && env.ACT != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: thread-transfer-results
@@ -182,6 +188,36 @@ jobs:
 
       - name: Test resource monitor
         run: cargo test --locked --manifest-path native/resource-monitor/Cargo.toml
+
+  computer_use_windows:
+    name: Windows Computer Use
+    runs-on: blacksmith-8vcpu-windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check Windows Computer Use formatting
+        run: dotnet format native/computer-use-windows/T3CodeComputerUse.csproj --verify-no-changes
+
+      - name: Build Windows Computer Use helper
+        run: dotnet build native/computer-use-windows/T3CodeComputerUse.csproj --configuration Release
+
+      - name: Test Windows Computer Use protocol and policy
+        run: dotnet run --project native/computer-use-windows/Tests/T3CodeComputerUse.Tests.csproj --configuration Release
+
+      - name: Publish Windows Computer Use helper
+        run: dotnet publish native/computer-use-windows/T3CodeComputerUse.csproj --configuration Release --runtime win-x64 --self-contained true --output native/computer-use-windows/publish/win-x64 -p:PublishSingleFile=true
 
   # The static analysis below needs a macOS runner, which bills ~6.7x a Linux
   # minute, so gate it on the native sources it actually lints instead of paying

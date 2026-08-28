@@ -300,6 +300,19 @@ export class ResourceMonitorBuildOutputMissingError extends Schema.TaggedErrorCl
   }
 }
 
+export class ComputerUseHelperBuildOutputMissingError extends Schema.TaggedErrorClass<ComputerUseHelperBuildOutputMissingError>()(
+  "ComputerUseHelperBuildOutputMissingError",
+  {
+    binaryPath: Schema.String,
+    buildTarget: Schema.String,
+    arch: BuildArch,
+  },
+) {
+  override get message(): string {
+    return `Computer Use helper build for ${this.buildTarget} did not produce ${this.binaryPath}.`;
+  }
+}
+
 const desktopIconPlatformNames = {
   mac: "macOS",
   linux: "Linux",
@@ -560,6 +573,8 @@ const WindowsPackagedPayloadValidationReason = Schema.Literals([
   "sidecar-invalid",
   "unpacked-native-missing",
   "resource-monitor-missing",
+  "computer-use-helper-missing",
+  "computer-use-helper-unsigned",
   "file-limit-exceeded",
 ]);
 
@@ -583,6 +598,12 @@ export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorCla
     }
     if (this.reason === "resource-monitor-missing") {
       return "Windows packaged payload is missing the resource monitor executable.";
+    }
+    if (this.reason === "computer-use-helper-missing") {
+      return "Windows packaged payload is missing the Computer Use helper executable.";
+    }
+    if (this.reason === "computer-use-helper-unsigned") {
+      return "Windows signed package contains a Computer Use helper without a valid Authenticode signature.";
     }
     if (this.reason === "sidecar-invalid") {
       return "Windows packaged payload contains an invalid server.asar sidecar.";
@@ -856,6 +877,18 @@ export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
+  },
+] as const;
+export const MAC_COMPUTER_USE_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/computer-use",
+    to: "computer-use",
+  },
+] as const;
+export const WINDOWS_COMPUTER_USE_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/computer-use",
+    to: "computer-use",
   },
 ] as const;
 
@@ -1676,6 +1709,18 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
   },
 );
 
+/**
+ * The extracted sidecar can only execute against native dependencies for the
+ * host OS. Cross-builds still receive the structural/native payload checks and
+ * must execute this check later on the target platform acceptance runner.
+ */
+export function shouldRunPackagedServerSelfCheck(
+  hostPlatform: NodeJS.Platform,
+  targetPlatform: typeof BuildPlatform.Type,
+): boolean {
+  return detectHostBuildPlatform(hostPlatform) === targetPlatform;
+}
+
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -1758,6 +1803,192 @@ export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* 
     yield* fs.chmod(destinationPath, 0o755);
   }
 });
+
+export function resolveMacComputerUseSwiftArchitectures(
+  arch: typeof BuildArch.Type,
+): ReadonlyArray<"arm64" | "x86_64"> {
+  if (arch === "universal") return ["arm64", "x86_64"];
+  return [arch === "arm64" ? "arm64" : "x86_64"];
+}
+
+export const stageMacComputerUseHelper = Effect.fn("stageMacComputerUseHelper")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const packagePath = path.join(input.repoRoot, "native/computer-use-macos");
+  const binaryName = "T3CodeComputerUse";
+  const swiftArchitectures = resolveMacComputerUseSwiftArchitectures(input.arch);
+  const reuseHelper = yield* Config.boolean("T3CODE_DESKTOP_REUSE_COMPUTER_USE_HELPER").pipe(
+    Config.withDefault(false),
+  );
+  const builtBinaries: string[] = [];
+
+  for (const swiftArchitecture of swiftArchitectures) {
+    if (!reuseHelper) {
+      const spawnCommand = yield* resolveSpawnCommand("swift", [
+        "build",
+        "--configuration",
+        "release",
+        "--package-path",
+        packagePath,
+        "--arch",
+        swiftArchitecture,
+      ]);
+      yield* runCommand(
+        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          cwd: input.repoRoot,
+          shell: spawnCommand.shell,
+        }),
+        {
+          label: `swift build Computer Use helper (${swiftArchitecture})`,
+          verbose: input.verbose,
+        },
+      );
+    }
+
+    const binaryPath = path.join(
+      packagePath,
+      ".build",
+      `${swiftArchitecture}-apple-macosx`,
+      "release",
+      binaryName,
+    );
+    if (!(yield* fs.exists(binaryPath))) {
+      return yield* new ComputerUseHelperBuildOutputMissingError({
+        binaryPath,
+        buildTarget: swiftArchitecture,
+        arch: input.arch,
+      });
+    }
+    if (reuseHelper) {
+      yield* Effect.log(
+        `[desktop-artifact] Reusing cached Computer Use helper (${swiftArchitecture}).`,
+      );
+    }
+    builtBinaries.push(binaryPath);
+  }
+
+  const destinationDirectory = path.join(input.stageResourcesDir, "computer-use");
+  const destinationPath = path.join(destinationDirectory, binaryName);
+  yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
+  yield* fs.makeDirectory(destinationDirectory, { recursive: true });
+
+  if (builtBinaries.length === 1) {
+    yield* fs.copyFile(builtBinaries[0]!, destinationPath);
+  } else {
+    yield* runCommand(
+      ChildProcess.make("lipo", ["-create", ...builtBinaries, "-output", destinationPath]),
+      {
+        label: "lipo Computer Use helper universal binary",
+        verbose: input.verbose,
+      },
+    );
+  }
+  yield* fs.chmod(destinationPath, 0o755);
+});
+
+export function resolveWindowsComputerUseRuntimeIdentifier(
+  arch: typeof BuildArch.Type,
+): "win-arm64" | "win-x64" {
+  return arch === "arm64" ? "win-arm64" : "win-x64";
+}
+
+export function makeWindowsComputerUsePublishArguments(input: {
+  readonly projectPath: string;
+  readonly runtimeIdentifier: "win-arm64" | "win-x64";
+  readonly publishDirectory: string;
+}): ReadonlyArray<string> {
+  return [
+    "publish",
+    input.projectPath,
+    "--configuration",
+    "Release",
+    "--runtime",
+    input.runtimeIdentifier,
+    "--self-contained",
+    "true",
+    "--output",
+    input.publishDirectory,
+    "-p:PublishSingleFile=true",
+    "-p:IncludeNativeLibrariesForSelfExtract=true",
+  ];
+}
+
+export const stageWindowsComputerUseHelper = Effect.fn("stageWindowsComputerUseHelper")(
+  function* (input: {
+    readonly repoRoot: string;
+    readonly stageResourcesDir: string;
+    readonly arch: typeof BuildArch.Type;
+    readonly verbose: boolean;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const projectPath = path.join(
+      input.repoRoot,
+      "native/computer-use-windows/T3CodeComputerUse.csproj",
+    );
+    const binaryName = "T3CodeComputerUse.exe";
+    const runtimeIdentifier = resolveWindowsComputerUseRuntimeIdentifier(input.arch);
+    const publishDirectory = path.join(
+      input.repoRoot,
+      "native/computer-use-windows/publish",
+      runtimeIdentifier,
+    );
+    const reuseHelper = yield* Config.boolean("T3CODE_DESKTOP_REUSE_COMPUTER_USE_HELPER").pipe(
+      Config.withDefault(false),
+    );
+
+    if (!reuseHelper) {
+      const spawnCommand = yield* resolveSpawnCommand(
+        "dotnet",
+        makeWindowsComputerUsePublishArguments({
+          projectPath,
+          runtimeIdentifier,
+          publishDirectory,
+        }),
+      );
+      yield* runCommand(
+        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          cwd: input.repoRoot,
+          shell: spawnCommand.shell,
+        }),
+        {
+          label: `dotnet publish Computer Use helper (${runtimeIdentifier})`,
+          verbose: input.verbose,
+        },
+      );
+    }
+
+    const binaryPath = path.join(
+      input.repoRoot,
+      "native/computer-use-windows/publish",
+      runtimeIdentifier,
+      binaryName,
+    );
+    if (!(yield* fs.exists(binaryPath))) {
+      return yield* new ComputerUseHelperBuildOutputMissingError({
+        binaryPath,
+        buildTarget: runtimeIdentifier,
+        arch: input.arch,
+      });
+    }
+    if (reuseHelper) {
+      yield* Effect.log(
+        `[desktop-artifact] Reusing cached Computer Use helper (${runtimeIdentifier}).`,
+      );
+    }
+
+    const destinationDirectory = path.join(input.stageResourcesDir, "computer-use");
+    const destinationPath = path.join(destinationDirectory, binaryName);
+    yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* fs.makeDirectory(destinationDirectory, { recursive: true });
+    yield* fs.copyFile(binaryPath, destinationPath);
+  },
+);
 
 function generateMacIconSet(
   sourcePng: string,
@@ -2093,6 +2324,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "mac" ? MAC_COMPUTER_USE_EXTRA_RESOURCES : []),
+      ...(platform === "win" ? WINDOWS_COMPUTER_USE_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
     ],
   };
@@ -2193,6 +2426,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // of code signing. Disabling it for local unsigned builds leaves the
       // packaged executable with Electron's stock icon.
       signAndEditExecutable: true,
+      // electron-builder applies this list to app binaries and extraResources.
+      // Keep the helper's nested executable signing an explicit release contract.
+      signExts: [".exe", ".dll"],
     };
     if (signed) {
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
@@ -2546,11 +2782,13 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly stageDistDir: string;
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
+  readonly signed?: boolean;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const hostPlatform = yield* HostProcessPlatform;
   const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
@@ -2645,6 +2883,41 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
 
+  const computerUseHelperPath = path.join(resourcesDir, "computer-use", "T3CodeComputerUse.exe");
+  if (!(yield* isFile(computerUseHelperPath))) {
+    return yield* new WindowsPackagedPayloadValidationError({
+      reason: "computer-use-helper-missing",
+      packagedAppDir,
+      missingFiles: ["computer-use/T3CodeComputerUse.exe"],
+    });
+  }
+
+  if (input.signed) {
+    const signature = yield* spawnAndCollectOutput(
+      ChildProcess.make("powershell.exe", [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[string](Get-AuthenticodeSignature -LiteralPath $args[0]).Status",
+        computerUseHelperPath,
+      ]),
+    ).pipe(
+      Effect.timeout("30 seconds"),
+      Effect.orElseSucceed(() => ({ stdout: "", stderr: "", exitCode: -1 })),
+    );
+    if (signature.exitCode !== 0 || signature.stdout.trim() !== "Valid") {
+      return yield* new WindowsPackagedPayloadValidationError({
+        reason: "computer-use-helper-unsigned",
+        packagedAppDir,
+        missingFiles: ["computer-use/T3CodeComputerUse.exe"],
+        cause: new Error(
+          `Authenticode status: ${signature.stdout.trim() || signature.stderr.trim() || "unavailable"}`,
+        ),
+      });
+    }
+  }
+
   const fileCount = yield* countPayloadFiles(packagedAppDir);
   if (fileCount > fileLimit) {
     return yield* new WindowsPackagedPayloadValidationError({
@@ -2663,10 +2936,16 @@ export const validateWindowsPackagedPayload = Effect.fn(
     verbose: input.verbose ?? false,
   });
 
-  yield* verifyPackagedBundleIsSelfContained({
-    asarPath,
-    verbose: input.verbose ?? false,
-  });
+  if (shouldRunPackagedServerSelfCheck(hostPlatform, "win")) {
+    yield* verifyPackagedBundleIsSelfContained({
+      asarPath,
+      verbose: input.verbose ?? false,
+    });
+  } else {
+    yield* Effect.logWarning(
+      `[desktop-artifact] Deferred the executable server sidecar self-check to the Windows acceptance run because the package was built on ${hostPlatform}.`,
+    );
+  }
 
   yield* Effect.log(
     `[desktop-artifact] Validated Windows payload (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives).`,
@@ -2880,6 +3159,22 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     arch: options.arch,
     verbose: options.verbose,
   });
+  if (options.platform === "mac") {
+    yield* stageMacComputerUseHelper({
+      repoRoot,
+      stageResourcesDir,
+      arch: options.arch,
+      verbose: options.verbose,
+    });
+  }
+  if (options.platform === "win") {
+    yield* stageWindowsComputerUseHelper({
+      repoRoot,
+      stageResourcesDir,
+      arch: options.arch,
+      verbose: options.verbose,
+    });
+  }
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -3131,6 +3426,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       stageDistDir,
       appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
       targetArch: options.arch,
+      signed: options.signed,
       verbose: options.verbose,
     });
   }

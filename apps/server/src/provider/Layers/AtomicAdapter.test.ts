@@ -9,8 +9,14 @@ import { it } from "@effect/vitest";
 import {
   ApprovalRequestId,
   AtomicSettings,
+  ComputerUseHostId,
+  ComputerUseTargetId,
+  EnvironmentId,
   ProviderDriverKind,
+  ProviderInstanceId,
+  RuntimeTaskId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -22,7 +28,9 @@ import * as Stream from "effect/Stream";
 import { assert, describe } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
-import { makeAtomicAdapter } from "./AtomicAdapter.ts";
+import * as ComputerUsePolicy from "../../computerUse/ComputerUsePolicy.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { makeAtomicAdapter, sanitizePiComputerUseEvent } from "./AtomicAdapter.ts";
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockPeer = NodePath.join(__dirname, "../testFixtures/piRpcMockPeer.mjs");
@@ -34,6 +42,18 @@ function writeMockWrapper(): string {
   NodeFS.writeFileSync(
     wrapper,
     `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"\n`,
+    "utf8",
+  );
+  NodeFS.chmodSync(wrapper, 0o755);
+  return wrapper;
+}
+
+function writeCapturingMockWrapper(capturePath: string): string {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "atomic-adapter-mcp-test-"));
+  const wrapper = NodePath.join(dir, "mock-atomic.sh");
+  NodeFS.writeFileSync(
+    wrapper,
+    `#!/bin/sh\nprintf '%s\\n' "$T3CODE_MCP_ENDPOINT" "$T3CODE_MCP_AUTHORIZATION" "$T3CODE_MCP_CAPABILITIES" > ${JSON.stringify(capturePath)}\nprintf '%s\\n' "$@" >> ${JSON.stringify(capturePath)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(mockPeer)} "$@"\n`,
     "utf8",
   );
   NodeFS.chmodSync(wrapper, 0o755);
@@ -54,6 +74,109 @@ function makeAdapter(options?: { readonly requestTimeout?: Duration.Input }) {
 }
 
 describe("AtomicAdapter", () => {
+  it("persists only bounded metadata for Pi/Atomic computer and preview events", () => {
+    const sanitized = sanitizePiComputerUseEvent({
+      type: "tool_execution_end",
+      toolName: "computer_observe",
+      toolCallId: "tool-1",
+      args: { targetId: "target-1", text: "TYPED_SECRET" },
+      result: {
+        content: [{ type: "image", mimeType: "image/png", data: "SCREENSHOT_SENTINEL" }],
+        details: {
+          observationId: "observation-1",
+          accessibility: { value: "ACCESSIBILITY_SECRET" },
+          screenshot: { mimeType: "image/png", base64: "SCREENSHOT_SENTINEL" },
+        },
+      },
+    });
+
+    assert.notInclude(JSON.stringify(sanitized), "SCREENSHOT_SENTINEL");
+    assert.notInclude(JSON.stringify(sanitized), "TYPED_SECRET");
+    assert.notInclude(JSON.stringify(sanitized), "ACCESSIBILITY_SECRET");
+    assert.deepEqual(sanitized, {
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      toolName: "computer_observe",
+    });
+    assert.deepEqual(
+      sanitizePiComputerUseEvent({
+        type: "tool_execution_update",
+        toolName: "preview_type",
+        partialResult: { text: "PREVIEW_SECRET" },
+        isError: false,
+      }),
+      { type: "tool_execution_update", toolName: "preview_type", isError: false },
+    );
+    assert.deepEqual(
+      sanitizePiComputerUseEvent(
+        {
+          type: "tool_execution_end",
+          toolCallId: "tool-2",
+          result: { details: { accessibility: "ACCESSIBILITY_SECRET" } },
+        },
+        new Map([["tool-2", "computer_observe"]]),
+      ),
+      {
+        type: "tool_execution_end",
+        toolCallId: "tool-2",
+        toolName: "computer_observe",
+      },
+    );
+  });
+
+  it.live("attaches the private T3 Computer Use extension to Pi-compatible sessions", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("atomic-computer-use-extension");
+      const capturePath = NodePath.join(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "atomic-adapter-mcp-capture-")),
+        "launch.txt",
+      );
+      const binaryPath = writeCapturingMockWrapper(capturePath);
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-1"),
+        threadId,
+        providerSessionId: "provider-session-1",
+        providerInstanceId: ProviderInstanceId.make("atomic"),
+        capabilities: new Set(["computer", "preview"]),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer test-session-token",
+      });
+
+      const adapter = yield* makeAtomicAdapter(
+        decodeAtomicSettings({ enabled: true, binaryPath }),
+      ).pipe(
+        Effect.provide(
+          ServerConfig.layerTest(process.cwd(), { prefix: "atomic-adapter-mcp-test-" }).pipe(
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const launch = NodeFS.readFileSync(capturePath, "utf8").trim().split("\n");
+      assert.equal(launch[0], "http://127.0.0.1:43123/mcp");
+      assert.equal(launch[1], "Bearer test-session-token");
+      assert.equal(launch[2], "computer,preview");
+      const extensionFlag = launch.indexOf("--extension");
+      assert.isAtLeast(extensionFlag, 3);
+      const extensionPath = launch[extensionFlag + 1];
+      assert.isString(extensionPath);
+      assert.isTrue(NodeFS.existsSync(extensionPath!));
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "computer_status");
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "preview_snapshot");
+      assert.include(NodeFS.readFileSync(extensionPath!, "utf8"), "t3-workflow-action");
+
+      yield* adapter.stopSession(threadId);
+      assert.isFalse(NodeFS.existsSync(extensionPath!));
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("keeps the Pi-derived process alive and completes only after agent_settled", () =>
     Effect.gen(function* () {
       const adapter = yield* makeAdapter();
@@ -286,6 +409,156 @@ describe("AtomicAdapter", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.live("surfaces and answers background Atomic workflow prompts without a model turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-background-workflow-input");
+      const requestedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "user-input.requested"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1:wf:tool:finish",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "/t3-workflow-input-test",
+        attachments: [],
+      });
+
+      const requested = yield* Fiber.join(requestedFiber).pipe(Effect.map(Option.getOrThrow));
+      if (requested.type !== "user-input.requested" || requested.requestId === undefined) {
+        return assert.fail("Expected a background Atomic workflow prompt.");
+      }
+      assert.equal(requested.payload.questions[0]?.question, "Continue the Atomic workflow?");
+      assert.deepEqual(
+        requested.payload.questions[0]?.options.map((option) => option.label),
+        ["Yes", "No"],
+      );
+      const questionId = requested.payload.questions[0]?.id;
+      assert.isString(questionId);
+
+      yield* adapter.respondToUserInput(threadId, ApprovalRequestId.make(requested.requestId), {
+        [questionId!]: "Yes",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "user-input.resolved" && event.requestId === requested.requestId,
+        ),
+      );
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1" &&
+            event.payload.summary === "WORKFLOW_INPUT_OK",
+        ),
+      );
+      const prepareTool = events.find(
+        (event) =>
+          event.type === "task.completed" &&
+          event.payload.taskId === "workflow-input-run-1:wf:tool:prepare",
+      );
+      assert.equal(
+        prepareTool?.type === "task.completed" ? prepareTool.payload.title : undefined,
+        "Prepare host check",
+      );
+      assert.equal(
+        prepareTool?.type === "task.completed" ? prepareTool.payload.role : undefined,
+        "workflow tool",
+      );
+      const finishTool = events.find(
+        (event) =>
+          event.type === "task.completed" &&
+          event.payload.taskId === "workflow-input-run-1:wf:tool:finish",
+      );
+      assert.equal(
+        finishTool?.type === "task.completed" ? finishTool.payload.summary : undefined,
+        "DONE",
+      );
+      assert.deepEqual(
+        finishTool?.type === "task.completed" ? finishTool.payload.dependsOnTaskIds : undefined,
+        [RuntimeTaskId.make("workflow-input-run-1:wf:workflow-input-confirm")],
+      );
+      assert.isUndefined(
+        events.find(
+          (event) =>
+            event.type === "item.started" && event.payload.itemType === "assistant_message",
+        ),
+        "the private workflow bridge must not start a model turn",
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("stops active Atomic workflow tasks when their provider session closes", () =>
+    Effect.gen(function* () {
+      const adapter = yield* makeAdapter();
+      const threadId = ThreadId.make("atomic-stop-background-workflow");
+      const requestedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "user-input.requested"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "/t3-workflow-input-test",
+        attachments: [],
+      });
+      yield* Fiber.join(requestedFiber).pipe(Effect.map(Option.getOrThrow));
+
+      yield* adapter.stopSession(threadId);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1:wf:workflow-input-confirm" &&
+            event.payload.status === "stopped",
+        ),
+      );
+      assert.isDefined(
+        events.find(
+          (event) =>
+            event.type === "task.completed" &&
+            event.payload.taskId === "workflow-input-run-1" &&
+            event.payload.status === "stopped",
+        ),
+      );
+      assert.isDefined(events.find((event) => event.type === "user-input.resolved"));
+      assert.equal(events.at(-1)?.type, "session.exited");
+    }).pipe(Effect.scoped),
+  );
+
   it.live("treats an extension load failure as recoverable when Pi keeps running", () =>
     Effect.gen(function* () {
       const adapter = yield* makeAdapter();
@@ -404,6 +677,96 @@ describe("AtomicAdapter", () => {
       const completed = yield* Fiber.join(completedFiber).pipe(Effect.map(Option.getOrThrow));
       assert.equal(completed.type, "turn.completed");
     }).pipe(Effect.scoped),
+  );
+
+  it.live("projects T3 Computer Use access as an approval and resumes only after acceptance", () =>
+    Effect.gen(function* () {
+      const policy = yield* ComputerUsePolicy.ComputerUsePolicy;
+      const policyInput: ComputerUsePolicy.ComputerUsePolicyInput = {
+        scope: {
+          environmentId: EnvironmentId.make("environment-computer-approval"),
+          hostId: ComputerUseHostId.make("host-computer-approval"),
+          threadId: ThreadId.make("atomic-computer-approval"),
+          turnId: TurnId.make("turn-computer-approval"),
+          providerSessionId: "provider-session-computer-approval",
+          providerInstanceId: ProviderInstanceId.make("atomic"),
+        },
+        target: {
+          targetId: ComputerUseTargetId.make("target-textedit"),
+          kind: "application",
+          displayName: "TextEdit",
+          applicationId: "com.apple.TextEdit",
+          stableIdentity: "macos:com.apple.TextEdit:APPLE",
+        },
+        access: "observe",
+        risk: "inspect",
+        runtimeMode: "full-access",
+      };
+      const approvalId = yield* policy.requestApproval({
+        input: policyInput,
+        decision: { _tag: "request-app-grant", access: "observe" },
+      });
+      assert.equal(approvalId, "computer-use-approval-0");
+
+      const adapter = yield* makeAdapter();
+      const threadId = policyInput.scope.threadId;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const requestedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "request.opened"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("atomic"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const sendFiber = yield* adapter
+        .sendTurn({ threadId, input: "/t3-computer-approval", attachments: [] })
+        .pipe(Effect.forkChild);
+      const requested = yield* Fiber.join(requestedFiber).pipe(Effect.map(Option.getOrThrow));
+      assert.equal(requested.type, "request.opened");
+      if (requested.type !== "request.opened" || requested.requestId === undefined) {
+        return assert.fail("Expected a Computer Use approval request.");
+      }
+      assert.equal(requested.payload.requestType, "mcp_elicitation_approval");
+      assert.equal(requested.payload.appName, "TextEdit");
+      assert.deepEqual(requested.payload.options, [
+        { decision: "accept", label: "Allow once" },
+        { decision: "acceptForTurn", label: "Allow for this turn" },
+        { decision: "acceptForSession", label: "Allow for this session" },
+        { decision: "acceptAlways", label: "Always allow on this computer" },
+        { decision: "decline", label: "Deny" },
+      ]);
+
+      yield* adapter.respondToRequest(
+        threadId,
+        ApprovalRequestId.make(requested.requestId),
+        "accept",
+      );
+      yield* Fiber.join(sendFiber);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.isDefined(
+        events.find(
+          (event) => event.type === "request.resolved" && event.payload.decision === "accept",
+        ),
+      );
+      assert.deepEqual(yield* policy.evaluate(policyInput), { _tag: "allow" });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ComputerUsePolicy.layer.pipe(
+          Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "computer-policy-test-" })),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    ),
   );
 
   it.live("stops a session while its prompt request is awaiting user input", () =>

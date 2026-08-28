@@ -300,6 +300,70 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("collapses Computer Use lifecycle updates into a structured mobile activity", () => {
+    const turnId = TurnId.make("turn-computer-use");
+    const target = {
+      displayName: "Notepad — T3 test",
+      stableIdentity: "windows:path:notepad.exe",
+    };
+    const thread = makeThread({
+      id: ThreadId.make("thread-computer-use"),
+      projectId: ProjectId.make("project-1"),
+      title: "Computer Use",
+      activities: [
+        makeActivity({
+          id: EventId.make("computer-use-requested"),
+          kind: "computer-use.requested",
+          tone: "info",
+          summary: "Computer Use requested",
+          createdAt: "2026-08-27T00:00:01.000Z",
+          turnId,
+          payload: {
+            state: "requested",
+            operation: "act",
+            target,
+            providerInstanceId: "atomic",
+          },
+        }),
+        makeActivity({
+          id: EventId.make("computer-use-acting"),
+          kind: "computer-use.acting",
+          tone: "info",
+          summary: "Typing in Notepad",
+          createdAt: "2026-08-27T00:00:02.000Z",
+          turnId,
+          payload: {
+            state: "acting",
+            operation: "act",
+            target,
+            providerInstanceId: "atomic",
+            risk: "reversible-local",
+          },
+        }),
+      ],
+    });
+
+    expect(buildThreadFeed(thread)).toMatchObject([
+      {
+        type: "activity-group",
+        id: "computer-use-requested",
+        activities: [
+          {
+            id: "computer-use-requested",
+            summary: "Typing in Notepad",
+            computerUse: {
+              state: "acting",
+              operation: "act",
+              target,
+              providerInstanceId: "atomic",
+              risk: "reversible-local",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps older local feedback before newer messages returned by the server", () => {
     const submission = {
       id: MessageId.make("feedback-command-ordering"),

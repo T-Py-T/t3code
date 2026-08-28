@@ -19,15 +19,24 @@ import {
   PreviewAutomationWaitForInput,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import * as Crypto from "effect/Crypto";
+import { McpSchema, Tool, Toolkit } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import * as ComputerUseToolkit from "../../../computerUse/ComputerUseToolkit.ts";
+import { ComputerUsePolicyBoundaryResult } from "../computer/tools.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   PreviewAutomationBroker.PreviewAutomationBroker,
+  ComputerUseToolkit.ComputerUseToolkit,
+  Crypto.Crypto,
+  McpSchema.McpServerClient,
 ];
+
+const governed = <S extends Schema.Top>(success: S) =>
+  Schema.Union([success, ComputerUsePolicyBoundaryResult]);
 
 const PreviewActionResult = Schema.Record(Schema.String, Schema.Never).annotate({
   description: "The preview action completed successfully.",
@@ -46,7 +55,7 @@ export const PreviewStatusTool = Tool.make("preview_status", {
   description:
     "Report whether a collaborative browser tab is automation-capable, including its URL, title, visibility, loading state, viewport mode, and measured CSS-pixel size. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab.",
   parameters: PreviewAutomationTabTargetInput,
-  success: PreviewAutomationStatus,
+  success: governed(PreviewAutomationStatus),
   failure: PreviewAutomationError,
   dependencies,
 })
@@ -60,7 +69,7 @@ export const PreviewOpenTool = browserTool(
     description:
       "Initialize a collaborative browser tab and open its thread-bound inline preview by default. Set open=false for background-only automation. Pass tabId to reuse a specific existing tab, set reuseExistingTab=false to create another tab, or omit both to use this agent session's current tab.",
     parameters: PreviewAutomationOpenInput,
-    success: PreviewAutomationStatus,
+    success: governed(PreviewAutomationStatus),
     failure: PreviewAutomationError,
     dependencies,
   })
@@ -73,7 +82,7 @@ export const PreviewNavigateTool = safeBrowserTool(
     description:
       "Navigate a collaborative browser tab. Pass tabId to target a specific tab, plus {url:'https://t3.chat'} for a website or {target:{kind:'environment-port',port:5173}} for a dev server. Exactly one of url or target is required.",
     parameters: PreviewAutomationNavigateInput,
-    success: PreviewAutomationStatus,
+    success: governed(PreviewAutomationStatus),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Navigate browser preview"),
@@ -84,7 +93,7 @@ export const PreviewResizeTool = safeBrowserTool(
     description:
       "Resize a collaborative browser tab, optionally selected by tabId. Use {mode:'fill'}, {mode:'freeform',width:1024,height:768}, or {mode:'preset',preset:'iphone-12-pro',orientation:'portrait'}. This changes CSS layout breakpoints without changing the desktop browser user agent.",
     parameters: PreviewAutomationResizeInput,
-    success: PreviewAutomationResizeResult,
+    success: governed(PreviewAutomationResizeResult),
     failure: PreviewAutomationError,
     dependencies,
   })
@@ -97,7 +106,7 @@ export const PreviewSetAppearanceTool = safeBrowserTool(
     description:
       "Emulate prefers-color-scheme in a collaborative browser tab, optionally selected by tabId. Use {colorScheme:'dark'} or {colorScheme:'light'} to preview the page in that appearance, and {colorScheme:'system'} to clear the override and follow the OS appearance.",
     parameters: PreviewAutomationSetColorSchemeInput,
-    success: PreviewAutomationSetColorSchemeResult,
+    success: governed(PreviewAutomationSetColorSchemeResult),
     failure: PreviewAutomationError,
     dependencies,
   })
@@ -110,7 +119,7 @@ export const PreviewSnapshotTool = readonlyBrowserTool(
     description:
       "Inspect a page before interacting. Pass tabId to inspect a specific tab; omit it to use this agent session's current tab. Returns page state, semantic elements, diagnostics, action history, and a PNG screenshot.",
     parameters: PreviewAutomationTabTargetInput,
-    success: PreviewAutomationSnapshot,
+    success: governed(PreviewAutomationSnapshot),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Inspect browser page"),
@@ -121,7 +130,7 @@ export const PreviewClickTool = browserTool(
     description:
       "Click exactly one target in the tab selected by tabId, or this agent session's current tab when omitted. Prefer a Playwright locator; selector accepts legacy CSS; x and y must be supplied together.",
     parameters: PreviewAutomationClickInput,
-    success: PreviewActionResult,
+    success: governed(PreviewActionResult),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Click preview page"),
@@ -132,7 +141,7 @@ export const PreviewTypeTool = browserTool(
     description:
       "Insert literal text into one input in the tab selected by tabId, or this agent session's current tab when omitted. Prefer a Playwright locator; set clear=true to replace existing text.",
     parameters: PreviewAutomationTypeInput,
-    success: PreviewActionResult,
+    success: governed(PreviewActionResult),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Type into preview page"),
@@ -143,7 +152,7 @@ export const PreviewPressTool = browserTool(
     description:
       "Press one keyboard key in the tab selected by tabId, or this agent session's current tab when omitted. Examples: {key:'Enter'}, {key:'Escape'}, or {key:'a',modifiers:['Meta']}.",
     parameters: PreviewAutomationPressInput,
-    success: PreviewActionResult,
+    success: governed(PreviewActionResult),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Press key in preview page"),
@@ -154,7 +163,7 @@ export const PreviewScrollTool = safeBrowserTool(
     description:
       "Scroll the tab selected by tabId, or this agent session's current tab when omitted. Positive deltaY scrolls down and positive deltaX scrolls right; a locator/selector targets a container.",
     parameters: PreviewAutomationScrollInput,
-    success: PreviewActionResult,
+    success: governed(PreviewActionResult),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Scroll preview page"),
@@ -165,7 +174,7 @@ export const PreviewEvaluateTool = browserTool(
     description:
       "Evaluate JavaScript in the tab selected by tabId, or this agent session's current tab when omitted. Returns a serializable result up to 64 KB; the expression may mutate page state.",
     parameters: PreviewAutomationEvaluateInput,
-    success: Schema.Unknown,
+    success: governed(Schema.Unknown),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Evaluate JavaScript in preview"),
@@ -176,7 +185,7 @@ export const PreviewWaitForTool = readonlyBrowserTool(
     description:
       "Wait in the tab selected by tabId, or this agent session's current tab when omitted, until all supplied locator, selector, text, and URL conditions match.",
     parameters: PreviewAutomationWaitForInput,
-    success: PreviewActionResult,
+    success: governed(PreviewActionResult),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Wait for preview page condition"),
@@ -187,7 +196,7 @@ export const PreviewRecordingStartTool = safeBrowserTool(
     description:
       "Start recording the collaborative browser tab selected by tabId, or this agent session's current tab when omitted.",
     parameters: PreviewAutomationTabTargetInput,
-    success: PreviewAutomationRecordingStatus,
+    success: governed(PreviewAutomationRecordingStatus),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Start browser recording"),
@@ -198,7 +207,7 @@ export const PreviewRecordingStopTool = safeBrowserTool(
     description:
       "Stop recording the collaborative browser tab selected by tabId, or this agent session's current tab when omitted, and save it as a local evidence artifact.",
     parameters: PreviewAutomationTabTargetInput,
-    success: PreviewAutomationRecordingArtifact,
+    success: governed(PreviewAutomationRecordingArtifact),
     failure: PreviewAutomationError,
     dependencies,
   }).annotate(Tool.Title, "Stop browser recording"),

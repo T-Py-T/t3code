@@ -105,7 +105,8 @@ type PendingUiRequest =
       readonly submittedAnswers?: Readonly<Record<string, string | ReadonlyArray<string>>>;
     };
 
-const COMPUTER_USE_APPROVAL_TITLE = /^T3 Computer Use \[([^\]]+)]\s+(.+) :: ([a-z-]+)$/;
+const COMPUTER_USE_APPROVAL_TITLE =
+  /^T3 Computer Use \[([^\]]+)]\s+(.+?) :: ([a-z-]+)(?: -- (.+))?$/;
 const T3_WORKFLOW_ACTION_CUSTOM_TYPE = "t3:workflow-action";
 
 function workflowActionCommand(
@@ -116,7 +117,12 @@ function workflowActionCommand(
   return `/t3-workflow-action ${encoded}`;
 }
 
-const computerUseApprovalDetail = (appName: string, kind: string): string => {
+const computerUseApprovalDetail = (
+  appName: string,
+  kind: string,
+  actionSummary?: string,
+): string => {
+  if (actionSummary) return `${actionSummary} in ${appName}.`;
   switch (kind) {
     case "observe":
       return `Allow T3 Computer Use to inspect ${appName}?`;
@@ -136,6 +142,8 @@ const computerUseApprovalDecision = (label: string): ProviderApprovalDecision | 
     case "Allow once":
     case "Confirm action":
       return "accept";
+    case "Allow for this turn":
+      return "acceptForTurn";
     case "Allow for this session":
       return "acceptForSession";
     case "Always allow on this computer":
@@ -579,6 +587,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         const approvalId = ComputerUseApprovalId.make(computerUseApproval[1] ?? "");
         const appName = computerUseApproval[2] ?? "Computer target";
         const approvalKind = computerUseApproval[3] ?? "access";
+        const actionSummary = computerUseApproval[4];
         const options = selectOptions.flatMap((label) => {
           const decision = computerUseApprovalDecision(label);
           return decision === undefined ? [] : [{ decision, label }];
@@ -603,8 +612,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
           payload: {
             requestType: "mcp_elicitation_approval",
             appName,
-            detail: computerUseApprovalDetail(appName, approvalKind),
+            detail: computerUseApprovalDetail(appName, approvalKind, actionSummary),
             options,
+            computerUseApproval: true,
           },
           raw: raw(event, "extension_ui_request"),
         });

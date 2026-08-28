@@ -868,6 +868,16 @@ function mapToRuntimeEvents(
                 options: elicitationApproval.options,
               }
             : {}),
+          ...(event.method === "mcpServer/elicitation/request" &&
+          event.payload !== undefined &&
+          typeof event.payload === "object" &&
+          event.payload !== null &&
+          "message" in event.payload &&
+          typeof event.payload.message === "string" &&
+          (event.payload.message.startsWith("Allow T3 Computer Use") ||
+            event.payload.message.startsWith("Confirm T3 Computer Use"))
+            ? { computerUseApproval: true as const }
+            : {}),
           ...(event.payload !== undefined ? { args: event.payload } : {}),
         },
       },

@@ -91,3 +91,16 @@ it.effect("persists only redacted metadata and restores it", () =>
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect("does not publish history that failed to persist", () =>
+  Effect.gen(function* () {
+    const history = yield* ComputerUseHistory.makeWithPersistence({
+      load: Effect.succeed([]),
+      save: () => Effect.die("persistence unavailable"),
+    });
+    const appendExit = yield* history.append(appendInput).pipe(Effect.exit);
+
+    expect(appendExit._tag).toBe("Failure");
+    expect(yield* history.list(environmentId)).toEqual([]);
+  }),
+);

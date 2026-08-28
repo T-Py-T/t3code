@@ -712,6 +712,7 @@ describe("AtomicAdapter", () => {
       assert.equal(requested.payload.appName, "TextEdit");
       assert.deepEqual(requested.payload.options, [
         { decision: "accept", label: "Allow once" },
+        { decision: "acceptForTurn", label: "Allow for this turn" },
         { decision: "acceptForSession", label: "Allow for this session" },
         { decision: "acceptAlways", label: "Always allow on this computer" },
         { decision: "decline", label: "Deny" },

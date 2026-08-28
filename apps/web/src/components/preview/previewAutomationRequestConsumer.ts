@@ -29,7 +29,7 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
   readonly connectionAtom: Atom.Writable<PreviewAutomationStreamEvent["connectionId"] | null>;
   readonly environmentId: PreviewAutomationHost["environmentId"];
   readonly requestHandlerAtom: Atom.Atom<{
-    readonly handle: (request: PreviewAutomationRequest) => Promise<unknown>;
+    readonly handle: (request: PreviewAutomationRequest, signal: AbortSignal) => Promise<unknown>;
   }>;
   readonly respond: (response: PreviewAutomationResponse) => Promise<unknown>;
   readonly label: string;
@@ -42,6 +42,7 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
     let connectionExplicitlyAnnounced = false;
     let reportedConnectionId: PreviewAutomationStreamEvent["connectionId"] | null = null;
     let requestsVersion = 0;
+    const activeRequests = new Map<string, AbortController>();
 
     const consume = (result: AutomationStreamResult<E>) => {
       if (!AsyncResult.isSuccess(result)) return;
@@ -62,21 +63,31 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
       if (event.type === "connected") {
         return;
       }
+      if (event.type === "cancel") {
+        activeRequests.get(event.requestId)?.abort();
+        activeRequests.delete(event.requestId);
+        return;
+      }
       const request = event.request;
+      const controller = new AbortController();
+      activeRequests.set(request.requestId, controller);
       void get
         .once(options.requestHandlerAtom)
-        .handle(request)
+        .handle(request, controller.signal)
         .then(
-          (value) =>
-            options.respond({
+          (value) => {
+            if (controller.signal.aborted) return;
+            return options.respond({
               clientId: options.clientId,
               connectionId: event.connectionId,
               requestId: request.requestId,
               ok: true,
               ...(value === undefined ? {} : { result: value }),
-            }),
-          (error) =>
-            options.respond({
+            });
+          },
+          (error) => {
+            if (controller.signal.aborted) return;
+            return options.respond({
               clientId: options.clientId,
               connectionId: event.connectionId,
               requestId: request.requestId,
@@ -88,12 +99,20 @@ export function createPreviewAutomationRequestConsumerAtom<E>(options: {
                 threadId: request.threadId,
                 tabId: request.tabId ?? null,
               }),
-            }),
-        );
+            });
+          },
+        )
+        .finally(() => {
+          if (activeRequests.get(request.requestId) === controller) {
+            activeRequests.delete(request.requestId);
+          }
+        });
     };
 
     get.addFinalizer(() => {
       disposed = true;
+      for (const controller of activeRequests.values()) controller.abort();
+      activeRequests.clear();
     });
     const initialRequest = get.once(options.requestsAtom);
     if (AsyncResult.isSuccess(initialRequest)) {

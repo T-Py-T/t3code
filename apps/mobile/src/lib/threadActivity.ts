@@ -1,14 +1,10 @@
 import {
   ApprovalRequestId,
-  ComputerUseHistoryState,
   isToolLifecycleItemType,
   ProviderApprovalOption,
   ProviderRequestKind,
 } from "@t3tools/contracts";
 import type {
-  ComputerUseActionRisk,
-  ComputerUseHistoryState as ComputerUseHistoryStateValue,
-  ComputerUseOperation,
   OrchestrationLatestTurn,
   OrchestrationThread,
   OrchestrationThreadActivity,
@@ -16,6 +12,10 @@ import type {
   TurnId,
   UserInputQuestion,
 } from "@t3tools/contracts";
+import {
+  decodeComputerUseActivity,
+  type ComputerUseActivityState,
+} from "@t3tools/client-runtime/state/computerUseActivity";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 
 import * as Arr from "effect/Array";
@@ -33,19 +33,8 @@ export interface PendingApproval {
 
 const isProviderRequestKind = Schema.is(ProviderRequestKind);
 const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
-const isComputerUseHistoryState = Schema.is(ComputerUseHistoryState);
 
-export interface ThreadFeedComputerUseState {
-  readonly state: ComputerUseHistoryStateValue;
-  readonly operation?: ComputerUseOperation;
-  readonly target?: {
-    readonly displayName: string;
-    readonly stableIdentity: string;
-  };
-  readonly risk?: ComputerUseActionRisk;
-  readonly providerInstanceId?: string;
-  readonly resultTag?: string;
-}
+export type ThreadFeedComputerUseState = ComputerUseActivityState;
 
 export interface PendingUserInput {
   readonly requestId: ApprovalRequestId;
@@ -386,49 +375,6 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
   return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
 }
 
-function extractComputerUseState(
-  activity: OrchestrationThreadActivity,
-  payload: Record<string, unknown> | null,
-): ThreadFeedComputerUseState | undefined {
-  if (!activity.kind.startsWith("computer-use.") || !payload) return undefined;
-  if (!isComputerUseHistoryState(payload.state)) return undefined;
-  const target =
-    payload.target && typeof payload.target === "object"
-      ? (payload.target as Record<string, unknown>)
-      : null;
-  return {
-    state: payload.state,
-    ...(payload.operation === "status" ||
-    payload.operation === "listTargets" ||
-    payload.operation === "observe" ||
-    payload.operation === "act"
-      ? { operation: payload.operation }
-      : {}),
-    ...(target &&
-    typeof target.displayName === "string" &&
-    typeof target.stableIdentity === "string"
-      ? {
-          target: {
-            displayName: target.displayName,
-            stableIdentity: target.stableIdentity,
-          },
-        }
-      : {}),
-    ...(payload.risk === "inspect" ||
-    payload.risk === "reversible-local" ||
-    payload.risk === "external-side-effect" ||
-    payload.risk === "sensitive-data" ||
-    payload.risk === "destructive-or-privileged" ||
-    payload.risk === "forbidden"
-      ? { risk: payload.risk }
-      : {}),
-    ...(typeof payload.providerInstanceId === "string"
-      ? { providerInstanceId: payload.providerInstanceId }
-      : {}),
-    ...(typeof payload.resultTag === "string" ? { resultTag: payload.resultTag } : {}),
-  };
-}
-
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload =
     activity.payload && typeof activity.payload === "object"
@@ -511,7 +457,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (requestKind) {
     entry.requestKind = requestKind;
   }
-  const computerUse = extractComputerUseState(activity, payload);
+  const computerUse = decodeComputerUseActivity(activity);
   if (computerUse) {
     entry.computerUse = computerUse;
   }

@@ -2,6 +2,7 @@ import {
   ComputerUseApprovalId,
   ComputerUsePersistentGrantList,
   type ComputerUseAccessLevel,
+  type ComputerUseActionDescriptor,
   type ComputerUseActionRisk,
   type ComputerUseHostId,
   type ComputerUseGrantDuration,
@@ -43,6 +44,7 @@ export interface ComputerUsePolicyInput {
   readonly access: ComputerUseAccessLevel;
   readonly risk: ComputerUseActionRisk;
   readonly runtimeMode: RuntimeMode;
+  readonly action?: ComputerUseActionDescriptor;
 }
 
 export interface ComputerUseGrantInput {
@@ -74,6 +76,7 @@ interface ConfirmationRecord {
   readonly scope: ComputerUsePolicyScope;
   readonly target: ComputerUseTarget;
   readonly risk: ComputerUseActionRisk;
+  readonly requestIdentity: ComputerUseActionDescriptor["requestIdentity"];
 }
 
 interface PendingApproval extends ComputerUseApprovalRequestInput {}
@@ -83,9 +86,9 @@ interface ApprovalState {
   readonly sequence: number;
 }
 
-interface ComputerUsePolicyPersistence {
-  readonly load: Effect.Effect<ReadonlyArray<GrantRecord>>;
-  readonly save: (grants: ReadonlyArray<GrantRecord>) => Effect.Effect<void>;
+export interface ComputerUsePolicyPersistence {
+  readonly load: Effect.Effect<ReadonlyArray<ComputerUseGrantInput>>;
+  readonly save: (grants: ReadonlyArray<ComputerUseGrantInput>) => Effect.Effect<void>;
 }
 
 const FORBIDDEN_APPLICATION_IDS = new Set([
@@ -127,7 +130,7 @@ export class ComputerUsePolicy extends Context.Service<
   }
 >()("t3/computerUse/ComputerUsePolicy") {}
 
-const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
+export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
   Effect.gen(function* ComputerUsePolicyMake() {
     const history = yield* Effect.serviceOption(ComputerUseHistory);
     const grants = yield* SynchronizedRef.make<ReadonlyArray<GrantRecord>>(
@@ -140,31 +143,31 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
       sequence: 0,
     });
 
-    const savePersistentGrants = persistence
-      ? SynchronizedRef.get(grants).pipe(
-          Effect.flatMap((current) =>
-            persistence.save(current.filter((grant) => grant.duration === "persistent")),
-          ),
-        )
-      : Effect.void;
+    const savePersistentGrants = (current: ReadonlyArray<GrantRecord>) =>
+      persistence
+        ? persistence.save(current.filter((grant) => grant.duration === "persistent"))
+        : Effect.void;
 
     const grant: ComputerUsePolicy["Service"]["grant"] = Effect.fn("ComputerUsePolicy.grant")(
       function* (input) {
-        yield* SynchronizedRef.update(grants, (current) => {
-          const retained =
-            input.duration === "persistent"
-              ? current.filter(
-                  (candidate) =>
-                    candidate.duration !== "persistent" ||
-                    candidate.scope.environmentId !== input.scope.environmentId ||
-                    candidate.scope.hostId !== input.scope.hostId ||
-                    candidate.target.stableIdentity !== input.target.stableIdentity ||
-                    candidate.access !== input.access,
-                )
-              : current;
-          return [...retained, input];
-        });
-        if (input.duration === "persistent") yield* savePersistentGrants;
+        yield* SynchronizedRef.modifyEffect(grants, (current) =>
+          Effect.gen(function* () {
+            const retained =
+              input.duration === "persistent"
+                ? current.filter(
+                    (candidate) =>
+                      candidate.duration !== "persistent" ||
+                      candidate.scope.environmentId !== input.scope.environmentId ||
+                      candidate.scope.hostId !== input.scope.hostId ||
+                      candidate.target.stableIdentity !== input.target.stableIdentity ||
+                      candidate.access !== input.access,
+                  )
+                : current;
+            const next = [...retained, input];
+            if (input.duration === "persistent") yield* savePersistentGrants(next);
+            return [undefined, next] as const;
+          }),
+        );
         if (input.duration === "persistent" && Option.isSome(history)) {
           yield* history.value.append({
             environmentId: input.scope.environmentId,
@@ -183,22 +186,26 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
 
     const revoke: ComputerUsePolicy["Service"]["revoke"] = Effect.fn("ComputerUsePolicy.revoke")(
       (input) =>
-        SynchronizedRef.modify(grants, (current) => {
-          const removed = current.filter(
-            (candidate) =>
-              candidate.scope.environmentId === input.environmentId &&
-              candidate.scope.hostId === input.hostId &&
-              candidate.target.stableIdentity === input.stableIdentity,
-          );
-          const retained = current.filter(
-            (candidate) =>
-              candidate.scope.environmentId !== input.environmentId ||
-              candidate.scope.hostId !== input.hostId ||
-              candidate.target.stableIdentity !== input.stableIdentity,
-          );
-          return [removed, retained] as const;
-        }).pipe(
-          Effect.tap((removed) => (removed.length > 0 ? savePersistentGrants : Effect.void)),
+        SynchronizedRef.modifyEffect(grants, (current) =>
+          Effect.gen(function* () {
+            const removed = current.filter(
+              (candidate) =>
+                candidate.scope.environmentId === input.environmentId &&
+                candidate.scope.hostId === input.hostId &&
+                candidate.target.stableIdentity === input.stableIdentity,
+            );
+            const retained = current.filter(
+              (candidate) =>
+                candidate.scope.environmentId !== input.environmentId ||
+                candidate.scope.hostId !== input.hostId ||
+                candidate.target.stableIdentity !== input.stableIdentity,
+            );
+            if (removed.some((grant) => grant.duration === "persistent")) {
+              yield* savePersistentGrants(retained);
+            }
+            return [removed, retained] as const;
+          }),
+        ).pipe(
           Effect.tap((removed) =>
             Option.isSome(history)
               ? Effect.forEach(
@@ -250,44 +257,52 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
       if (input.risk === "forbidden") {
         return { _tag: "deny", reason: "forbidden-action" } as const;
       }
+      if (
+        (input.risk === "external-side-effect" || input.risk === "sensitive-data") &&
+        input.action === undefined
+      ) {
+        return { _tag: "deny", reason: "forbidden-action" } as const;
+      }
       if ((yield* SynchronizedRef.get(pausedEnvironments)).has(input.scope.environmentId)) {
         return { _tag: "deny", reason: "paused" } as const;
       }
 
-      const matchingGrant = yield* SynchronizedRef.modify(grants, (current) => {
-        const index = current.findIndex((candidate) => {
-          if (
-            candidate.scope.environmentId !== input.scope.environmentId ||
-            candidate.scope.hostId !== input.scope.hostId ||
-            candidate.target.stableIdentity !== input.target.stableIdentity ||
-            (candidate.access !== input.access && candidate.access !== "operate")
-          ) {
-            return false;
+      const takeMatchingGrant = (consumeOneAction: boolean) =>
+        SynchronizedRef.modify(grants, (current) => {
+          const index = current.findIndex((candidate) => {
+            if (
+              candidate.scope.environmentId !== input.scope.environmentId ||
+              candidate.scope.hostId !== input.scope.hostId ||
+              candidate.target.stableIdentity !== input.target.stableIdentity ||
+              (candidate.access !== input.access && candidate.access !== "operate")
+            ) {
+              return false;
+            }
+            switch (candidate.duration) {
+              case "persistent":
+                return true;
+              case "session":
+                return candidate.scope.providerSessionId === input.scope.providerSessionId;
+              case "turn":
+              case "one-action":
+                return (
+                  candidate.scope.threadId === input.scope.threadId &&
+                  candidate.scope.turnId === input.scope.turnId &&
+                  candidate.scope.providerSessionId === input.scope.providerSessionId
+                );
+            }
+          });
+          if (index < 0) return [undefined, current] as const;
+          const found = current[index];
+          if (found?.duration !== "one-action" || !consumeOneAction) {
+            return [found, current] as const;
           }
-          switch (candidate.duration) {
-            case "persistent":
-              return true;
-            case "session":
-              return candidate.scope.providerSessionId === input.scope.providerSessionId;
-            case "turn":
-            case "one-action":
-              return (
-                candidate.scope.threadId === input.scope.threadId &&
-                candidate.scope.turnId === input.scope.turnId &&
-                candidate.scope.providerSessionId === input.scope.providerSessionId
-              );
-          }
+          return [found, [...current.slice(0, index), ...current.slice(index + 1)]] as const;
         });
-        if (index < 0) return [undefined, current] as const;
-        const found = current[index];
-        if (
-          found?.duration !== "one-action" ||
-          (input.risk !== "inspect" && input.risk !== "reversible-local")
-        ) {
-          return [found, current] as const;
-        }
-        return [found, [...current.slice(0, index), ...current.slice(index + 1)]] as const;
-      });
+
+      const matchingGrant = yield* takeMatchingGrant(
+        input.risk === "inspect" || input.risk === "reversible-local",
+      );
 
       if (!matchingGrant) {
         return { _tag: "request-app-grant", access: input.access } as const;
@@ -302,13 +317,20 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
               candidate.scope.turnId === input.scope.turnId &&
               candidate.scope.providerSessionId === input.scope.providerSessionId &&
               candidate.target.stableIdentity === input.target.stableIdentity &&
-              candidate.risk === input.risk,
+              candidate.risk === input.risk &&
+              input.action !== undefined &&
+              candidate.requestIdentity === input.action.requestIdentity,
           );
           return index < 0
             ? [false, current]
             : [true, [...current.slice(0, index), ...current.slice(index + 1)]];
         });
-        if (confirmed) return { _tag: "allow" } as const;
+        if (confirmed) {
+          const finalGrant = yield* takeMatchingGrant(true);
+          return finalGrant
+            ? ({ _tag: "allow" } as const)
+            : ({ _tag: "request-app-grant", access: input.access } as const);
+        }
         return { _tag: "request-action-confirmation", risk: input.risk } as const;
       }
       if (input.risk === "destructive-or-privileged") {
@@ -373,7 +395,9 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
             ? "persistent"
             : decision === "acceptForSession"
               ? "session"
-              : "one-action";
+              : decision === "acceptForTurn"
+                ? "turn"
+                : "one-action";
         yield* grant({
           scope: pending.input.scope,
           target: pending.input.target,
@@ -383,12 +407,14 @@ const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) =>
         return true;
       }
       if (pendingDecision._tag === "request-action-confirmation") {
+        if (pending.input.action === undefined) return true;
         yield* SynchronizedRef.update(confirmations, (current) => [
           ...current,
           {
             scope: pending.input.scope,
             target: pending.input.target,
             risk: pendingDecision.risk,
+            requestIdentity: pending.input.action.requestIdentity,
           },
         ]);
       }
@@ -443,8 +469,11 @@ const makeFilePersistence = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.catchCause((cause) =>
-        Effect.logError("Could not persist Computer Use grants.", { cause }),
+        Effect.logError("Could not persist Computer Use grants.", { cause }).pipe(
+          Effect.andThen(Effect.failCause(cause)),
+        ),
       ),
+      Effect.orDie,
     );
   return { load, save } satisfies ComputerUsePolicyPersistence;
 });

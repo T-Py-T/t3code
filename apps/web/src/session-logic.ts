@@ -3,11 +3,11 @@ import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
 import {
+  decodeComputerUseActivity,
+  type ComputerUseActivityState,
+} from "@t3tools/client-runtime/state/computerUseActivity";
+import {
   ApprovalRequestId,
-  ComputerUseHistoryState,
-  type ComputerUseActionRisk,
-  type ComputerUseHistoryState as ComputerUseHistoryStateValue,
-  type ComputerUseOperation,
   isToolLifecycleItemType,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
@@ -115,17 +115,7 @@ export interface WorkLogEntry {
     workflowId: string | null;
     agentTaskIds: ReadonlyArray<string>;
   };
-  computerUse?: {
-    state: ComputerUseHistoryStateValue;
-    operation?: ComputerUseOperation;
-    target?: {
-      displayName: string;
-      stableIdentity: string;
-    };
-    risk?: ComputerUseActionRisk;
-    providerInstanceId?: string;
-    resultTag?: string;
-  };
+  computerUse?: ComputerUseActivityState;
 }
 
 const workLogCollapseKey = Symbol();
@@ -155,51 +145,6 @@ export interface PendingApproval {
 
 const isProviderRequestKind = Schema.is(ProviderRequestKind);
 const isProviderApprovalOption = Schema.is(ProviderApprovalOption);
-const isComputerUseHistoryState = Schema.is(ComputerUseHistoryState);
-
-function extractComputerUseState(
-  activity: OrchestrationThreadActivity,
-  payload: Record<string, unknown> | null,
-): WorkLogEntry["computerUse"] {
-  if (!activity.kind.startsWith("computer-use.") || !payload) return undefined;
-  if (!isComputerUseHistoryState(payload.state)) return undefined;
-  const target =
-    payload.target && typeof payload.target === "object"
-      ? (payload.target as Record<string, unknown>)
-      : null;
-  return {
-    state: payload.state,
-    ...(payload.operation === "status" ||
-    payload.operation === "listTargets" ||
-    payload.operation === "observe" ||
-    payload.operation === "act"
-      ? { operation: payload.operation }
-      : {}),
-    ...(target &&
-    typeof target.displayName === "string" &&
-    typeof target.stableIdentity === "string"
-      ? {
-          target: {
-            displayName: target.displayName,
-            stableIdentity: target.stableIdentity,
-          },
-        }
-      : {}),
-    ...(payload.risk === "inspect" ||
-    payload.risk === "reversible-local" ||
-    payload.risk === "external-side-effect" ||
-    payload.risk === "sensitive-data" ||
-    payload.risk === "destructive-or-privileged" ||
-    payload.risk === "forbidden"
-      ? { risk: payload.risk }
-      : {}),
-    ...(typeof payload.providerInstanceId === "string"
-      ? { providerInstanceId: payload.providerInstanceId }
-      : {}),
-    ...(typeof payload.resultTag === "string" ? { resultTag: payload.resultTag } : {}),
-  };
-}
-
 export interface PendingUserInput {
   requestId: ApprovalRequestId;
   createdAt: string;
@@ -1061,7 +1006,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (requestKind) {
     entry.requestKind = requestKind;
   }
-  const computerUse = extractComputerUseState(activity, payload);
+  const computerUse = decodeComputerUseActivity(activity);
   if (computerUse) {
     entry.computerUse = computerUse;
   }

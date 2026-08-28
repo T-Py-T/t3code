@@ -1122,7 +1122,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         turnId: asTurnId("turn-1"),
         payload: {
           mode: "form",
-          message: "Allow ChatGPT to use Safari?",
+          message: "Allow T3 Computer Use to operate Safari?",
           serverName: "computer-use",
           threadId: "provider-thread-1",
           turnId: "turn-1",
@@ -1139,7 +1139,8 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       NodeAssert.equal(firstEvent.value.payload.requestType, "mcp_elicitation_approval");
       NodeAssert.equal(firstEvent.value.payload.appName, "Safari");
-      NodeAssert.equal(firstEvent.value.payload.detail, "Allow ChatGPT to use Safari?");
+      NodeAssert.equal(firstEvent.value.payload.detail, "Allow T3 Computer Use to operate Safari?");
+      NodeAssert.equal(firstEvent.value.payload.computerUseApproval, true);
       NodeAssert.deepStrictEqual(firstEvent.value.payload.options, [
         { decision: "cancel", label: "Cancel" },
         { decision: "decline", label: "Decline" },

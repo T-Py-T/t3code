@@ -310,7 +310,8 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
   const automationConnectionId = useAtomValue(automationConnectionAtom);
 
   const handleRequest = useCallback(
-    async (request: PreviewAutomationRequest): Promise<unknown> => {
+    async (request: PreviewAutomationRequest, signal: AbortSignal): Promise<unknown> => {
+      signal.throwIfAborted();
       const threadRef: ScopedThreadRef = {
         environmentId,
         threadId: request.threadId,
@@ -358,6 +359,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           bridgeAvailable: Boolean(previewBridge),
         };
         const requireReadyTab = async () => {
+          signal.throwIfAborted();
           const bridge = previewBridge;
           const readyTabId = tabId;
           if (!bridge || !readyTabId) {
@@ -373,6 +375,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             request.operation,
             request.timeoutMs,
           );
+          signal.throwIfAborted();
           return {
             bridge,
             tabId: readyTabId,

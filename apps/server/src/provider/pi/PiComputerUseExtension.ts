@@ -112,7 +112,7 @@ async function callTool(name, args, signal) {
 }
 
 const approvalOptions = {
-  app: ["Allow once", "Allow for this session", "Always allow on this computer", "Deny"],
+  app: ["Allow once", "Allow for this turn", "Allow for this session", "Always allow on this computer", "Deny"],
   action: ["Confirm action", "Deny"],
 };
 
@@ -124,8 +124,9 @@ async function approvePolicyBoundary(boundary, signal, ctx) {
   if (!isAppGrant && !isActionConfirmation) return false;
   const displayName = boundary.target && boundary.target.displayName ? boundary.target.displayName : "this app";
   const approvalKind = isAppGrant ? boundary.decision.access : boundary.decision.risk;
+  const actionSummary = boundary.action && boundary.action.summary ? " -- " + boundary.action.summary : "";
   const selected = await ctx.ui.select(
-    "T3 Computer Use [" + boundary.approvalId + "] " + displayName + " :: " + approvalKind,
+    "T3 Computer Use [" + boundary.approvalId + "] " + displayName + " :: " + approvalKind + actionSummary,
     isAppGrant ? approvalOptions.app : approvalOptions.action,
     { signal },
   );
@@ -285,8 +286,12 @@ export default function t3ComputerUseExtension(pi) {
         executionMode: "sequential",
         async execute(_toolCallId, args, signal, _onUpdate, ctx) {
           let result = await callTool(definition.name, args, signal);
-          const boundary = result && result.structuredContent;
-          if (await approvePolicyBoundary(boundary, signal, ctx)) {
+          let previousApprovalId;
+          for (let approvalCount = 0; approvalCount < 4; approvalCount += 1) {
+            const boundary = result && result.structuredContent;
+            if (!boundary || boundary.approvalId === previousApprovalId) break;
+            if (!(await approvePolicyBoundary(boundary, signal, ctx))) break;
+            previousApprovalId = boundary.approvalId;
             result = await callTool(definition.name, args, signal);
           }
           const content = Array.isArray(result && result.content)

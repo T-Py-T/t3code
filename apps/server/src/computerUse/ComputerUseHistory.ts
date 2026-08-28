@@ -8,7 +8,7 @@ import {
   type ComputerUseHistoryEntry,
   type ComputerUseHistoryState,
   type ComputerUseHostId,
-  type ComputerUseOperation,
+  type ComputerUseHistoryOperation,
   type ComputerUseTarget,
   type EnvironmentId,
   type ProviderInstanceId,
@@ -39,7 +39,7 @@ export interface ComputerUseHistoryAppendInput {
   readonly threadId?: ThreadId;
   readonly turnId?: TurnId;
   readonly providerInstanceId?: ProviderInstanceId;
-  readonly operation?: ComputerUseOperation;
+  readonly operation?: ComputerUseHistoryOperation;
   readonly target?: ComputerUseTarget;
   readonly risk?: ComputerUseActionRisk;
   readonly state: ComputerUseHistoryState;
@@ -52,7 +52,7 @@ interface HistoryState {
   readonly sequence: number;
 }
 
-interface ComputerUseHistoryPersistence {
+export interface ComputerUseHistoryPersistence {
   readonly load: Effect.Effect<ReadonlyArray<ComputerUseHistoryEntry>>;
   readonly save: (entries: ReadonlyArray<ComputerUseHistoryEntry>) => Effect.Effect<void>;
 }
@@ -94,7 +94,7 @@ const toHistoryTarget = (target: ComputerUseTarget) => ({
   stableIdentity: bounded(target.stableIdentity),
 });
 
-const makeWithPersistence = (persistence?: ComputerUseHistoryPersistence) =>
+export const makeWithPersistence = (persistence?: ComputerUseHistoryPersistence) =>
   Effect.gen(function* ComputerUseHistoryMake() {
     const nowMillis = yield* Clock.currentTimeMillis;
     const restored = retainedEntries(persistence ? yield* persistence.load : [], nowMillis);
@@ -194,8 +194,11 @@ const makeFilePersistence = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.catchCause((cause) =>
-        Effect.logError("Could not persist Computer Use history.", { cause }),
+        Effect.logError("Could not persist Computer Use history.", { cause }).pipe(
+          Effect.andThen(Effect.failCause(cause)),
+        ),
       ),
+      Effect.orDie,
     );
   return { load, save } satisfies ComputerUseHistoryPersistence;
 });

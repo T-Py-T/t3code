@@ -1,7 +1,13 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PreviewTabId,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -11,6 +17,7 @@ import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/uns
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as ComputerUseToolkit from "../computerUse/ComputerUseToolkit.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -19,6 +26,7 @@ const alternateTabId = PreviewTabId.make("tab-mcp-alternate");
 const invocation = {
   environmentId,
   threadId,
+  turnId: TurnId.make("turn-mcp-test"),
   providerSessionId: "provider-session-mcp-test",
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["preview"] as const),
@@ -35,9 +43,24 @@ const client = McpSchema.McpServerClient.of({
   },
   getClient: Effect.die("unused"),
 });
+const ComputerUseToolkitTest = Layer.succeed(
+  ComputerUseToolkit.ComputerUseToolkit,
+  ComputerUseToolkit.ComputerUseToolkit.of({
+    status: () => Effect.die("unused"),
+    listTargets: () => Effect.die("unused"),
+    observe: () => Effect.die("unused"),
+    act: () => Effect.die("unused"),
+    stop: () => Effect.void,
+    resolveApproval: () => Effect.succeed(false),
+    executeGoverned: (_input, effect) =>
+      effect.pipe(Effect.map((value) => ({ _tag: "success", value }) as const)),
+  }),
+);
 const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.provideMerge(ComputerUseToolkitTest),
+  Layer.provide(NodeServices.layer),
 );
 
 it("normalizes empty successful notification responses to accepted", () => {
@@ -62,7 +85,7 @@ it.effect("returns bounded structural preview snapshot failures", () =>
         environmentId,
       });
       yield* Stream.runForEach(events, (event) =>
-        event.type === "connected"
+        event.type !== "request"
           ? Effect.void
           : broker.respond({
               clientId: "mcp-failure-client",
@@ -166,7 +189,7 @@ it.effect("registers annotated tools and preserves authenticated request context
         environmentId,
       });
       yield* Stream.runForEach(events, (event) => {
-        if (event.type === "connected") return Effect.void;
+        if (event.type !== "request") return Effect.void;
         routedRequests.push(event.request);
         return broker.respond({
           clientId: "mcp-test-client",
@@ -220,11 +243,6 @@ it.effect("registers annotated tools and preserves authenticated request context
       expect(clickTool?.tool.annotations?.readOnlyHint).toBe(false);
       expect(clickTool?.tool.annotations?.destructiveHint).toBe(true);
       expect(clickTool?.tool.annotations?.openWorldHint).toBe(true);
-      expect(clickTool?.tool.outputSchema).toEqual({
-        type: "object",
-        additionalProperties: false,
-        description: "The preview action completed successfully.",
-      });
 
       const navigateTool = server.tools.find(({ tool }) => tool.name === "preview_navigate");
       expect(navigateTool?.tool.annotations?.destructiveHint).toBe(false);

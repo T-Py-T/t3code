@@ -30,20 +30,17 @@ describe("Computer Use authorization scopes", () => {
     ]);
   });
 
-  it("does not silently grant Computer Use through existing client defaults", () => {
-    for (const scope of computerScopes) {
-      expect(AuthStandardClientScopes).not.toContain(scope);
-      expect(AuthAdministrativeScopes).not.toContain(scope);
+  it("grants user-facing Computer Use scopes to paired remote clients", () => {
+    for (const scope of computerScopes.slice(0, 3)) {
+      expect(AuthStandardClientScopes).toContain(scope);
+      expect(AuthAdministrativeScopes).toContain(scope);
     }
+    expect(AuthStandardClientScopes).not.toContain(AuthComputerHostScope);
+    expect(AuthAdministrativeScopes).not.toContain(AuthComputerHostScope);
   });
 
-  it("grants only the local desktop control surface the user-facing computer scopes", () => {
-    expect(AuthDesktopClientScopes).toEqual([
-      ...AuthAdministrativeScopes,
-      AuthComputerReadScope,
-      AuthComputerOperateScope,
-      AuthComputerApproveScope,
-    ]);
+  it("keeps host registration local while desktop and remote clients share controls", () => {
+    expect(AuthDesktopClientScopes).toEqual(AuthAdministrativeScopes);
     expect(AuthDesktopClientScopes).not.toContain(AuthComputerHostScope);
   });
 });

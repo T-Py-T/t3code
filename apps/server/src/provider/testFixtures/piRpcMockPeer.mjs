@@ -579,7 +579,13 @@ const requestComputerUseApproval = (command) => {
     id: "computer-approval-ui-1",
     method: "select",
     title: "T3 Computer Use [computer-use-approval-0] TextEdit :: observe",
-    options: ["Allow once", "Allow for this session", "Always allow on this computer", "Deny"],
+    options: [
+      "Allow once",
+      "Allow for this turn",
+      "Allow for this session",
+      "Always allow on this computer",
+      "Deny",
+    ],
   });
 };
 

@@ -1,5 +1,8 @@
 import * as Effect from "effect/Effect";
 import type {
+  ComputerUseActionRisk,
+  ComputerUseHistoryOperation,
+  ComputerUseTarget,
   PreviewAutomationOperation,
   PreviewAutomationOpenInput,
   PreviewAutomationRecordingArtifact,
@@ -10,9 +13,19 @@ import type {
   PreviewAutomationStatus,
   PreviewTabId,
 } from "@t3tools/contracts";
+import {
+  ComputerUseHostId,
+  ComputerUseRequestIdentity,
+  ComputerUseTargetId,
+  PreviewAutomationUnavailableError,
+} from "@t3tools/contracts";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import * as ComputerUseToolkit from "../../../computerUse/ComputerUseToolkit.ts";
+import { resolvePolicyBoundary } from "../computer/handlers.ts";
+import * as Crypto from "effect/Crypto";
+import * as Encoding from "effect/Encoding";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 /**
@@ -39,20 +52,122 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   input: unknown,
   timeoutMs?: number,
   tabId?: PreviewTabId,
-): Effect.fn.Return<
-  A,
-  import("@t3tools/contracts").PreviewAutomationError,
-  McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
-> {
+) {
   const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+  if (scope.turnId === undefined) {
+    return yield* new PreviewAutomationUnavailableError({
+      capability: "preview",
+      environmentId: scope.environmentId,
+      threadId: scope.threadId,
+      providerSessionId: scope.providerSessionId,
+      providerInstanceId: scope.providerInstanceId,
+    });
+  }
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-  return yield* broker.invoke<A>({
-    scope,
-    operation,
-    input,
-    ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    ...(tabId === undefined ? {} : { tabId }),
-  });
+  const toolkit = yield* ComputerUseToolkit.ComputerUseToolkit;
+  const crypto = yield* Crypto.Crypto;
+  const details = typeof input === "object" && input !== null ? input : {};
+  const browser = "browser" in details && details.browser === "external" ? "external" : "built-in";
+  const displayName = browser === "external" ? "External browser" : "Built-in browser";
+  const target: ComputerUseTarget = {
+    targetId: ComputerUseTargetId.make(`preview-${browser}`),
+    kind: "browser-tab",
+    displayName,
+    applicationId: `t3.preview.${browser}`,
+    stableIdentity: `preview:${browser}`,
+  };
+  const access =
+    operation === "status" || operation === "snapshot" || operation === "waitFor"
+      ? ("observe" as const)
+      : ("operate" as const);
+  const risk: ComputerUseActionRisk =
+    access === "observe"
+      ? "inspect"
+      : operation === "resize" ||
+          operation === "setColorScheme" ||
+          operation === "scroll" ||
+          operation === "recordingStart" ||
+          operation === "recordingStop"
+        ? "reversible-local"
+        : "external-side-effect";
+  const actionTarget =
+    "locator" in details && typeof details.locator === "string"
+      ? "the requested semantic target"
+      : "selector" in details && typeof details.selector === "string"
+        ? "the requested page element"
+        : "x" in details && "y" in details
+          ? `coordinates (${String(details.x)}, ${String(details.y)})`
+          : "the active page";
+  const requestedUrl = (() => {
+    if (!("url" in details) || typeof details.url !== "string") return "the requested page";
+    try {
+      return new URL(details.url).origin;
+    } catch {
+      return "the requested page";
+    }
+  })();
+  const actionSummary = (() => {
+    switch (operation) {
+      case "open":
+      case "navigate":
+        return `${operation === "open" ? "Open" : "Navigate to"} ${requestedUrl}`;
+      case "click":
+        return `Click ${actionTarget}`;
+      case "type":
+        return `Type ${"text" in details && typeof details.text === "string" ? details.text.length : 0} characters into ${actionTarget}`;
+      case "press":
+        return "Press a browser key";
+      case "evaluate":
+        return `Evaluate browser JavaScript (${"expression" in details && typeof details.expression === "string" ? details.expression.length : 0} characters)`;
+      case "scroll":
+        return `Scroll ${actionTarget}`;
+      default:
+        return `${operation} ${displayName}`;
+    }
+  })();
+  const redactedActionSummary = actionSummary.slice(0, 512);
+  const digest = yield* crypto
+    .digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify({ operation, input, tabId: tabId ?? null })),
+    )
+    .pipe(Effect.orDie);
+  const computerScope = {
+    environmentId: scope.environmentId,
+    threadId: scope.threadId,
+    turnId: scope.turnId,
+    providerSessionId: scope.providerSessionId,
+    providerInstanceId: scope.providerInstanceId,
+  };
+  const outcome = yield* resolvePolicyBoundary(
+    toolkit,
+    toolkit.executeGoverned(
+      {
+        scope: computerScope,
+        hostId: ComputerUseHostId.make(`preview-${scope.environmentId}`),
+        operation: `browser-${operation}` as ComputerUseHistoryOperation,
+        target,
+        access,
+        risk,
+        runtimeMode: scope.runtimeMode ?? "full-access",
+        action: {
+          requestIdentity: ComputerUseRequestIdentity.make(Encoding.encodeHex(digest)),
+          summary: redactedActionSummary,
+        },
+        requestedSummary: `Requested ${redactedActionSummary}.`,
+        activeSummary: `${redactedActionSummary}.`,
+        completedSummary: `Completed ${redactedActionSummary}.`,
+      },
+      broker.invoke<A>({
+        scope,
+        operation,
+        input,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(tabId === undefined ? {} : { tabId }),
+      }),
+    ),
+  );
+  return outcome._tag === "success" ? outcome.value : outcome;
 });
 
 const invokeTargeted = <A>(
@@ -67,6 +182,11 @@ const invokeTargeted = <A>(
   return invoke<A>(operation, operationInput, timeoutMs, tabId);
 };
 
+const emptyActionResult = (
+  result: void | ComputerUseToolkit.ComputerUsePolicyBoundary,
+): Record<string, never> | ComputerUseToolkit.ComputerUsePolicyBoundary =>
+  result && result._tag === "policy" ? result : {};
+
 const handlers = {
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
@@ -79,14 +199,17 @@ const handlers = {
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
   preview_snapshot: (input) => invokeTargeted<PreviewAutomationSnapshot>("snapshot", input ?? {}),
   preview_click: (input) =>
-    invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.as({})),
-  preview_type: (input) => invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as({})),
-  preview_press: (input) => invokeTargeted<void>("press", input).pipe(Effect.as({})),
-  preview_scroll: (input) => invokeTargeted<void>("scroll", input).pipe(Effect.as({})),
+    invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.map(emptyActionResult)),
+  preview_type: (input) =>
+    invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.map(emptyActionResult)),
+  preview_press: (input) =>
+    invokeTargeted<void>("press", input).pipe(Effect.map(emptyActionResult)),
+  preview_scroll: (input) =>
+    invokeTargeted<void>("scroll", input).pipe(Effect.map(emptyActionResult)),
   preview_evaluate: (input) =>
     invokeTargeted<unknown>("evaluate", input).pipe(Effect.map((result) => result ?? null)),
   preview_wait_for: (input) =>
-    invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.as({})),
+    invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.map(emptyActionResult)),
   preview_recording_start: (input) =>
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
   preview_recording_stop: (input) =>

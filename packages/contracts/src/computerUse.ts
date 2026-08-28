@@ -26,6 +26,8 @@ export const ComputerUseObservationId = makeComputerUseId("ComputerUseObservatio
 export type ComputerUseObservationId = typeof ComputerUseObservationId.Type;
 export const ComputerUseApprovalId = makeComputerUseId("ComputerUseApprovalId");
 export type ComputerUseApprovalId = typeof ComputerUseApprovalId.Type;
+export const ComputerUseRequestIdentity = makeComputerUseId("ComputerUseRequestIdentity");
+export type ComputerUseRequestIdentity = typeof ComputerUseRequestIdentity.Type;
 export const ComputerUseHistoryEntryId = makeComputerUseId("ComputerUseHistoryEntryId");
 export type ComputerUseHistoryEntryId = typeof ComputerUseHistoryEntryId.Type;
 
@@ -95,6 +97,12 @@ export const ComputerUseActionRisk = Schema.Literals([
 ]);
 export type ComputerUseActionRisk = typeof ComputerUseActionRisk.Type;
 
+export const ComputerUseActionDescriptor = Schema.Struct({
+  requestIdentity: ComputerUseRequestIdentity,
+  summary: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+});
+export type ComputerUseActionDescriptor = typeof ComputerUseActionDescriptor.Type;
+
 export const ComputerUsePolicyDecision = Schema.Union([
   Schema.TaggedStruct("allow", {}),
   Schema.TaggedStruct("request-app-grant", {
@@ -118,6 +126,28 @@ export type ComputerUsePlatform = typeof ComputerUsePlatform.Type;
 export const COMPUTER_USE_OPERATIONS = ["status", "listTargets", "observe", "act"] as const;
 export const ComputerUseOperation = Schema.Literals(COMPUTER_USE_OPERATIONS);
 export type ComputerUseOperation = typeof ComputerUseOperation.Type;
+
+export const COMPUTER_USE_BROWSER_OPERATIONS = [
+  "browser-status",
+  "browser-open",
+  "browser-navigate",
+  "browser-resize",
+  "browser-setColorScheme",
+  "browser-snapshot",
+  "browser-click",
+  "browser-type",
+  "browser-press",
+  "browser-scroll",
+  "browser-evaluate",
+  "browser-waitFor",
+  "browser-recordingStart",
+  "browser-recordingStop",
+] as const;
+export const ComputerUseHistoryOperation = Schema.Literals([
+  ...COMPUTER_USE_OPERATIONS,
+  ...COMPUTER_USE_BROWSER_OPERATIONS,
+]);
+export type ComputerUseHistoryOperation = typeof ComputerUseHistoryOperation.Type;
 
 export const COMPUTER_USE_MAX_ACTIONS_PER_BATCH = 64;
 export const COMPUTER_USE_MAX_TEXT_LENGTH = 65_536;
@@ -427,7 +457,7 @@ export const ComputerUseHistoryEntry = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   turnId: Schema.optional(TurnId),
   providerInstanceId: Schema.optional(ProviderInstanceId),
-  operation: Schema.optional(ComputerUseOperation),
+  operation: Schema.optional(ComputerUseHistoryOperation),
   target: Schema.optional(ComputerUseHistoryTarget),
   risk: Schema.optional(ComputerUseActionRisk),
   state: ComputerUseHistoryState,

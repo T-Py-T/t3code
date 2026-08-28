@@ -166,6 +166,20 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
           Effect.matchCauseEffect({
             onFailure: previewSnapshotFailure,
             onSuccess: ({ encodedResult }) => {
+              if (
+                typeof encodedResult === "object" &&
+                encodedResult !== null &&
+                "_tag" in encodedResult &&
+                encodedResult._tag === "policy"
+              ) {
+                return Effect.succeed(
+                  new McpSchema.CallToolResult({
+                    isError: false,
+                    structuredContent: encodedResult,
+                    content: [{ type: "text", text: JSON.stringify(encodedResult) }],
+                  }),
+                );
+              }
               const snapshot = encodedResult as {
                 readonly screenshot: {
                   readonly mimeType: "image/png";

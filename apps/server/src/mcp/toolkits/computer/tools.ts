@@ -1,6 +1,7 @@
 import {
   ComputerUseActResult,
   ComputerUseActionBatch,
+  ComputerUseActionDescriptor,
   ComputerUseActionRisk,
   ComputerUseApprovalId,
   ComputerUseBrokerError,
@@ -16,7 +17,7 @@ import {
   ComputerUseTurnUnavailableError,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { McpSchema, Tool, Toolkit } from "effect/unstable/ai";
 
 import * as ComputerUseToolkit from "../../../computerUse/ComputerUseToolkit.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -24,6 +25,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   ComputerUseToolkit.ComputerUseToolkit,
+  McpSchema.McpServerClient,
 ];
 
 const ComputerUseFailure = Schema.Union([
@@ -32,11 +34,12 @@ const ComputerUseFailure = Schema.Union([
   ComputerUseBrokerError,
 ]);
 
-const ComputerUsePolicyBoundaryResult = Schema.TaggedStruct("policy", {
+export const ComputerUsePolicyBoundaryResult = Schema.TaggedStruct("policy", {
   approvalId: Schema.optional(ComputerUseApprovalId),
   decision: ComputerUsePolicyDecision,
   target: ComputerUseTarget,
   risk: ComputerUseActionRisk,
+  action: Schema.optional(ComputerUseActionDescriptor),
 });
 
 const ComputerUseListTargetsInput = Schema.Struct({

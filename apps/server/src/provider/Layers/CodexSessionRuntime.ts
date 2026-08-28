@@ -292,13 +292,14 @@ interface PendingUserInput {
 
 type McpElicitationPersistenceDecision = Extract<
   ProviderApprovalDecision,
-  "acceptForSession" | "acceptAlways"
+  "acceptForTurn" | "acceptForSession" | "acceptAlways"
 >;
 
 function mcpElicitationPersistenceDecision(
   value: string,
 ): McpElicitationPersistenceDecision | null {
   const normalized = value.toLowerCase();
+  if (normalized.includes("turn")) return "acceptForTurn";
   if (normalized.includes("session")) return "acceptForSession";
   if (
     normalized.includes("always") ||
@@ -353,6 +354,8 @@ export function describeMcpElicitation(
     metadata?.target?.name ??
     metadata?.tool_params?.app_name ??
     metadata?.tool_params?.app ??
+    payload.message.match(/^Allow T3 Computer Use to (?:observe|operate) (.+?)\?$/i)?.[1] ??
+    payload.message.match(/^Confirm T3 Computer Use: .+ in (.+?)\.$/i)?.[1] ??
     payload.message.match(/^Allow ChatGPT to use (.+?)\?$/i)?.[1] ??
     metadata?.connector_name ??
     metadata?.connectorName ??
@@ -383,6 +386,15 @@ export function describeMcpElicitation(
     options: [
       { decision: "cancel", label: "Cancel" },
       { decision: "decline", label: "Decline" },
+      ...(persistenceOptions.has("acceptForTurn") &&
+      toMcpElicitationResponse(payload, "acceptForTurn").action === "accept"
+        ? [
+            {
+              decision: "acceptForTurn" as const,
+              label: persistenceOptions.get("acceptForTurn") || "Allow for this turn",
+            },
+          ]
+        : []),
       ...(persistenceOptions.has("acceptForSession") &&
       toMcpElicitationResponse(payload, "acceptForSession").action === "accept"
         ? [
@@ -420,11 +432,13 @@ export function toMcpElicitationResponse(
   }
 
   const persist =
-    decision === "acceptForSession"
-      ? "session"
-      : decision === "acceptAlways"
-        ? "always"
-        : undefined;
+    decision === "acceptForTurn"
+      ? "turn"
+      : decision === "acceptForSession"
+        ? "session"
+        : decision === "acceptAlways"
+          ? "always"
+          : undefined;
   const form = mcpElicitationFormFields(payload);
   const content: Record<string, unknown> = {};
 

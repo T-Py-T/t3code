@@ -62,6 +62,7 @@ import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ComputerUseBroker from "../../computerUse/ComputerUseBroker.ts";
+import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -240,7 +241,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const startMcpTurn = options?.startMcpTurn ?? McpSessionRegistry.startActiveMcpTurn;
   const finishMcpTurn = options?.finishMcpTurn ?? McpSessionRegistry.finishActiveMcpTurn;
   const finishComputerUseTurn =
-    options?.finishComputerUseTurn ?? ComputerUseBroker.stopActiveComputerUseTurn;
+    options?.finishComputerUseTurn ??
+    ((threadId, turnId, reason) =>
+      Effect.all([
+        ComputerUseBroker.stopActiveComputerUseTurn(threadId, turnId, reason),
+        PreviewAutomationBroker.stopActivePreviewAutomationTurn(threadId, turnId),
+      ]).pipe(Effect.asVoid));
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**

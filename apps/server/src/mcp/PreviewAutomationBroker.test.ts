@@ -53,6 +53,7 @@ const requestsFrom = (
         onConnected(event.connectionId);
         return Result.failVoid;
       }
+      if (event.type === "cancel") return Result.failVoid;
       return Result.succeed({ ...event.request, connectionId: event.connectionId });
     }),
   );
@@ -275,7 +276,7 @@ it.effect("announces a live replacement stream before delivering requests", () =
         Stream.take(2),
         Stream.runForEach((event) => {
           receivedTypes.push(event.type);
-          return event.type === "connected"
+          return event.type !== "request"
             ? Effect.void
             : broker.respond({
                 clientId: "client-1",
@@ -294,6 +295,35 @@ it.effect("announces a live replacement stream before delivering requests", () =
 
       expect(receivedTypes).toEqual(["connected", "request"]);
       expect(result).toBe("ready");
+    }),
+  ),
+);
+
+it.effect("cancels in-flight browser work and releases its control lease", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const events = yield* broker.connect(makeHost());
+      const requestSeen = yield* Deferred.make<void>();
+      const cancelSeen = yield* Deferred.make<string>();
+      yield* Stream.runForEach(events, (event) => {
+        if (event.type === "request") return Deferred.succeed(requestSeen, undefined);
+        if (event.type === "cancel") return Deferred.succeed(cancelSeen, event.requestId);
+        return Effect.void;
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const invocation = yield* broker
+        .invoke({ scope, operation: "click", input: { locator: "role=button" } })
+        .pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(requestSeen);
+      expect(yield* broker.activeControlFor(scope.environmentId)).toMatchObject({
+        threadId: scope.threadId,
+      });
+      expect(yield* broker.stopEnvironment(scope.environmentId)).toBe(1);
+      expect(yield* Deferred.await(cancelSeen)).toBe("preview-0");
+      expect((yield* Fiber.join(invocation))._tag).toBe("Failure");
+      expect(yield* broker.activeControlFor(scope.environmentId)).toBeUndefined();
     }),
   ),
 );

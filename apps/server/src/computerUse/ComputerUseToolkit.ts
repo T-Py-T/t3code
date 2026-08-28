@@ -5,12 +5,18 @@ import {
   ComputerUseObservation,
   ComputerUseStatus,
   ComputerUseTargetList,
+  ComputerUseRequestIdentity,
   type ComputerUseActionBatch,
+  type ComputerUseActionDescriptor,
+  type ComputerUseAccessLevel,
   type ComputerUseActionRisk,
   type ComputerUseApprovalId,
   type ComputerUseBrokerError,
   type ComputerUseObservationId,
+  type ComputerUseHistoryOperation,
+  type ComputerUseHostId,
   type ComputerUsePolicyDecision,
+  type ProviderApprovalDecision,
   type ComputerUseStatus as ComputerUseStatusValue,
   type ComputerUseTarget,
   type ComputerUseTargetKind,
@@ -18,7 +24,9 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -37,6 +45,7 @@ export interface ComputerUsePolicyBoundary {
   readonly decision: ComputerUsePolicyDecision;
   readonly target: ComputerUseTarget;
   readonly risk: ComputerUseActionRisk;
+  readonly action?: ComputerUseActionDescriptor;
 }
 
 export type ComputerUseToolkitOutcome<A> =
@@ -69,6 +78,20 @@ export interface ComputerUseActInput {
   readonly runtimeMode: RuntimeMode;
 }
 
+export interface ComputerUseGovernedInput {
+  readonly scope: ComputerUseInvocationScope;
+  readonly hostId: ComputerUseHostId;
+  readonly operation: ComputerUseHistoryOperation;
+  readonly target: ComputerUseTarget;
+  readonly access: ComputerUseAccessLevel;
+  readonly risk: ComputerUseActionRisk;
+  readonly runtimeMode: RuntimeMode;
+  readonly action?: ComputerUseActionDescriptor;
+  readonly requestedSummary: string;
+  readonly activeSummary: string;
+  readonly completedSummary: string;
+}
+
 export class ComputerUseToolkit extends Context.Service<
   ComputerUseToolkit,
   {
@@ -85,6 +108,14 @@ export class ComputerUseToolkit extends Context.Service<
       input: ComputerUseActInput,
     ) => Effect.Effect<ComputerUseToolkitOutcome<ComputerUseActResult>, ComputerUseBrokerError>;
     readonly stop: (input: ComputerUseStopInput) => Effect.Effect<void>;
+    readonly resolveApproval: (
+      approvalId: ComputerUseApprovalId,
+      decision: ProviderApprovalDecision,
+    ) => Effect.Effect<boolean>;
+    readonly executeGoverned: <A, E, R>(
+      input: ComputerUseGovernedInput,
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<ComputerUseToolkitOutcome<A>, E, R>;
   }
 >()("t3/computerUse/ComputerUseToolkit") {}
 
@@ -102,10 +133,69 @@ const historyStateForBrokerError = (
   return "stopped";
 };
 
+const describeActionBatch = (batch: ComputerUseActionBatch): string =>
+  batch.actions
+    .map((action) => {
+      switch (action._tag) {
+        case "click":
+          return `Click at (${action.x}, ${action.y})`;
+        case "double-click":
+          return `Double-click at (${action.x}, ${action.y})`;
+        case "secondary-click":
+          return `Secondary-click at (${action.x}, ${action.y})`;
+        case "move":
+          return `Move the pointer to (${action.x}, ${action.y})`;
+        case "drag":
+          return `Drag from (${action.from.x}, ${action.from.y}) to (${action.to.x}, ${action.to.y})`;
+        case "scroll":
+          return `Scroll by (${action.deltaX}, ${action.deltaY})`;
+        case "text-entry":
+          return `Enter text (${action.text.length} characters)`;
+        case "paste":
+          return `Paste text (${action.text.length} characters)`;
+        case "keypress":
+          return action.key.length === 1 ? "Press one character key" : "Press a named key";
+        case "selection":
+          return `Select characters ${action.start}-${action.end}`;
+        case "direct-value":
+          return `Set a value (${action.value.length} characters)`;
+        case "accessibility-action":
+          return "Perform an accessibility action";
+        case "wait":
+          return `Wait ${action.durationMs}ms`;
+        case "screenshot-refresh":
+          return "Refresh the screenshot";
+      }
+    })
+    .join("; ")
+    .slice(0, 512);
+
 export const make = Effect.gen(function* ComputerUseToolkitMake() {
   const broker = yield* ComputerUseBroker;
   const policy = yield* ComputerUsePolicy;
   const history = yield* ComputerUseHistory;
+  const crypto = yield* Crypto.Crypto;
+
+  const actionDescriptor = Effect.fn("ComputerUseToolkit.actionDescriptor")(function* (
+    input: ComputerUseActInput,
+  ) {
+    const digest = yield* crypto
+      .digest(
+        "SHA-256",
+        new TextEncoder().encode(
+          JSON.stringify({
+            target: input.target.stableIdentity,
+            observationId: input.observationId,
+            actions: input.batch.actions,
+          }),
+        ),
+      )
+      .pipe(Effect.orDie);
+    return {
+      requestIdentity: ComputerUseRequestIdentity.make(Encoding.encodeHex(digest)),
+      summary: describeActionBatch(input.batch),
+    } satisfies ComputerUseActionDescriptor;
+  });
 
   const appendHistory = (
     scope: ComputerUseInvocationScope,
@@ -338,9 +428,103 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
     },
   );
 
+  const executeGoverned: ComputerUseToolkit["Service"]["executeGoverned"] = Effect.fn(
+    "ComputerUseToolkit.executeGoverned",
+  )(function* (input, effect) {
+    yield* appendHistory(input.scope, {
+      hostId: input.hostId,
+      operation: input.operation,
+      target: input.target,
+      risk: input.risk,
+      state: "requested",
+      summary: input.requestedSummary,
+    });
+    const decision = yield* policy.evaluate({
+      scope: { ...input.scope, hostId: input.hostId },
+      target: input.target,
+      access: input.access,
+      risk: input.risk,
+      runtimeMode: input.runtimeMode,
+      ...(input.action === undefined ? {} : { action: input.action }),
+    });
+    if (decision._tag !== "allow") {
+      const approvalId =
+        decision._tag === "request-app-grant" || decision._tag === "request-action-confirmation"
+          ? yield* policy.requestApproval({
+              input: {
+                scope: { ...input.scope, hostId: input.hostId },
+                target: input.target,
+                access: input.access,
+                risk: input.risk,
+                runtimeMode: input.runtimeMode,
+                ...(input.action === undefined ? {} : { action: input.action }),
+              },
+              decision,
+            })
+          : undefined;
+      const waiting =
+        decision._tag === "request-app-grant" || decision._tag === "request-action-confirmation";
+      const paused = decision._tag === "deny" && decision.reason === "paused";
+      yield* appendHistory(input.scope, {
+        hostId: input.hostId,
+        operation: input.operation,
+        target: input.target,
+        risk: input.risk,
+        state: waiting ? "waiting-approval" : paused ? "paused" : "failed",
+        summary: waiting
+          ? `Waiting for approval: ${input.action?.summary ?? input.requestedSummary}`
+          : input.requestedSummary,
+        resultTag: decision._tag,
+      });
+      return {
+        _tag: "policy",
+        ...(approvalId === undefined ? {} : { approvalId }),
+        decision,
+        target: input.target,
+        risk: input.risk,
+        ...(input.action === undefined ? {} : { action: input.action }),
+      } as const;
+    }
+    yield* appendHistory(input.scope, {
+      hostId: input.hostId,
+      operation: input.operation,
+      target: input.target,
+      risk: input.risk,
+      state: input.access === "observe" ? "observing" : "acting",
+      summary: input.activeSummary,
+    });
+    const value = yield* effect.pipe(
+      Effect.tapError((error) =>
+        appendHistory(input.scope, {
+          hostId: input.hostId,
+          operation: input.operation,
+          target: input.target,
+          risk: input.risk,
+          state: "failed",
+          summary: input.activeSummary,
+          resultTag:
+            typeof error === "object" && error !== null && "_tag" in error
+              ? String(error._tag)
+              : "error",
+        }),
+      ),
+    );
+    yield* appendHistory(input.scope, {
+      hostId: input.hostId,
+      operation: input.operation,
+      target: input.target,
+      risk: input.risk,
+      state: "completed",
+      summary: input.completedSummary,
+      resultTag: "success",
+    });
+    return { _tag: "success", value } as const;
+  });
+
   const act: ComputerUseToolkit["Service"]["act"] = Effect.fn("ComputerUseToolkit.act")(
     function* (input) {
       const host = yield* requireHost(input.scope, "act");
+      const action = yield* actionDescriptor(input);
       yield* appendHistory(input.scope, {
         hostId: host.hostId,
         operation: "act",
@@ -355,6 +539,7 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
         access: "operate",
         risk: input.risk,
         runtimeMode: input.runtimeMode,
+        action,
       });
       if (decision._tag !== "allow") {
         const approvalId =
@@ -366,6 +551,7 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
                   access: "operate",
                   risk: input.risk,
                   runtimeMode: input.runtimeMode,
+                  action,
                 },
                 decision,
               })
@@ -392,6 +578,7 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
           decision,
           target: input.target,
           risk: input.risk,
+          action,
         } as const;
       }
       yield* appendHistory(input.scope, {
@@ -463,7 +650,15 @@ export const make = Effect.gen(function* ComputerUseToolkitMake() {
     },
   );
 
-  return ComputerUseToolkit.of({ status, listTargets, observe, act, stop: broker.stop });
+  return ComputerUseToolkit.of({
+    status,
+    listTargets,
+    observe,
+    act,
+    stop: broker.stop,
+    resolveApproval: (approvalId, decision) => policy.resolveApproval({ approvalId, decision }),
+    executeGoverned,
+  });
 });
 
 export const layer = Layer.effect(ComputerUseToolkit, make);

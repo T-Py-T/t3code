@@ -104,6 +104,9 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         "terminal:operate",
         "review:write",
         "relay:read",
+        "computer:read",
+        "computer:operate",
+        "computer:approve",
       ]);
       expect(verified.subject).toBe("one-time-token");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
@@ -183,6 +186,9 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         "terminal:operate",
         "review:write",
         "relay:read",
+        "computer:read",
+        "computer:operate",
+        "computer:approve",
         "access:read",
         "access:write",
         "relay:write",

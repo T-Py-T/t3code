@@ -1163,7 +1163,7 @@ const exchangeAccessToken = (
         requested_token_type: AuthAccessTokenType,
         scope:
           options?.scope ??
-          "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write",
+          "orchestration:read orchestration:operate terminal:operate review:write relay:read computer:read computer:operate computer:approve access:read access:write relay:write",
         ...(options?.clientMetadata?.label ? { client_label: options.clientMetadata.label } : {}),
         ...(options?.clientMetadata?.deviceType
           ? { client_device_type: options.clientMetadata.deviceType }
@@ -1693,7 +1693,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(tokenBody.token_type, "Bearer");
       assert.equal(
         tokenBody.scope,
-        "orchestration:read orchestration:operate terminal:operate review:write relay:read access:read access:write relay:write",
+        "orchestration:read orchestration:operate terminal:operate review:write relay:read computer:read computer:operate computer:approve access:read access:write relay:write",
       );
       assert.equal(typeof tokenBody.access_token, "string");
 
@@ -1718,6 +1718,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         "terminal:operate",
         "review:write",
         "relay:read",
+        "computer:read",
+        "computer:operate",
+        "computer:approve",
         "access:read",
         "access:write",
         "relay:write",

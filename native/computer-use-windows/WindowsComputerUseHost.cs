@@ -60,10 +60,6 @@ public sealed class WindowsComputerUseHost : IDisposable
                 )
             );
         }
-        finally
-        {
-            _cancelledLeases.TryRemove(request.LeaseId, out _);
-        }
     }
 
     private static JsonObject Status()
@@ -183,6 +179,7 @@ public sealed class WindowsComputerUseHost : IDisposable
             throw HostFailure.Malformed("actions");
         }
 
+        RequireActive(request.LeaseId);
         Focus(target);
         var completed = 0;
         try

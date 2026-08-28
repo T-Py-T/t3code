@@ -5,6 +5,8 @@ import {
   type ComputerUseActionRisk,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as McpServer from "effect/unstable/ai/McpServer";
 
 import type { ComputerUseInvocationScope } from "../../../computerUse/ComputerUseBroker.ts";
 import * as ComputerUseToolkit from "../../../computerUse/ComputerUseToolkit.ts";
@@ -69,6 +71,59 @@ export const requireComputerUseScope: Effect.Effect<
   };
 });
 
+const AppGrantApproval = Schema.Struct({
+  approval: Schema.Literals(["once", "turn", "session", "always"]),
+});
+const ActionConfirmation = Schema.Struct({ approval: Schema.Literal("approve") });
+
+export const resolvePolicyBoundary = Effect.fn("ComputerToolkit.resolvePolicyBoundary")(function* <
+  A,
+  E,
+  R,
+>(
+  toolkit: ComputerUseToolkit.ComputerUseToolkit["Service"],
+  run: Effect.Effect<ComputerUseToolkit.ComputerUseToolkitOutcome<A>, E, R>,
+) {
+  const capabilities = yield* McpServer.clientCapabilities;
+  let outcome = yield* run;
+  while (outcome._tag === "policy" && outcome.approvalId !== undefined) {
+    if (capabilities.elicitation === undefined) return outcome;
+    const decision = outcome.decision;
+    if (decision._tag !== "request-app-grant" && decision._tag !== "request-action-confirmation") {
+      return outcome;
+    }
+    const approvalId = outcome.approvalId;
+    const response = yield* (
+      decision._tag === "request-app-grant"
+        ? McpServer.elicit({
+            message: `Allow T3 Computer Use to ${decision.access === "observe" ? "observe" : "operate"} ${outcome.target.displayName}?`,
+            schema: AppGrantApproval,
+          }).pipe(
+            Effect.map(({ approval }) =>
+              approval === "always"
+                ? ("acceptAlways" as const)
+                : approval === "session"
+                  ? ("acceptForSession" as const)
+                  : approval === "turn"
+                    ? ("acceptForTurn" as const)
+                    : ("accept" as const),
+            ),
+          )
+        : McpServer.elicit({
+            message: `Confirm T3 Computer Use: ${outcome.action?.summary ?? "the requested action"} in ${outcome.target.displayName}.`,
+            schema: ActionConfirmation,
+          }).pipe(Effect.as("accept" as const))
+    ).pipe(
+      Effect.catchTag("ElicitationDeclined", () => Effect.succeed("decline" as const)),
+      Effect.onInterrupt(() => toolkit.resolveApproval(approvalId, "cancel").pipe(Effect.asVoid)),
+    );
+    yield* toolkit.resolveApproval(approvalId, response);
+    if (response === "decline") return outcome;
+    outcome = yield* run;
+  }
+  return outcome;
+});
+
 const resolveTarget = Effect.fn("ComputerToolkit.resolveTarget")(function* (
   toolkit: ComputerUseToolkit.ComputerUseToolkit["Service"],
   scope: ComputerUseMcpScope,
@@ -99,17 +154,20 @@ const handlers = {
       const scope = yield* requireComputerUseScope;
       const toolkit = yield* ComputerUseToolkit.ComputerUseToolkit;
       const target = yield* resolveTarget(toolkit, scope, input.targetId, "observe");
-      const outcome = yield* toolkit.observe({
-        scope,
-        target,
-        runtimeMode: scope.runtimeMode,
-        ...(input.includeScreenshot === undefined
-          ? {}
-          : { includeScreenshot: input.includeScreenshot }),
-        ...(input.includeAccessibility === undefined
-          ? {}
-          : { includeAccessibility: input.includeAccessibility }),
-      });
+      const outcome = yield* resolvePolicyBoundary(
+        toolkit,
+        toolkit.observe({
+          scope,
+          target,
+          runtimeMode: scope.runtimeMode,
+          ...(input.includeScreenshot === undefined
+            ? {}
+            : { includeScreenshot: input.includeScreenshot }),
+          ...(input.includeAccessibility === undefined
+            ? {}
+            : { includeAccessibility: input.includeAccessibility }),
+        }),
+      );
       return outcome._tag === "success" ? outcome.value : outcome;
     }),
   computer_act: (input) =>
@@ -118,14 +176,17 @@ const handlers = {
       const toolkit = yield* ComputerUseToolkit.ComputerUseToolkit;
       const target = yield* resolveTarget(toolkit, scope, input.targetId, "act");
       const batch = { actions: input.actions };
-      const outcome = yield* toolkit.act({
-        scope,
-        target,
-        observationId: input.observationId,
-        batch,
-        risk: classifyComputerUseBatch(batch),
-        runtimeMode: scope.runtimeMode,
-      });
+      const outcome = yield* resolvePolicyBoundary(
+        toolkit,
+        toolkit.act({
+          scope,
+          target,
+          observationId: input.observationId,
+          batch,
+          risk: classifyComputerUseBatch(batch),
+          runtimeMode: scope.runtimeMode,
+        }),
+      );
       return outcome._tag === "success" ? outcome.value : outcome;
     }),
   computer_stop: () =>

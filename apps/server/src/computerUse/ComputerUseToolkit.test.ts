@@ -65,6 +65,7 @@ const makeHarness = Effect.gen(function* () {
     Effect.provideService(ComputerUseBroker.ComputerUseBroker, broker),
     Effect.provideService(ComputerUsePolicy.ComputerUsePolicy, policy),
     Effect.provideService(ComputerUseHistory.ComputerUseHistory, history),
+    Effect.provide(NodeServices.layer),
   );
   return { broker, history, policy, toolkit } as const;
 });
@@ -196,19 +197,22 @@ for (const providerInstance of ["codex", "pi", "atomic"] as const) {
           .join("\n");
         expect(persistedMetadata).not.toContain("typed-secret");
         expect(persistedMetadata).not.toContain("field-1");
-        expect(
-          yield* toolkit.act({
-            scope: providerScope,
-            target,
-            observationId: observation.observationId,
-            batch: { actions: [{ _tag: "click", x: 30, y: 40 }] },
-            risk: "external-side-effect",
-            runtimeMode: "full-access",
-          }),
-        ).toMatchObject({
+        const externalBoundary = yield* toolkit.act({
+          scope: providerScope,
+          target,
+          observationId: observation.observationId,
+          batch: { actions: [{ _tag: "click", x: 30, y: 40 }] },
+          risk: "external-side-effect",
+          runtimeMode: "full-access",
+        });
+        expect(externalBoundary).toMatchObject({
           _tag: "policy",
           approvalId: "computer-use-approval-1",
           decision: { _tag: "request-action-confirmation", risk: "external-side-effect" },
+          action: {
+            requestIdentity: expect.any(String),
+            summary: "Click at (30, 40)",
+          },
         });
         expect(operations).toEqual(["status", "listTargets", "observe", "act"]);
         expect(

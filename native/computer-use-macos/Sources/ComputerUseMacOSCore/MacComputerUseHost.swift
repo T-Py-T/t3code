@@ -52,7 +52,6 @@ struct LeaseCancellationRegistry: Sendable {
     private var cancelled: Set<String> = []
 
     mutating func cancel(_ leaseId: String) { cancelled.insert(leaseId) }
-    mutating func complete(_ leaseId: String) { cancelled.remove(leaseId) }
     func contains(_ leaseId: String) -> Bool { cancelled.contains(leaseId) }
 }
 
@@ -269,7 +268,6 @@ public actor MacComputerUseHost {
     }
 
     public func handle(_ request: HostRequest) async -> HostResponse {
-        defer { cancellations.complete(request.leaseId) }
         do {
             let result: JSONValue
             switch request.operation {
@@ -673,6 +671,7 @@ public actor MacComputerUseHost {
             try await perform(action, target: target, observation: observation)
             completed += 1
         }
+        try requireActive(request.leaseId)
         let fresh = try await observe(targetId: target.targetId)
         return .object([
             "completedActions": .number(Double(completed)),

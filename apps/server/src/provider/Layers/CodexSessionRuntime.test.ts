@@ -260,7 +260,7 @@ describe("Codex MCP elicitation approvals", () => {
     turnId: "turn-1",
     _meta: {
       app_name: "Safari",
-      persist: ["session", "always"],
+      persist: ["turn", "session", "always"],
     },
     requestedSchema: {
       type: "object",
@@ -269,6 +269,7 @@ describe("Codex MCP elicitation approvals", () => {
           type: "string",
           oneOf: [
             { const: "once", title: "Allow once" },
+            { const: "turn", title: "Allow for this turn" },
             { const: "session", title: "Allow for this session" },
             { const: "always", title: "Always allow Safari" },
           ],
@@ -284,6 +285,7 @@ describe("Codex MCP elicitation approvals", () => {
       options: [
         { decision: "cancel", label: "Cancel" },
         { decision: "decline", label: "Decline" },
+        { decision: "acceptForTurn", label: "Allow for this turn" },
         { decision: "acceptForSession", label: "Allow for this session" },
         { decision: "acceptAlways", label: "Always allow Safari" },
         { decision: "accept", label: "Approve" },
@@ -309,6 +311,14 @@ describe("Codex MCP elicitation approvals", () => {
       action: "accept",
       _meta: { persist: "session" },
       content: { approval: "session" },
+    });
+  });
+
+  it("returns turn-scoped approval in the MCP response", () => {
+    NodeAssert.deepStrictEqual(toMcpElicitationResponse(request, "acceptForTurn"), {
+      action: "accept",
+      _meta: { persist: "turn" },
+      content: { approval: "turn" },
     });
   });
 

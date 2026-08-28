@@ -12,6 +12,7 @@ import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AuthAccessStreamError,
+  AuthComputerApproveScope,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
@@ -1184,6 +1185,31 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
+              if (normalizedCommand.type === "thread.approval.respond") {
+                const requiresComputerApproval = yield* projectionSnapshotQuery
+                  .getThreadDetailById(normalizedCommand.threadId)
+                  .pipe(
+                    Effect.map(
+                      Option.match({
+                        onNone: () => false,
+                        onSome: (thread) =>
+                          thread.activities.some((activity) => {
+                            if (activity.kind !== "approval.requested") return false;
+                            const payload =
+                              activity.payload && typeof activity.payload === "object"
+                                ? (activity.payload as Record<string, unknown>)
+                                : undefined;
+                            if (payload?.requestId !== normalizedCommand.requestId) return false;
+                            return payload.computerUseApproval === true;
+                          }),
+                      }),
+                    ),
+                    Effect.catchCause(() => Effect.succeed(true)),
+                  );
+                if (requiresComputerApproval) {
+                  yield* authorizeEffect(AuthComputerApproveScope, Effect.void);
+                }
+              }
               // Archive and settle both mean "done with this thread", so a
               // live provider session must not keep running background work
               // (PR monitors, dev servers, subagent fleets) after either
@@ -1772,12 +1798,23 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUseGetControlState,
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
-              const [host, activeControl, persistentGrants, paused] = yield* Effect.all([
-                computerUseBroker.hostFor(environmentId).pipe(Effect.map(Option.getOrUndefined)),
-                computerUseBroker.activeControlFor(environmentId),
-                computerUsePolicy.listPersistent(environmentId),
-                computerUsePolicy.isPaused(environmentId),
-              ]);
+              const [host, nativeControl, browserControl, persistentGrants, paused] =
+                yield* Effect.all([
+                  computerUseBroker.hostFor(environmentId).pipe(Effect.map(Option.getOrUndefined)),
+                  computerUseBroker.activeControlFor(environmentId),
+                  previewAutomationBroker.activeControlFor(environmentId),
+                  computerUsePolicy.listPersistent(environmentId),
+                  computerUsePolicy.isPaused(environmentId),
+                ]);
+              const activeControl =
+                nativeControl ??
+                (browserControl?.turnId === undefined
+                  ? undefined
+                  : {
+                      threadId: browserControl.threadId,
+                      turnId: browserControl.turnId,
+                      providerInstanceId: browserControl.providerInstanceId,
+                    });
               return {
                 environmentId,
                 paused,
@@ -1825,7 +1862,12 @@ const makeWsRpcLayer = (
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
                 computerUsePolicy.pause(environmentId).pipe(
-                  Effect.andThen(computerUseBroker.stopEnvironment(environmentId, "user")),
+                  Effect.andThen(
+                    Effect.all([
+                      computerUseBroker.stopEnvironment(environmentId, "user"),
+                      previewAutomationBroker.stopEnvironment(environmentId),
+                    ]).pipe(Effect.map(([native, browser]) => native + browser)),
+                  ),
                   Effect.tap((stopped) =>
                     stopped > 0
                       ? computerUseHistory.append({
@@ -1848,7 +1890,12 @@ const makeWsRpcLayer = (
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
                 computerUsePolicy.pause(environmentId).pipe(
-                  Effect.andThen(computerUseBroker.stopEnvironment(environmentId, "takeover")),
+                  Effect.andThen(
+                    Effect.all([
+                      computerUseBroker.stopEnvironment(environmentId, "takeover"),
+                      previewAutomationBroker.stopEnvironment(environmentId),
+                    ]).pipe(Effect.map(([native, browser]) => native + browser)),
+                  ),
                   Effect.tap((stopped) =>
                     stopped > 0
                       ? computerUseHistory.append({
@@ -1871,7 +1918,12 @@ const makeWsRpcLayer = (
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
                 computerUsePolicy.pause(environmentId).pipe(
-                  Effect.andThen(computerUseBroker.stopEnvironment(environmentId, "interrupted")),
+                  Effect.andThen(
+                    Effect.all([
+                      computerUseBroker.stopEnvironment(environmentId, "interrupted"),
+                      previewAutomationBroker.stopEnvironment(environmentId),
+                    ]).pipe(Effect.map(([native, browser]) => native + browser)),
+                  ),
                   Effect.tap((stopped) =>
                     computerUseHistory.append({
                       environmentId,

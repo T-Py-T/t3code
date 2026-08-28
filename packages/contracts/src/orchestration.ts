@@ -157,6 +157,7 @@ export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
 export type AssistantDeliveryMode = typeof AssistantDeliveryMode.Type;
 export const ProviderApprovalDecision = Schema.Literals([
   "accept",
+  "acceptForTurn",
   "acceptForSession",
   "acceptAlways",
   "decline",

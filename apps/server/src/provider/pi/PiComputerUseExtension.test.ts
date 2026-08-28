@@ -233,7 +233,13 @@ it("pauses for a T3 approval and retries the governed call only after the user a
   expect(toolCalls).toBe(2);
   expect(select).toHaveBeenCalledWith(
     "T3 Computer Use [computer-use-approval-0] TextEdit :: observe",
-    ["Allow once", "Allow for this session", "Always allow on this computer", "Deny"],
+    [
+      "Allow once",
+      "Allow for this turn",
+      "Allow for this session",
+      "Always allow on this computer",
+      "Deny",
+    ],
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
 });

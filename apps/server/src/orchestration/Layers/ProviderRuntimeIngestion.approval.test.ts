@@ -49,6 +49,7 @@ describe("runtimeEventToActivities approval details", () => {
         detail: "Allow ChatGPT to use Safari?",
         appName: "Safari",
         options,
+        computerUseApproval: true,
       },
     } satisfies ProviderRuntimeEvent;
 
@@ -64,6 +65,7 @@ describe("runtimeEventToActivities approval details", () => {
         detail: "Allow ChatGPT to use Safari?",
         appName: "Safari",
         options,
+        computerUseApproval: true,
       },
     });
   });

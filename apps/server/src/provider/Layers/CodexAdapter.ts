@@ -130,6 +130,45 @@ type CodexLifecycleItem =
   | EffectCodexSchema.V2ItemStartedNotification["item"]
   | EffectCodexSchema.V2ItemCompletedNotification["item"];
 
+const PRIVATE_T3_TOOL_PREFIXES = ["computer_", "preview_"] as const;
+
+export function sanitizeCodexPrivateToolPayload(
+  payload: ProviderEvent["payload"],
+): ProviderEvent["payload"] {
+  if (typeof payload !== "object" || payload === null || !("item" in payload)) return payload;
+  const item = payload.item;
+  const tool = typeof item === "object" && item !== null && "tool" in item ? item.tool : undefined;
+  if (
+    typeof item !== "object" ||
+    item === null ||
+    !("type" in item) ||
+    item.type !== "mcpToolCall" ||
+    !("server" in item) ||
+    item.server !== "t3-code" ||
+    typeof tool !== "string" ||
+    !PRIVATE_T3_TOOL_PREFIXES.some((prefix) => tool.startsWith(prefix))
+  ) {
+    return payload;
+  }
+  const value = payload as Record<string, unknown>;
+  const metadata = item as Record<string, unknown>;
+  return {
+    ...(typeof value.startedAtMs === "number" ? { startedAtMs: value.startedAtMs } : {}),
+    ...(typeof value.completedAtMs === "number" ? { completedAtMs: value.completedAtMs } : {}),
+    ...(typeof value.threadId === "string" ? { threadId: value.threadId.slice(0, 512) } : {}),
+    ...(typeof value.turnId === "string" ? { turnId: value.turnId.slice(0, 512) } : {}),
+    item: {
+      type: "mcpToolCall",
+      ...(typeof metadata.id === "string" ? { id: metadata.id.slice(0, 512) } : {}),
+      server: "t3-code",
+      tool: tool.slice(0, 512),
+      ...(typeof metadata.status === "string" ? { status: metadata.status.slice(0, 64) } : {}),
+      ...(typeof metadata.durationMs === "number" ? { durationMs: metadata.durationMs } : {}),
+      ...(metadata.error === null ? { error: null } : {}),
+    },
+  };
+}
+
 type CodexToolUserInputQuestion =
   | EffectCodexSchema.ServerRequest__ToolRequestUserInputQuestion
   | EffectCodexSchema.ToolRequestUserInputParams__ToolRequestUserInputQuestion;
@@ -459,7 +498,7 @@ function runtimeEventBase(
     raw: {
       source: eventRawSource(event),
       method: event.method,
-      payload: event.payload ?? {},
+      payload: sanitizeCodexPrivateToolPayload(event.payload) ?? {},
     },
   };
 }
@@ -499,7 +538,9 @@ function mapItemLifecycle(
       ...(status ? { status } : {}),
       ...(itemTitle(itemType, item) ? { title: itemTitle(itemType, item) } : {}),
       ...(detail ? { detail } : {}),
-      ...(event.payload !== undefined ? { data: event.payload } : {}),
+      ...(event.payload !== undefined
+        ? { data: sanitizeCodexPrivateToolPayload(event.payload) }
+        : {}),
     },
   };
 }

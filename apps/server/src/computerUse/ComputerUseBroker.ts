@@ -2,6 +2,7 @@ import {
   ComputerUseConnectionId,
   ComputerUseHostFailureError,
   ComputerUseHostRequest,
+  ComputerUseHostStatus,
   ComputerUseInvalidRequestError,
   ComputerUseLeaseBusyError,
   ComputerUseLeaseId,
@@ -80,11 +81,15 @@ export class ComputerUseBroker extends Context.Service<
   {
     readonly connect: (
       host: ComputerUseVerifiedHost,
+      initialStatus?: ComputerUseHostStatus,
     ) => Effect.Effect<Stream.Stream<ComputerUseHostStreamEvent>>;
     readonly respond: (response: ComputerUseHostResponse) => Effect.Effect<void>;
     readonly hostFor: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<Option.Option<ComputerUseVerifiedHost>>;
+    readonly hostStatusFor: (
+      environmentId: EnvironmentId,
+    ) => Effect.Effect<Option.Option<ComputerUseHostStatus>>;
     readonly invoke: <A = unknown>(
       input: ComputerUseInvokeInput,
       resultSchema?: Schema.ConstraintDecoder<A, never>,
@@ -104,6 +109,7 @@ export class ComputerUseBroker extends Context.Service<
 
 interface HostConnection {
   readonly host: ComputerUseVerifiedHost;
+  readonly status?: ComputerUseHostStatus;
   readonly connectionId: ComputerUseConnectionId;
   readonly queue: Queue.Queue<ComputerUseHostStreamEvent>;
 }
@@ -121,6 +127,8 @@ interface PendingRequest {
   readonly deferred: Deferred.Deferred<unknown, ComputerUseBrokerError>;
   readonly stopReason?: ComputerUseStopReason;
 }
+
+const isComputerUseHostStatus = Schema.is(ComputerUseHostStatus);
 
 interface BrokerState {
   readonly hosts: ReadonlyMap<EnvironmentId, HostConnection>;
@@ -246,7 +254,7 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
   });
 
   const acquireConnection = Effect.fn("ComputerUseBroker.acquireConnection")(
-    (host: ComputerUseVerifiedHost) =>
+    (host: ComputerUseVerifiedHost, initialStatus?: ComputerUseHostStatus) =>
       connectionGate.withPermit(
         Effect.gen(function* () {
           const previousLease = (yield* SynchronizedRef.get(state)).leases.get(host.environmentId);
@@ -261,7 +269,12 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
           );
           const queue = yield* Queue.unbounded<ComputerUseHostStreamEvent>();
           yield* Queue.offer(queue, { type: "connected", connectionId });
-          const connection: HostConnection = { host, connectionId, queue };
+          const connection: HostConnection = {
+            host,
+            connectionId,
+            queue,
+            ...(initialStatus === undefined ? {} : { status: initialStatus }),
+          };
           const replaced = yield* SynchronizedRef.modify(state, (current) => {
             const previous = current.hosts.get(host.environmentId);
             const hosts = new Map(current.hosts);
@@ -291,10 +304,10 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
   );
 
   const connect: ComputerUseBroker["Service"]["connect"] = Effect.fn("ComputerUseBroker.connect")(
-    (host) =>
+    (host, initialStatus) =>
       Effect.succeed(
         Stream.unwrap(
-          Effect.acquireRelease(acquireConnection(host), disconnect).pipe(
+          Effect.acquireRelease(acquireConnection(host, initialStatus), disconnect).pipe(
             Effect.map((connection) => Stream.fromQueue(connection.queue)),
           ),
         ),
@@ -331,6 +344,24 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
         return;
       }
       if (response.ok) {
+        const hostStatus = response.result;
+        if (pending.operation === "status" && isComputerUseHostStatus(hostStatus)) {
+          yield* SynchronizedRef.update(state, (current) => {
+            const connection = current.hosts.get(pending.lease.scope.environmentId);
+            if (
+              connection?.connectionId !== pending.lease.connection.connectionId ||
+              connection.host.hostId !== response.hostId
+            ) {
+              return current;
+            }
+            const hosts = new Map(current.hosts);
+            hosts.set(pending.lease.scope.environmentId, {
+              ...connection,
+              status: hostStatus,
+            });
+            return { ...current, hosts };
+          });
+        }
         yield* Deferred.succeed(pending.deferred, response.result);
       } else if (response.error) {
         yield* Deferred.fail(
@@ -365,6 +396,14 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
       SynchronizedRef.get(state).pipe(
         Effect.map((current) => Option.fromNullishOr(current.hosts.get(environmentId)?.host)),
       ),
+  );
+
+  const hostStatusFor: ComputerUseBroker["Service"]["hostStatusFor"] = Effect.fn(
+    "ComputerUseBroker.hostStatusFor",
+  )((environmentId) =>
+    SynchronizedRef.get(state).pipe(
+      Effect.map((current) => Option.fromNullishOr(current.hosts.get(environmentId)?.status)),
+    ),
   );
 
   const invoke = Effect.fn("ComputerUseBroker.invoke")(function* <A = unknown>(
@@ -635,6 +674,7 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     connect,
     respond,
     hostFor,
+    hostStatusFor,
     invoke,
     stop,
     stopTurn,

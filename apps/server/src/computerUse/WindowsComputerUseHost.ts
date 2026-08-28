@@ -14,6 +14,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import {
   LocalComputerUseHostTransportError,
   makeLocalComputerUseHostLayer,
+  probeLocalComputerUseHostStatus,
   shouldHashDevelopmentHelper,
   type VerifiedLocalComputerUseHelper,
 } from "./LocalComputerUseHost.ts";
@@ -227,6 +228,17 @@ export const layer = makeLocalComputerUseHostLayer({
   hostPlatform: "win32",
   platform: "windows",
   verifyHelper,
+  probeStatus: (helper, environmentId) =>
+    probeLocalComputerUseHostStatus(
+      {
+        command: helper.path,
+        args: [],
+        env: minimalWindowsComputerUseEnvironment(process.env),
+        timeout: "10 seconds",
+        maxOutputBytes: 64 * 1_024,
+      },
+      environmentId,
+    ),
   makeCommand: (helper) =>
     ChildProcess.make(helper.path, [], {
       env: minimalWindowsComputerUseEnvironment(process.env),

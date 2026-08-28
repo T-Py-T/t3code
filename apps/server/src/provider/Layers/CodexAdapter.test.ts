@@ -48,6 +48,7 @@ import {
 } from "./CodexSessionRuntime.ts";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const encodeUnknownJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
 class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
@@ -700,7 +701,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("labels MCP lifecycle entries with server and tool names", () =>
+  it.effect("labels T3 MCP lifecycle entries without persisting private arguments or results", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
@@ -723,10 +724,13 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             id: "mcp_1",
             server: "t3-code",
             tool: "preview_status",
-            arguments: {},
+            arguments: { text: "TYPED_SECRET" },
             durationMs: 12,
             error: null,
-            result: { content: [{ type: "text", text: "attached" }] },
+            result: {
+              content: [{ type: "image", data: "SCREENSHOT_SENTINEL" }],
+              structuredContent: { accessibility: "ACCESSIBILITY_SECRET" },
+            },
             status: "completed",
           },
         },
@@ -748,13 +752,18 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           id: "mcp_1",
           server: "t3-code",
           tool: "preview_status",
-          arguments: {},
           durationMs: 12,
           error: null,
-          result: { content: [{ type: "text", text: "attached" }] },
           status: "completed",
         },
       });
+      const persisted = yield* encodeUnknownJson({
+        data: firstEvent.value.payload.data,
+        raw: firstEvent.value.raw,
+      });
+      NodeAssert.equal(persisted.includes("TYPED_SECRET"), false);
+      NodeAssert.equal(persisted.includes("SCREENSHOT_SENTINEL"), false);
+      NodeAssert.equal(persisted.includes("ACCESSIBILITY_SECRET"), false);
     }),
   );
 

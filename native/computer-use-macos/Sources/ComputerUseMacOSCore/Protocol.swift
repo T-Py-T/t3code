@@ -245,7 +245,7 @@ public enum TargetPolicy {
             })
             return words.contains { terminalMarkers.contains(String($0)) }
         }
-        return identifiesTerminal || !hasStructuredAccessibility
+        return identifiesTerminal
     }
 }
 

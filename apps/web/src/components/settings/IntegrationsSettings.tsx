@@ -588,6 +588,13 @@ export function ComputerUseAccessControls() {
     "clear Computer Use history",
   );
   const state = controlState.data;
+  const permissionSummary = state?.status
+    ? [
+        `Accessibility ${state.status.permissions.accessibility}`,
+        `Screen capture ${state.status.permissions.screenCapture}`,
+        `Input monitoring ${state.status.permissions.input}`,
+      ].join(" · ")
+    : undefined;
   const status = state?.paused
     ? "paused"
     : state?.activeControl
@@ -665,7 +672,20 @@ export function ComputerUseAccessControls() {
             </Button>
           </div>
         }
-      />
+      >
+        {state?.host ? (
+          <div
+            className="mt-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground"
+            data-computer-use-permission-owner={state.host.verifiedIdentity.publisher}
+            data-computer-use-permissions={permissionSummary}
+          >
+            <div>
+              Permission owner: T3 Code Computer Use · {state.host.verifiedIdentity.publisher}
+            </div>
+            {permissionSummary ? <div className="mt-0.5">{permissionSummary}</div> : null}
+          </div>
+        ) : null}
+      </SettingsRow>
 
       <SettingsRow
         title="Always allowed applications"

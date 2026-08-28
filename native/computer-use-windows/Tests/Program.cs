@@ -74,11 +74,26 @@ static void ProtectedTargets()
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\Alacritty\alacritty.exe", "alacritty.exe"));
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\Rio\Rio.exe", "Rio.exe"));
     Assert(
+        !TargetPolicy.IsForbidden(
+            new TargetSecurityEvidence(
+                @"C:\Program Files\Canvas\canvas.exe",
+                "canvas.exe",
+                "Canvas",
+                "Winit Window",
+                null,
+                null,
+                false,
+                []
+            )
+        ),
+        "Coordinate-only applications must remain available when no terminal identity is present."
+    );
+    Assert(
         TargetPolicy.IsForbidden(
             new TargetSecurityEvidence(
                 @"C:\Program Files\Unknown\surface.exe",
                 "surface.exe",
-                "surface",
+                "Command Prompt",
                 "Winit Window",
                 null,
                 null,

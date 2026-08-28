@@ -812,6 +812,13 @@ function ComputerUseSettingsRows(props: { readonly environmentId: EnvironmentId 
         : control.isPending
           ? "Checking host…"
           : "Host disconnected";
+  const permissionSummary = state?.status
+    ? [
+        `Accessibility ${state.status.permissions.accessibility}`,
+        `Screen capture ${state.status.permissions.screenCapture}`,
+        `Input ${state.status.permissions.input}`,
+      ].join(" · ")
+    : null;
 
   return (
     <>
@@ -820,6 +827,16 @@ function ComputerUseSettingsRows(props: { readonly environmentId: EnvironmentId 
       </Text>
       <View className="mx-4 overflow-hidden rounded-2xl bg-card px-4 py-3">
         <Text className="text-sm font-t3-medium text-foreground">{status}</Text>
+        {state?.host ? (
+          <Text className="mt-1 text-xs text-foreground-muted" numberOfLines={2}>
+            T3 Code Computer Use · {state.host.verifiedIdentity.publisher}
+          </Text>
+        ) : null}
+        {permissionSummary ? (
+          <Text className="mt-1 text-xs text-foreground-muted" numberOfLines={3}>
+            {permissionSummary}
+          </Text>
+        ) : null}
         {control.error ? (
           <Text className="mt-1 text-xs text-rose-600 dark:text-rose-400">{control.error}</Text>
         ) : null}

@@ -399,6 +399,7 @@ export const ComputerUseControlState = Schema.Struct({
   environmentId: EnvironmentId,
   paused: Schema.Boolean,
   host: Schema.optional(ComputerUseVerifiedHost),
+  status: Schema.optional(ComputerUseHostStatus),
   activeControl: Schema.optional(ComputerUseActiveControl),
   persistentGrants: ComputerUsePersistentGrantSummaryList,
 });

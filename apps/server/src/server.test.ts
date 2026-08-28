@@ -966,6 +966,7 @@ const buildAppUnderTest = (options?: {
           connect: () => Effect.succeed(Stream.empty),
           respond: () => Effect.void,
           hostFor: () => Effect.succeed(Option.none()),
+          hostStatusFor: () => Effect.succeed(Option.none()),
           invoke: () => Effect.die("Computer Use host invocation is not stubbed in this test"),
           stop: () => Effect.void,
           stopTurn: () => Effect.void,
@@ -4706,6 +4707,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                     verifiedIdentity: { subject: "com.t3tools.t3code", publisher: "T3 Code" },
                   }),
                 ),
+              hostStatusFor: () =>
+                Effect.succeed(
+                  Option.some({
+                    locked: false,
+                    permissions: {
+                      accessibility: "denied",
+                      screenCapture: "granted",
+                      input: "denied",
+                    },
+                  }),
+                ),
               activeControlFor: () =>
                 Effect.succeed({
                   threadId: ThreadId.make("thread-computer-use"),
@@ -4743,6 +4755,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             Effect.gen(function* () {
               const state = yield* client[WS_METHODS.computerUseGetControlState]({});
               assert.equal(state.host?.hostId, hostId);
+              assert.deepEqual(state.status, {
+                locked: false,
+                permissions: {
+                  accessibility: "denied",
+                  screenCapture: "granted",
+                  input: "denied",
+                },
+              });
               assert.equal(state.activeControl?.providerInstanceId, "atomic");
               assert.equal(state.paused, false);
               assert.deepEqual(state.persistentGrants, [

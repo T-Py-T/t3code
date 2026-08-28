@@ -16,6 +16,7 @@ import {
   TurnId,
   type ComputerUseConnectionId,
   type ComputerUseHostResponse,
+  type ComputerUseHostStatus,
   type ComputerUseHostStreamEvent,
   type ComputerUseLeaseId,
   type ComputerUseRequestId,
@@ -24,6 +25,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -42,6 +44,14 @@ const scope: ComputerUseBroker.ComputerUseInvocationScope = {
 };
 const targetId = ComputerUseTargetId.make("target-text-edit");
 const observationId = ComputerUseObservationId.make("observation-1");
+const initialStatus: ComputerUseHostStatus = {
+  locked: false,
+  permissions: {
+    accessibility: "denied",
+    screenCapture: "granted",
+    input: "denied",
+  },
+};
 
 const host: ComputerUseVerifiedHost = {
   hostId: ComputerUseHostId.make("host-1"),
@@ -63,6 +73,41 @@ const requestsFrom = (events: Stream.Stream<ComputerUseHostStreamEvent>) =>
         : Result.failVoid,
     ),
   );
+
+it.effect("exposes the helper permission snapshot and refreshes it after a status response", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const statusHost = { ...host, supportedOperations: ["status" as const] };
+      const requests = requestsFrom(yield* broker.connect(statusHost, initialStatus));
+      const refreshedStatus: ComputerUseHostStatus = {
+        ...initialStatus,
+        permissions: { ...initialStatus.permissions, accessibility: "granted" },
+      };
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          hostId: statusHost.hostId,
+          connectionId: request.connectionId,
+          leaseId: request.leaseId,
+          requestId: request.requestId,
+          ok: true,
+          result: refreshedStatus,
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(Option.getOrUndefined(yield* broker.hostStatusFor(environmentId))).toEqual(
+        initialStatus,
+      );
+      expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toEqual(
+        refreshedStatus,
+      );
+      expect(Option.getOrUndefined(yield* broker.hostStatusFor(environmentId))).toEqual(
+        refreshedStatus,
+      );
+    }),
+  ),
+);
 
 it.effect("routes an observation through a verified host without provider metadata leakage", () =>
   Effect.scoped(

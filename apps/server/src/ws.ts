@@ -1848,8 +1848,11 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUseGetControlState,
             Effect.gen(function* () {
               const environmentId = yield* serverEnvironment.getEnvironmentId;
-              const [host, activeControl, persistentGrants, paused] = yield* Effect.all([
+              const [host, status, activeControl, persistentGrants, paused] = yield* Effect.all([
                 computerUseBroker.hostFor(environmentId).pipe(Effect.map(Option.getOrUndefined)),
+                computerUseBroker
+                  .hostStatusFor(environmentId)
+                  .pipe(Effect.map(Option.getOrUndefined)),
                 computerUseControl.activeFor(environmentId),
                 computerUsePolicy.listPersistent(environmentId),
                 computerUsePolicy.isPaused(environmentId),
@@ -1858,6 +1861,7 @@ const makeWsRpcLayer = (
                 environmentId,
                 paused,
                 ...(host === undefined ? {} : { host }),
+                ...(status === undefined ? {} : { status }),
                 ...(activeControl === undefined ? {} : { activeControl }),
                 persistentGrants,
               };

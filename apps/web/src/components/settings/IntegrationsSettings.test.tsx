@@ -127,6 +127,14 @@ describe("ComputerUseAccessControls", () => {
         supportedOperations: ["status", "listTargets", "observe", "act"],
         verifiedIdentity: { subject: "com.t3tools.t3code", publisher: "T3 Code" },
       },
+      status: {
+        locked: false,
+        permissions: {
+          accessibility: "denied",
+          screenCapture: "granted",
+          input: "denied",
+        },
+      },
       activeControl: {
         threadId: ThreadId.make("thread-1"),
         turnId: TurnId.make("turn-1"),
@@ -182,6 +190,15 @@ describe("ComputerUseAccessControls", () => {
       visitElements(
         controls,
         (element) => element.props["data-computer-use-grant"] === "TextEdit:operate",
+      ),
+    ).not.toBeNull();
+    expect(
+      visitElements(
+        controls,
+        (element) =>
+          element.props["data-computer-use-permission-owner"] === "T3 Code" &&
+          element.props["data-computer-use-permissions"] ===
+            "Accessibility denied · Screen capture granted · Input monitoring denied",
       ),
     ).not.toBeNull();
 

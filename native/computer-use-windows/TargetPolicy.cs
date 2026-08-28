@@ -70,8 +70,7 @@ public static class TargetPolicy
                     }.Where(value => !string.IsNullOrWhiteSpace(value))
                 )
             )
-            || evidence.SurfaceDescriptors.Any(TerminalIdentityPattern.IsMatch)
-            || !evidence.HasStructuredAccessibility;
+            || evidence.SurfaceDescriptors.Any(TerminalIdentityPattern.IsMatch);
     }
 
     public static TargetClassification Classify(

@@ -1,10 +1,12 @@
 import {
   ComputerUseHostFailureTag,
   ComputerUseHostId,
+  ComputerUseHostStatus,
   type ComputerUseConnectionId,
   type ComputerUseHostResponse,
   type ComputerUsePlatform,
   type ComputerUseVerifiedHost,
+  type EnvironmentId,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Data from "effect/Data";
@@ -20,6 +22,7 @@ import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawne
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { ComputerUseBroker } from "./ComputerUseBroker.ts";
 
 export class LocalComputerUseHostTransportError extends Data.TaggedError(
@@ -65,6 +68,10 @@ interface LocalComputerUseHostOptions<R> {
     config: ServerConfig.ServerConfig["Service"],
   ) => Effect.Effect<VerifiedLocalComputerUseHelper, LocalComputerUseHostTransportError, R>;
   readonly makeCommand: (helper: VerifiedLocalComputerUseHelper) => ChildProcess.Command;
+  readonly probeStatus: (
+    helper: VerifiedLocalComputerUseHelper,
+    environmentId: EnvironmentId,
+  ) => Effect.Effect<ComputerUseHostStatus, LocalComputerUseHostTransportError, R>;
 }
 
 export const shouldHashDevelopmentHelper = (
@@ -92,6 +99,75 @@ const encodeJsonLine = (value: unknown, displayName: string) =>
   );
 
 const decodeHostResponseLine = Schema.decodeUnknownEffect(Schema.fromJsonString(LocalHostResponse));
+const decodeHostStatus = Schema.decodeUnknownEffect(ComputerUseHostStatus);
+
+export const probeLocalComputerUseHostStatus = Effect.fn("LocalComputerUseHost.probeStatus")(
+  function* (input: Omit<ProcessRunner.ProcessRunInput, "stdin">, environmentId: EnvironmentId) {
+    const processRunner = yield* ProcessRunner.ProcessRunner;
+    const stdin = yield* encodeJson({
+      type: "request",
+      request: {
+        requestId: "computer-use-status-probe",
+        leaseId: "computer-use-status-probe",
+        environmentId,
+        operation: "status",
+        input: {},
+        timeoutMs: 5_000,
+      },
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalComputerUseHostTransportError({
+            operation: "write",
+            detail: "The Computer Use status probe could not be encoded.",
+            cause,
+          }),
+      ),
+    );
+    const output = yield* processRunner.run({ ...input, stdin: `${stdin}\n` }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalComputerUseHostTransportError({
+            operation: "spawn",
+            detail: "The Computer Use status probe could not be completed.",
+            cause,
+          }),
+      ),
+    );
+    if (output.code !== 0) {
+      return yield* new LocalComputerUseHostTransportError({
+        operation: "exit",
+        detail: "The Computer Use status probe exited unsuccessfully.",
+      });
+    }
+    const response = yield* decodeHostResponseLine(output.stdout.trim()).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalComputerUseHostTransportError({
+            operation: "read",
+            detail: "The Computer Use status probe emitted an invalid response.",
+            cause,
+          }),
+      ),
+    );
+    if (!response.ok) {
+      return yield* new LocalComputerUseHostTransportError({
+        operation: "read",
+        detail: "The Computer Use helper could not report its permission status.",
+      });
+    }
+    return yield* decodeHostStatus(response.result).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalComputerUseHostTransportError({
+            operation: "read",
+            detail: "The Computer Use helper reported an invalid permission status.",
+            cause,
+          }),
+      ),
+    );
+  },
+);
 
 export const runLocalComputerUseTransport = <E, R>(
   pumps: Iterable<Effect.Effect<void, E, R>>,
@@ -109,6 +185,15 @@ export const makeLocalComputerUseHostLayer = <R>(options: LocalComputerUseHostOp
       const environment = yield* ServerEnvironment.ServerEnvironment;
       const environmentId = yield* environment.getEnvironmentId;
       const helper = yield* options.verifyHelper(config);
+      const initialStatus = yield* options.probeStatus(helper, environmentId).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning(`${options.displayName} Computer Use status is unavailable`, {
+            operation: cause.operation,
+            detail: cause.detail,
+          }),
+        ),
+        Effect.option,
+      );
       const host: ComputerUseVerifiedHost = {
         hostId: ComputerUseHostId.make(`${options.platform}:${helper.subject}`),
         environmentId,
@@ -133,7 +218,7 @@ export const makeLocalComputerUseHostLayer = <R>(options: LocalComputerUseHostOp
       );
       const writes = yield* Queue.unbounded<Uint8Array>();
       const connectionId = yield* Ref.make<Option.Option<ComputerUseConnectionId>>(Option.none());
-      const events = yield* broker.connect(host);
+      const events = yield* broker.connect(host, Option.getOrUndefined(initialStatus));
       yield* Effect.logInfo(`${options.displayName} Computer Use host connected`, {
         hostId: host.hostId,
         platform: host.platform,

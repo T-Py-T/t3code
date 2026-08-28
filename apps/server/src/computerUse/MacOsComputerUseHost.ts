@@ -10,6 +10,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import {
   LocalComputerUseHostTransportError,
   makeLocalComputerUseHostLayer,
+  probeLocalComputerUseHostStatus,
   runLocalComputerUseTransport,
   shouldHashDevelopmentHelper,
   type VerifiedLocalComputerUseHelper,
@@ -202,6 +203,17 @@ export const layer = makeLocalComputerUseHostLayer({
   hostPlatform: "darwin",
   platform: "macos",
   verifyHelper,
+  probeStatus: (helper, environmentId) =>
+    probeLocalComputerUseHostStatus(
+      {
+        command: helper.path,
+        args: [],
+        env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+        timeout: "10 seconds",
+        maxOutputBytes: 64 * 1_024,
+      },
+      environmentId,
+    ),
   makeCommand: (helper) =>
     ChildProcess.make(helper.path, [], {
       env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },

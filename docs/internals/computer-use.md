@@ -25,17 +25,17 @@ The native path does not depend on ChatGPT or Codex Computer Use. Providers call
 toolkit, and the environment's desktop app starts the platform helper. The older OpenAI bridge is a
 separate comparison path documented in [Codex Computer Use](./providers-codex-computer-use.md).
 
-| Capability                 | Current branch behavior                                                                                                                         | Release status                                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| macOS native apps          | T3 helper discovers, observes, captures, and operates allowed AX targets; terminal apps and T3 Code are forbidden                               | Implemented; in-app permission setup and signed/notarized release proof remain                             |
-| Windows native apps        | Native x64 and ARM64 helpers use UI Automation, capture, foreground transfer, and native input with bounded cleanup and forbidden-target policy | Implemented; packaged UTM development acceptance passed, while production-signed physical smoke remains    |
-| Codex, Pi, and Atomic      | Shared MCP toolkit; Pi and Atomic receive the same bundled extension, approvals, cancellation, browser tools, and Atomic workflow correlation   | Implemented                                                                                                |
-| Lifecycle and policy       | Exclusive leases, app grants, risk confirmation, pause, resume, stop, takeover, metadata history, and persistent-grant revocation               | Implemented in the environment API and web, desktop, and mobile thread UI                                  |
-| Built-in browser           | Semantic snapshots, navigation, locators, actions, diagnostics, screenshots, and recordings                                                     | Implemented                                                                                                |
-| External signed-in browser | Explicit opt-in persistent T3-owned browser profile with semantic actions and connection status                                                 | Implemented; external recording is not yet supported                                                       |
-| Excel and PowerPoint       | Native hosts classify Office windows as `office-document` and advertise `office-accessibility` with document context and supported operations   | Structured accessibility implemented; Office add-ins remain required for declared ChatGPT parity           |
-| macOS lock transitions     | Host fails closed, cancels control, and requires local unlock when the lock state changes                                                       | Implemented safety boundary; unattended locked use and its signed authorization plug-in remain unavailable |
-| Remote control             | Dedicated read, operate, approve, and host scopes; ordinary remote clients cannot register as native hosts                                      | Implemented contracts and server policy; signed T3 Connect acceptance remains                              |
+| Capability                 | Current branch behavior                                                                                                                                             | Release status                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| macOS native apps          | T3 helper discovers, observes, captures, and operates allowed AX targets; settings show the helper's live permission state; terminal apps and T3 Code are forbidden | Implemented; System Settings shortcut and signed/notarized release proof remain                            |
+| Windows native apps        | Native x64 and ARM64 helpers use UI Automation, capture, foreground transfer, and native input with bounded cleanup and forbidden-target policy                     | Implemented; packaged UTM development acceptance passed, while production-signed physical smoke remains    |
+| Codex, Pi, and Atomic      | Shared MCP toolkit; Pi and Atomic receive the same bundled extension, approvals, cancellation, browser tools, and Atomic workflow correlation                       | Implemented                                                                                                |
+| Lifecycle and policy       | Exclusive leases, app grants, risk confirmation, pause, resume, stop, takeover, metadata history, and persistent-grant revocation                                   | Implemented in the environment API and web, desktop, and mobile thread UI                                  |
+| Built-in browser           | Semantic snapshots, navigation, locators, actions, diagnostics, screenshots, and recordings                                                                         | Implemented                                                                                                |
+| External signed-in browser | Explicit opt-in persistent T3-owned browser profile with semantic actions and connection status                                                                     | Implemented; external recording is not yet supported                                                       |
+| Excel and PowerPoint       | Native hosts classify Office windows as `office-document` and advertise `office-accessibility` with document context and supported operations                       | Structured accessibility implemented; Office add-ins remain required for declared ChatGPT parity           |
+| macOS lock transitions     | Host fails closed, cancels control, and requires local unlock when the lock state changes                                                                           | Implemented safety boundary; unattended locked use and its signed authorization plug-in remain unavailable |
+| Remote control             | Dedicated read, operate, approve, and host scopes; ordinary remote clients cannot register as native hosts                                                          | Implemented contracts and server policy; signed T3 Connect acceptance remains                              |
 
 The settings and timeline must describe these distinctions directly. In particular,
 `office-accessibility` must not be presented as an Office add-in, and lock-transition safety must not
@@ -434,8 +434,9 @@ identity, the host pauses and asks the user.
 
 ### Composer and targeting
 
-- The composer supports `@Computer` and discoverable `@AppName` targets.
-- Natural-language requests remain valid; mentions make routing and target selection explicit.
+- Natural-language requests are the implemented targeting route in the preview.
+- `@Computer` and discoverable `@AppName` targets remain a planned parity extension; the UI must
+  not imply that mention routing is available until it is implemented and tested.
 - T3 prefers a dedicated structured integration when available and explains the selected route in
   the timeline.
 
@@ -616,6 +617,8 @@ Requirements:
   contract-bounded.
 - Remote clients receive state-change events and thumbnails, not an unbounded video stream.
 - Full observations are revealed on demand and require `computer:read`.
+- Revealed screenshots live only in a time-, count-, and byte-bounded in-memory cache; they are not
+  written to provider history or durable orchestration events.
 - Ordinary logs contain operation names, timing, result tags, and sizes, never screenshot or field
   contents.
 - Computer Use history defaults to metadata. Any future screenshot retention is a separate opt-in

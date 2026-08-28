@@ -52,9 +52,9 @@ import Testing
         )
     )
     #expect(
-        TargetPolicy.isForbidden(
-            bundleId: "com.example.surface",
-            processName: "Surface",
+        !TargetPolicy.isForbidden(
+            bundleId: "com.example.canvas",
+            processName: "Canvas",
             hasStructuredAccessibility: false
         )
     )

@@ -1,4 +1,5 @@
 import {
+  COMPUTER_USE_MAX_SCREENSHOT_BASE64_LENGTH,
   ComputerUseScreenshotRevealToken,
   type ComputerUseScreenshot,
   type ComputerUseScreenshotRevealToken as ComputerUseScreenshotRevealTokenValue,
@@ -20,6 +21,19 @@ interface StoredScreenshot {
 
 const SCREENSHOT_RETENTION_MS = 15 * 60 * 1_000;
 const MAX_SCREENSHOTS = 128;
+const MAX_TOTAL_BASE64_LENGTH = COMPUTER_USE_MAX_SCREENSHOT_BASE64_LENGTH * 4;
+
+export interface ComputerUseScreenshotStoreLimits {
+  readonly retentionMs: number;
+  readonly maxScreenshots: number;
+  readonly maxTotalBase64Length: number;
+}
+
+const defaultLimits: ComputerUseScreenshotStoreLimits = {
+  retentionMs: SCREENSHOT_RETENTION_MS,
+  maxScreenshots: MAX_SCREENSHOTS,
+  maxTotalBase64Length: MAX_TOTAL_BASE64_LENGTH,
+};
 
 export class ComputerUseScreenshotStore extends Context.Service<
   ComputerUseScreenshotStore,
@@ -36,60 +50,72 @@ export class ComputerUseScreenshotStore extends Context.Service<
   }
 >()("t3/computerUse/ComputerUseScreenshotStore") {}
 
-export const make = Effect.gen(function* ComputerUseScreenshotStoreMake() {
-  const crypto = yield* Crypto.Crypto;
-  const screenshots = yield* SynchronizedRef.make(
-    new Map<ComputerUseScreenshotRevealTokenValue, StoredScreenshot>(),
-  );
-
-  const retain: ComputerUseScreenshotStore["Service"]["retain"] = Effect.fn(
-    "ComputerUseScreenshotStore.retain",
-  )(function* (environmentId, screenshot) {
-    const now = yield* Clock.currentTimeMillis;
-    const token = ComputerUseScreenshotRevealToken.make(
-      yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+export const makeWithLimits = (limits: ComputerUseScreenshotStoreLimits) =>
+  Effect.gen(function* ComputerUseScreenshotStoreMake() {
+    const crypto = yield* Crypto.Crypto;
+    const screenshots = yield* SynchronizedRef.make(
+      new Map<ComputerUseScreenshotRevealTokenValue, StoredScreenshot>(),
     );
-    yield* SynchronizedRef.update(screenshots, (current) => {
-      const retained = [...current].filter(([, entry]) => entry.expiresAt > now);
-      const bounded = retained.slice(Math.max(0, retained.length - MAX_SCREENSHOTS + 1));
-      return new Map([
-        ...bounded,
-        [token, { environmentId, screenshot, expiresAt: now + SCREENSHOT_RETENTION_MS }] as const,
-      ]);
-    });
-    return token;
-  });
 
-  const reveal: ComputerUseScreenshotStore["Service"]["reveal"] = Effect.fn(
-    "ComputerUseScreenshotStore.reveal",
-  )(function* (environmentId, token) {
-    const now = yield* Clock.currentTimeMillis;
-    return yield* SynchronizedRef.modify(screenshots, (current) => {
-      const entry = current.get(token);
-      if (entry?.environmentId === environmentId && entry.expiresAt > now) {
-        return [Option.some(entry.screenshot), current] as const;
-      }
-      if (!entry || entry.environmentId !== environmentId) {
-        return [Option.none(), current] as const;
-      }
-      const next = new Map(current);
-      next.delete(token);
-      return [Option.none(), next] as const;
-    });
-  });
-
-  return ComputerUseScreenshotStore.of({
-    retain,
-    reveal,
-    clear: (environmentId) =>
-      SynchronizedRef.update(screenshots, (current) => {
-        const next = new Map(current);
-        for (const [token, entry] of next) {
-          if (entry.environmentId === environmentId) next.delete(token);
+    const retain: ComputerUseScreenshotStore["Service"]["retain"] = Effect.fn(
+      "ComputerUseScreenshotStore.retain",
+    )(function* (environmentId, screenshot) {
+      const now = yield* Clock.currentTimeMillis;
+      const token = ComputerUseScreenshotRevealToken.make(
+        yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+      );
+      yield* SynchronizedRef.update(screenshots, (current) => {
+        const retained = [...current].filter(([, entry]) => entry.expiresAt > now);
+        retained.push([token, { environmentId, screenshot, expiresAt: now + limits.retentionMs }]);
+        let totalBase64Length = retained.reduce(
+          (total, [, entry]) => total + entry.screenshot.base64.length,
+          0,
+        );
+        while (
+          retained.length > 1 &&
+          (retained.length > limits.maxScreenshots ||
+            totalBase64Length > limits.maxTotalBase64Length)
+        ) {
+          const removed = retained.shift();
+          if (removed !== undefined) totalBase64Length -= removed[1].screenshot.base64.length;
         }
-        return next;
-      }),
+        return new Map(retained);
+      });
+      return token;
+    });
+
+    const reveal: ComputerUseScreenshotStore["Service"]["reveal"] = Effect.fn(
+      "ComputerUseScreenshotStore.reveal",
+    )(function* (environmentId, token) {
+      const now = yield* Clock.currentTimeMillis;
+      return yield* SynchronizedRef.modify(screenshots, (current) => {
+        const entry = current.get(token);
+        if (entry?.environmentId === environmentId && entry.expiresAt > now) {
+          return [Option.some(entry.screenshot), current] as const;
+        }
+        if (!entry || entry.environmentId !== environmentId) {
+          return [Option.none(), current] as const;
+        }
+        const next = new Map(current);
+        next.delete(token);
+        return [Option.none(), next] as const;
+      });
+    });
+
+    return ComputerUseScreenshotStore.of({
+      retain,
+      reveal,
+      clear: (environmentId) =>
+        SynchronizedRef.update(screenshots, (current) => {
+          const next = new Map(current);
+          for (const [token, entry] of next) {
+            if (entry.environmentId === environmentId) next.delete(token);
+          }
+          return next;
+        }),
+    });
   });
-});
+
+export const make = makeWithLimits(defaultLimits);
 
 export const layer = Layer.effect(ComputerUseScreenshotStore, make);

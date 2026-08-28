@@ -62,9 +62,10 @@ activity metadata, and all three can clear that history. Web and desktop setting
 permanent app grants and let you revoke them. Activity metadata is retained for 30 days. Screenshots,
 page contents, accessibility trees, clipboard values, and typed text are not kept in the history.
 
-On macOS, the preview does not yet show the helper's Accessibility or Screen Recording state or an
-**Open System Settings** shortcut in T3 settings. Missing permissions are reported through the
-Computer Use tool result and must be granted in macOS System Settings.
+On macOS, T3 settings show the exact native helper identity and its current Accessibility, Screen
+Recording, and Input Monitoring state. The preview does not yet include an **Open System Settings**
+shortcut. Missing permissions are also reported through the Computer Use tool result and must be
+granted manually in macOS System Settings; T3 never clicks or approves a privacy prompt for you.
 
 ## Browser Tools
 

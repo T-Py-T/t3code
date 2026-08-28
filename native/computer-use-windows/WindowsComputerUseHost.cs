@@ -494,17 +494,9 @@ public sealed class WindowsComputerUseHost : IDisposable
             return (encoded, indexed);
         }
 
-        AutomationElementCollection elements;
-        try
-        {
-            elements = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
-        }
-        catch (ElementNotAvailableException)
-        {
-            return (encoded, indexed);
-        }
+        var elements = ReadDescendantsBounded(root, MaximumAccessibilityElements);
 
-        for (var index = 0; index < Math.Min(elements.Count, MaximumAccessibilityElements); index++)
+        for (var index = 0; index < elements.Count; index++)
         {
             var element = elements[index];
             try
@@ -590,6 +582,53 @@ public sealed class WindowsComputerUseHost : IDisposable
         }
 
         return (encoded, indexed);
+    }
+
+    private static IReadOnlyList<AutomationElement> ReadDescendantsBounded(
+        AutomationElement root,
+        int maximumElements
+    )
+    {
+        var elements = new List<AutomationElement>(maximumElements);
+        var parents = new Queue<AutomationElement>();
+        parents.Enqueue(root);
+        var walker = TreeWalker.ControlViewWalker;
+        while (parents.Count > 0 && elements.Count < maximumElements)
+        {
+            var parent = parents.Dequeue();
+            AutomationElement? child;
+            try
+            {
+                child = walker.GetFirstChild(parent);
+            }
+            catch (ElementNotAvailableException)
+            {
+                continue;
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+
+            while (child is not null && elements.Count < maximumElements)
+            {
+                elements.Add(child);
+                parents.Enqueue(child);
+                try
+                {
+                    child = walker.GetNextSibling(child);
+                }
+                catch (ElementNotAvailableException)
+                {
+                    break;
+                }
+                catch (InvalidOperationException)
+                {
+                    break;
+                }
+            }
+        }
+        return elements;
     }
 
     private static JsonArray AccessibilityActions(AutomationElement element)
@@ -983,8 +1022,8 @@ public sealed class WindowsComputerUseHost : IDisposable
         try
         {
             var root = AutomationElement.FromHandle(handle);
-            var elements = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
-            for (var index = 0; index < Math.Min(elements.Count, 256); index++)
+            var elements = ReadDescendantsBounded(root, 256);
+            for (var index = 0; index < elements.Count; index++)
             {
                 var element = elements[index];
                 var current = element.Current;

@@ -1126,7 +1126,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             kind: event.payload.activity.kind,
             summary: event.payload.activity.summary,
             payload: event.payload.activity.payload,
-            sequence: event.sequence,
+            // Task rows drive the workflow/agent state machine and may share
+            // millisecond timestamps, so retain the authoritative event order.
+            // Ordinary timeline rows keep the existing timestamp/id ordering;
+            // copying a sequence onto every tool delta materially inflates the
+            // bounded thread snapshot without improving their presentation.
+            ...(event.payload.activity.kind.startsWith("task.")
+              ? { sequence: event.sequence }
+              : {}),
             createdAt: event.payload.activity.createdAt,
           });
           return;

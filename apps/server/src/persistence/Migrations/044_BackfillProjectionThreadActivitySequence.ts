@@ -37,6 +37,7 @@ export default Effect.gen(function* () {
       WHERE mapped.activity_id = projection_thread_activities.activity_id
     )
     WHERE sequence IS NULL
+      AND projection_thread_activities.kind LIKE 'task.%'
       AND EXISTS (
         SELECT 1
         FROM temp_projection_thread_activity_sequences AS mapped

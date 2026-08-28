@@ -75,6 +75,21 @@ layer("044_BackfillProjectionThreadActivitySequence", (it) => {
             'system',
             ${'{"threadId":"thread-1","activity":{"id":"a-completed"}}'},
             '{}'
+          ),
+          (
+            104,
+            'event-tool',
+            'thread',
+            'thread-1',
+            4,
+            'thread.activity-appended',
+            '2026-08-01T11:00:00.000Z',
+            NULL,
+            NULL,
+            NULL,
+            'system',
+            ${'{"threadId":"thread-1","activity":{"id":"tool-progress"}}'},
+            '{}'
           )
       `;
       yield* sql`
@@ -111,6 +126,17 @@ layer("044_BackfillProjectionThreadActivitySequence", (it) => {
             '{}',
             NULL,
             '2026-08-01T11:00:00.000Z'
+          ),
+          (
+            'tool-progress',
+            'thread-1',
+            NULL,
+            'tool',
+            'tool.updated',
+            'Tool output',
+            '{}',
+            NULL,
+            '2026-08-01T11:00:00.000Z'
           )
       `;
 
@@ -124,11 +150,12 @@ layer("044_BackfillProjectionThreadActivitySequence", (it) => {
           activity_id AS "activityId",
           sequence
         FROM projection_thread_activities
-        ORDER BY sequence ASC
+        ORDER BY activity_id ASC
       `;
       assert.deepEqual(rows, [
-        { activityId: "z-progress", sequence: 102 },
         { activityId: "a-completed", sequence: 103 },
+        { activityId: "tool-progress", sequence: null },
+        { activityId: "z-progress", sequence: 102 },
       ]);
     }),
   );

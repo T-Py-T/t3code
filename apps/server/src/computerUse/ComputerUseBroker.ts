@@ -37,6 +37,8 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+const decodeComputerUseHostRequest = Schema.decodeUnknownEffect(ComputerUseHostRequest);
+
 export interface ComputerUseInvocationScope {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -336,7 +338,7 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
   ): Effect.fn.Return<A, ComputerUseBrokerError> {
     const timeoutMs = input.timeoutMs ?? 15_000;
     const candidateLeaseId = ComputerUseLeaseId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
-    const validatedRequest = yield* Schema.decodeUnknownEffect(ComputerUseHostRequest)({
+    const validatedRequest = yield* decodeComputerUseHostRequest({
       requestId: ComputerUseRequestId.make("computer-use-validation"),
       leaseId: candidateLeaseId,
       environmentId: input.scope.environmentId,

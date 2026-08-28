@@ -462,13 +462,14 @@ The browser capability has two routes:
 
 1. **T3 built-in browser.** Extend the existing preview automation host for local and public pages,
    with semantic snapshots, locators, screenshots, tabs, navigation, and recording.
-2. **External browser integration.** A T3-signed browser extension or browser-protocol companion
-   controls an existing browser profile and signed-in pages after explicit browser approval.
+2. **External browser integration.** The desktop app launches a browser-protocol-controlled,
+   persistent T3 Code profile for signed-in pages after explicit opt-in. It never attaches to the
+   user's everyday browser profile.
 
 The semantic route must be preferred over visual coordinates. Browser actions use the same
-point-of-risk confirmation rules as native apps. The extension must expose connection status,
-origin/tab identity, revoke controls, and an obvious active indicator. It must not grant arbitrary
-native-app control.
+point-of-risk confirmation rules as native apps. The external browser route must expose connection
+status, origin/tab identity, revoke controls, and an obvious active indicator. It must not grant
+arbitrary native-app control.
 
 ## Office integrations
 
@@ -512,8 +513,11 @@ Add dedicated environment scopes:
 - `computer:host` for the signed same-machine host stream.
 
 `computer:host` is never issued by ordinary pairing or T3 Connect. Existing paired clients do not
-silently gain computer scopes after an upgrade. The pairing flow must offer computer access
-explicitly and explain that actions occur on the environment machine.
+silently gain scopes after an upgrade because their stored scope lists remain unchanged. New
+standard desktop, web, and mobile sessions receive `computer:read`, `computer:operate`, and
+`computer:approve` in the standard client scope bundle so the three clients can render and operate
+the same lifecycle. Those scopes authorize the client surface; they do not enable agent tools or
+bypass the off-by-default Computer Use setting, app grants, or action confirmations.
 
 Remote clients may direct, observe, approve, stop, and take over according to their scopes. If the
 host disconnects, the server ends the lease and clients see a durable failure summary rather than a
@@ -687,11 +691,8 @@ unfinished capability behind an explicit experimental flag.
 2. Confirm whether the packaged nested helper remains the only supported host or a separately
    installed companion is also required for CLI-only environments. Either route must prevent remote
    host registration.
-3. Choose persistent history retention and whether screenshot retention remains permanently absent
-   or becomes separately opt-in.
-4. Choose the external browser integration: extension-first, browser-protocol-first, or both.
-5. Choose the Office add-in distribution and authentication model.
-6. Schedule an independent security review before locked use can leave experimental status.
+3. Choose the Office add-in distribution and authentication model.
+4. Schedule an independent security review before locked use can leave experimental status.
 
 ## Current bridge disposition
 

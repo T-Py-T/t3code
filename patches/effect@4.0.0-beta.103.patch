@@ -2,7 +2,7 @@ diff --git a/dist/unstable/ai/McpServer.js b/dist/unstable/ai/McpServer.js
 index 755e41c..dc431aa 100644
 --- a/dist/unstable/ai/McpServer.js
 +++ b/dist/unstable/ai/McpServer.js
-@@ -262,6 +262,26 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
+@@ -262,6 +262,27 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
    const server = yield* McpServer;
    const isHttp = Option.isSome(yield* Effect.serviceOption(HttpRouter.HttpRouter));
    const sessions = protocolState.sessions;
@@ -28,16 +28,75 @@ index 755e41c..dc431aa 100644
 +  }
    const clientProtocols = new Map();
    const cancelledRequests = new Map();
++  const serverRequestClients = new Map();
    const handlers = yield* Layer.build(layerHandlers(options, {
-@@ -719,7 +739,7 @@ export const layerHttp = options => {
+@@ -284,6 +305,7 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
+         return {
+           send(id, request, _transferables) {
+             cid = id;
++            serverRequestClients.set(requestKey(request.id), key.clientId);
+             return protocol.send(key.clientId, {
+               ...request,
+               headers: undefined,
+@@ -465,9 +487,13 @@ const runWithProtocolState = /*#__PURE__*/Effect.fnUntraced(function* (options,
+       case "Chunk":
+       case "ClientProtocolError":
+       case "Defect":
++        const responseClientId = request._tag === "Exit" ? serverRequestClients.get(requestKey(request.requestId)) ?? clientId : clientId;
++        if (request._tag === "Exit") {
++          serverRequestClients.delete(requestKey(request.requestId));
++        }
+         return RcMap.get(clients, new McpClientKey({
+-          clientId,
+-          protocolVersion: getProtocolForClient(clientProtocols, clientId, protocolRegistry).protocolVersion
++          clientId: responseClientId,
++          protocolVersion: getProtocolForClient(clientProtocols, responseClientId, protocolRegistry).protocolVersion
+         })).pipe(Effect.flatMap(({
+             write
+           }) => write(request)), Effect.scoped);
+@@ -693,6 +720,20 @@ const layerWithProtocolState = options => Layer.effectDiscard(Effect.forkScoped(
+  * @since 4.0.0
+  */
+ export const layerStdio = options => layer(options).pipe(Layer.provide(RpcServer.layerProtocolStdio), Layer.provide(Layer.succeed(RpcSerialization.RpcSerialization)(makeStdioSerialization(options.protocols))));
++const mcpHttpSerialization = RpcSerialization.RpcSerialization.of({
++  contentType: "text/event-stream",
++  includesFraming: true,
++  makeUnsafe() {
++    const jsonRpc = RpcSerialization.jsonRpc().makeUnsafe();
++    return {
++      decode: jsonRpc.decode,
++      encode(response) {
++        const encoded = jsonRpc.encode(response);
++        return encoded === undefined ? undefined : `event: message\ndata: ${encoded}\n\n`;
++      }
++    };
++  }
++});
+ /**
+  * Registers a Streamable HTTP MCP endpoint at `options.path`.
+  *
+@@ -719,7 +760,7 @@ export const layerHttp = options => {
    const methodNotAllowed = request => Effect.succeed(request.headers.origin !== undefined && !options.allowedOrigins?.includes(request.headers.origin) ? HttpServerResponse.empty({
      status: 403
    }) : methodNotAllowedResponse);
 -  const routes = Layer.mergeAll(HttpRouter.add("GET", options.path, methodNotAllowed), HttpRouter.add("PUT", options.path, methodNotAllowed), HttpRouter.add("PATCH", options.path, methodNotAllowed), HttpRouter.add("DELETE", options.path, methodNotAllowed), HttpRouter.add("OPTIONS", options.path, methodNotAllowed));
 +  const routes = Layer.mergeAll(HttpRouter.add("GET", options.path, methodNotAllowed), HttpRouter.add("PUT", options.path, methodNotAllowed), HttpRouter.add("PATCH", options.path, methodNotAllowed), HttpRouter.add("OPTIONS", options.path, methodNotAllowed));
-   return Layer.merge(layerWithProtocolState(options), routes).pipe(Layer.provide(layerMcpProtocolHttp(options)), Layer.provide(protocolState), Layer.provide(RpcSerialization.layerJsonRpc()));
+-  return Layer.merge(layerWithProtocolState(options), routes).pipe(Layer.provide(layerMcpProtocolHttp(options)), Layer.provide(protocolState), Layer.provide(RpcSerialization.layerJsonRpc()));
++  return Layer.merge(layerWithProtocolState(options), routes).pipe(Layer.provide(layerMcpProtocolHttp(options)), Layer.provide(protocolState), Layer.provide(Layer.succeed(RpcSerialization.RpcSerialization)(mcpHttpSerialization)));
  };
  const layerMcpProtocolHttp = options => Layer.effect(RpcServer.Protocol)(Effect.gen(function* () {
+diff --git a/dist/unstable/rpc/RpcServer.js b/dist/unstable/rpc/RpcServer.js
+--- a/dist/unstable/rpc/RpcServer.js
++++ b/dist/unstable/rpc/RpcServer.js
+@@ -703,7 +703,7 @@ export const makeProtocolWithHttpEffect = /*#__PURE__*/Effect.gen(function* () {
+         contentType: serialization.contentType
+       });
+     }
+-    const initialChunk = yield* Queue.takeAll(queue);
++    const initialChunk = yield* Queue.takeAll(queue).pipe(Effect.catchCause(() => Effect.succeed([])));
+     if (queue.state._tag === "Done") {
+       return HttpServerResponse.uint8Array(mergeUint8Arrays(initialChunk), {
+         contentType: serialization.contentType
 diff --git a/dist/unstable/rpc/RpcClient.d.ts b/dist/unstable/rpc/RpcClient.d.ts
 index aba2779..581d267 100644
 --- a/dist/unstable/rpc/RpcClient.d.ts

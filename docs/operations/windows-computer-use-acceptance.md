@@ -26,12 +26,13 @@ are absent.
 
 ## Package check
 
-Obtain the expected signed helper SHA-256 from the release manifest. Run PowerShell as the same
-Windows user that runs T3 Code:
+Capture the expected helper SHA-256 from the signed release staging output before installation. The
+Electron updater manifest hashes the outer installer, not the nested helper, so it is not the source
+for this value. Run PowerShell as the same Windows user that runs T3 Code:
 
 ```powershell
 $app = "C:\Users\me\AppData\Local\Programs\t3code\T3 Code (Alpha).exe"
-$expectedHelperHash = "<SHA-256 FROM THE RELEASE MANIFEST>"
+$expectedHelperHash = "<SHA-256 CAPTURED FROM SIGNED RELEASE STAGING>"
 $evidence = "C:\Users\Public\t3-package-acceptance"
 
 .\native\computer-use-windows\Tests\RunPackagedAcceptance.ps1 `

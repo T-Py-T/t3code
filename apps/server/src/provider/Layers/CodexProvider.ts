@@ -316,9 +316,7 @@ export function buildCodexInitializeParams(options?: {
     },
     capabilities: {
       experimentalApi: true,
-      ...(options?.mcpServerOpenaiFormElicitation
-        ? { mcpServerOpenaiFormElicitation: true }
-        : {}),
+      ...(options?.mcpServerOpenaiFormElicitation ? { mcpServerOpenaiFormElicitation: true } : {}),
     },
   };
 }

@@ -130,6 +130,26 @@ Prompt RPC calls do not use the ordinary command timeout because a person may ta
 amount of time to respond. When a turn settles, any unanswered request is resolved as abandoned so
 stale prompts do not remain in the composer.
 
+## T3 browser and Computer Use toolkit
+
+When the server enables agent browser access or T3-owned Computer Use, `ProviderService` issues a
+thread-scoped MCP credential. The Pi-compatible adapter writes T3's dependency-free extension to a
+private temporary file, passes it explicitly with `--extension`, and supplies only the MCP endpoint,
+credential, and enabled capability names to the child process. The file is scoped to the provider
+session and is removed with that session. This T3 extension is independent of the project-resource
+trust switch.
+
+The extension registers the same `preview_*` and `computer_*` tools for Pi and Atomic that Codex
+receives from T3's local MCP server. Disabled capability families are not registered. Tool calls use
+the streamable HTTP MCP endpoint; interruption and session cleanup revoke the credential and stop
+active Computer Use and browser work for the turn.
+
+Pi's UI callback is also the approval transport for this toolkit. The extension renders a policy
+boundary with `ctx.ui.select`; the shared adapter recognizes its bounded T3 approval marker, projects
+the canonical approval into desktop, web, and mobile, resolves the server-owned policy decision, and
+then answers the extension request so the tool can retry. This keeps app grants and point-of-risk
+confirmation in T3 even though Pi and Atomic do not support the other provider runtime modes.
+
 ## Atomic workflow projection
 
 Atomic emits workflow lifecycle data as `entry_appended` records and as custom message content.
@@ -180,8 +200,9 @@ Pi and Atomic currently support agent sessions only. They do not implement T3's 
 message, pull-request text, branch-name, or thread-title generation operations.
 
 The shared settings contract therefore excludes Pi and Atomic from auxiliary text-generation
-selectors. Their session protocol also has no approval callback, so web and mobile offer only Full
-access for these providers instead of presenting runtime modes the adapter cannot honor.
+selectors. Their session protocol also has no generic command or file approval callback, so web and
+mobile offer only Full access for these providers instead of presenting runtime modes the adapter
+cannot honor. The toolkit-specific approval transport above remains active in Full access.
 
 ## Automated review hardening
 

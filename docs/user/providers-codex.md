@@ -51,7 +51,7 @@ Computer Use service available. Then open the Codex provider in **Settings**, tu
 Computer Use bridge**, save, and start a new provider session. Existing sessions keep the tools
 they started with.
 
-This is not yet T3-owned computer control. macOS grants Accessibility and Screen Recording to the
+This bridge is not T3-owned computer control. macOS grants Accessibility and Screen Recording to the
 OpenAI-signed **Codex Computer Use** helper, not to T3 Code. T3 starts the client and shows its tool
 progress in the thread, but it cannot grant, revoke, or replace those system permissions. If the
 OpenAI desktop service is unavailable, the bridge cannot control the Mac.
@@ -65,10 +65,10 @@ home still uses the Computer Use installation from its shared home. If the clien
 provider stays usable for normal chat and shows a warning in Settings.
 
 This switch manages the OpenAI Computer Use client attached by T3. It does not rewrite
-`config.toml` or remove MCP servers that you configured separately. Pi does not expose an MCP
-transport, and Atomic's current MCP transport does not support the new-app approval exchange used
-by this client, so this integration does not offer a partial Computer Use switch for those
-providers.
+`config.toml` or remove MCP servers that you configured separately. Pi and Atomic cannot use this
+OpenAI bridge. They can use T3-owned Computer Use through the shared T3 toolkit when the environment
+setting is enabled; those app grants and confirmations are described in
+[Permission modes](./permission-modes.md#computer-use).
 
 ## I Want Work And Personal Codex Accounts
 

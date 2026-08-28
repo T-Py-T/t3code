@@ -61,6 +61,8 @@ authenticated.
 - `vp run typecheck`: Strict TypeScript checks for all packages.
 - `vp run test`: Runs workspace tests.
 - `vp run lint:mobile`: Mobile native static analysis (`scripts/mobile-native-static-check.ts`).
+- `vp run build:computer-use-windows`: Publishes the self-contained `win-x64` Computer Use helper.
+- `vp run test:computer-use-windows`: Runs the Windows helper's protocol and policy checks.
 - `node apps/server/scripts/t3-sqlite-state.ts <query|exec> --base-dir <path> ...`: Inspects or seeds
   an isolated T3 SQLite database; writes create a private backup first.
 
@@ -72,7 +74,8 @@ authenticated.
   `dist:desktop:dmg:x64`, or pass `--arch <arm64|x64|universal>`, to force one.
 - `vp run dist:desktop:linux`: Builds a Linux AppImage into `./release`.
 - `vp run dist:desktop:win`: Builds a Windows NSIS installer into `./release`. `:arm64` and `:x64`
-  variants exist.
+  variants exist. The artifact builder publishes and packages the matching Windows Computer Use
+  helper (`win-arm64` or `win-x64`); macOS DMG builds likewise package the matching Swift helper.
 
 ### Desktop `.dmg` packaging notes
 

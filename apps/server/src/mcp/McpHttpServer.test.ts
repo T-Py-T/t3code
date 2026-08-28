@@ -8,9 +8,13 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
 import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
@@ -171,6 +175,154 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
         ),
       });
       expect(reusedSessionResponse.status).toBe(404);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect("streams elicitation requests before the tool result that depends on them", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ElicitationTool = Layer.effectDiscard(
+        Effect.gen(function* () {
+          const server = yield* McpServer.McpServer;
+          yield* server.addTool({
+            tool: new McpSchema.Tool({
+              name: "approval_probe",
+              description: "Exercises a nested MCP elicitation.",
+              inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            }),
+            annotations: Context.empty(),
+            handle: () =>
+              McpServer.elicit({
+                message: "Allow the probe?",
+                schema: Schema.Struct({ approval: Schema.Literal("once") }),
+              }).pipe(
+                Effect.map(
+                  ({ approval }) =>
+                    new McpSchema.CallToolResult({
+                      content: [{ type: "text", text: approval }],
+                    }),
+                ),
+              ),
+          });
+        }),
+      );
+      const serverLayer = ElicitationTool.pipe(
+        Layer.provideMerge(
+          McpServer.layerHttp({
+            name: "MCP elicitation transport test",
+            version: "1.0.0",
+            path: "/mcp",
+            protocols: [McpProtocol.v2025_06_18],
+          }),
+        ),
+      );
+      yield* HttpRouter.serve(serverLayer, {
+        disableListenLog: true,
+        disableLogger: true,
+      }).pipe(Layer.build);
+      const httpClient = yield* HttpClient.HttpClient;
+
+      const initializeResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{"form":{}}},"clientInfo":{"name":"mcp-test","version":"1.0.0"}}}`,
+          "application/json",
+        ),
+      });
+      const sessionId = initializeResponse.headers["mcp-session-id"]!;
+      const protocolVersion = initializeResponse.headers["mcp-protocol-version"]!;
+      expect(sessionId).toBeDefined();
+
+      yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId,
+          "mcp-protocol-version": protocolVersion,
+        },
+        body: HttpBody.text(
+          `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`,
+          "application/json",
+        ),
+      });
+
+      const elicitationRequest = yield* Deferred.make<{
+        readonly id: string | number;
+        readonly method: string;
+      }>();
+      const toolResult = yield* Deferred.make<unknown>();
+      yield* httpClient
+        .post("/mcp", {
+          headers: {
+            accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+            "mcp-session-id": sessionId,
+            "mcp-protocol-version": protocolVersion,
+          },
+          body: HttpBody.text(
+            `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"approval_probe","arguments":{}}}`,
+            "application/json",
+          ),
+        })
+        .pipe(
+          Effect.flatMap((response) =>
+            response.stream.pipe(
+              Stream.decodeText(),
+              Stream.splitLines,
+              Stream.runForEach((line) => {
+                if (!line.startsWith("data:")) return Effect.void;
+                const message = JSON.parse(line.slice("data:".length).trim()) as {
+                  readonly id?: string | number;
+                  readonly method?: string;
+                  readonly result?: unknown;
+                };
+                if (message.method === "elicitation/create" && message.id !== undefined) {
+                  return Deferred.succeed(elicitationRequest, {
+                    id: message.id,
+                    method: message.method,
+                  }).pipe(Effect.asVoid);
+                }
+                if (message.id === 2 && message.result !== undefined) {
+                  return Deferred.succeed(toolResult, message.result).pipe(Effect.asVoid);
+                }
+                return Effect.void;
+              }),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+
+      const request = yield* Deferred.await(elicitationRequest).pipe(
+        Effect.timeout("2 seconds"),
+        TestClock.withLive,
+      );
+      expect(request.method).toBe("elicitation/create");
+
+      const elicitationResponse = yield* httpClient.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          "mcp-session-id": sessionId,
+          "mcp-protocol-version": protocolVersion,
+        },
+        body: HttpBody.text(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: request.id,
+            result: { action: "accept", content: { approval: "once" } },
+          }),
+          "application/json",
+        ),
+      });
+      expect(elicitationResponse.status).toBe(202);
+
+      expect(
+        yield* Deferred.await(toolResult).pipe(Effect.timeout("2 seconds"), TestClock.withLive),
+      ).toMatchObject({ content: [{ type: "text", text: "once" }] });
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );

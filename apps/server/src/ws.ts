@@ -514,10 +514,7 @@ const makeWsRpcLayer = (
               typeof payload?.requestId === "string" ? payload.requestId : undefined;
             if (requestId === undefined) continue;
             const key = `${thread.value.id}:${requestId}`;
-            if (
-              activity.kind === "approval.requested" &&
-              payload?.computerUseApproval === true
-            ) {
+            if (activity.kind === "approval.requested" && payload?.computerUseApproval === true) {
               pending.set(key, {
                 threadId: thread.value.id,
                 requestId: ApprovalRequestId.make(requestId),
@@ -1916,14 +1913,15 @@ const makeWsRpcLayer = (
                   ]).pipe(Effect.map(([native, browser]) => native + browser));
                 }).pipe(
                   Effect.tap((stopped) =>
-                    stopped > 0
-                      ? computerUseHistory.append({
-                          environmentId,
-                          state: "stopped",
-                          summary: `Stopped ${stopped} active Computer Use session${stopped === 1 ? "" : "s"}.`,
-                          resultTag: "user",
-                        })
-                      : Effect.void,
+                    computerUseHistory.append({
+                      environmentId,
+                      state: "stopped",
+                      summary:
+                        stopped > 0
+                          ? `Stopped ${stopped} active Computer Use session${stopped === 1 ? "" : "s"}.`
+                          : "Stopped Computer Use before the next action.",
+                      resultTag: "user",
+                    }),
                   ),
                 ),
               ),
@@ -1936,22 +1934,24 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUseTakeOver,
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
-                computerUsePolicy.pause(environmentId).pipe(
-                  Effect.andThen(
-                    Effect.all([
-                      computerUseBroker.stopEnvironment(environmentId, "takeover"),
-                      previewAutomationBroker.stopEnvironment(environmentId),
-                    ]).pipe(Effect.map(([native, browser]) => native + browser)),
-                  ),
+                Effect.gen(function* () {
+                  yield* computerUsePolicy.pause(environmentId);
+                  yield* cancelPendingComputerUseApprovals();
+                  return yield* Effect.all([
+                    computerUseBroker.stopEnvironment(environmentId, "takeover"),
+                    previewAutomationBroker.stopEnvironment(environmentId),
+                  ]).pipe(Effect.map(([native, browser]) => native + browser));
+                }).pipe(
                   Effect.tap((stopped) =>
-                    stopped > 0
-                      ? computerUseHistory.append({
-                          environmentId,
-                          state: "taken-over",
-                          summary: `Released ${stopped} Computer Use session${stopped === 1 ? "" : "s"} for human takeover.`,
-                          resultTag: "takeover",
-                        })
-                      : Effect.void,
+                    computerUseHistory.append({
+                      environmentId,
+                      state: "taken-over",
+                      summary:
+                        stopped > 0
+                          ? `Released ${stopped} Computer Use session${stopped === 1 ? "" : "s"} for human takeover.`
+                          : "Released Computer Use for human takeover.",
+                      resultTag: "takeover",
+                    }),
                   ),
                 ),
               ),
@@ -1964,13 +1964,14 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUsePause,
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
-                computerUsePolicy.pause(environmentId).pipe(
-                  Effect.andThen(
-                    Effect.all([
-                      computerUseBroker.stopEnvironment(environmentId, "interrupted"),
-                      previewAutomationBroker.stopEnvironment(environmentId),
-                    ]).pipe(Effect.map(([native, browser]) => native + browser)),
-                  ),
+                Effect.gen(function* () {
+                  yield* computerUsePolicy.pause(environmentId);
+                  yield* cancelPendingComputerUseApprovals();
+                  return yield* Effect.all([
+                    computerUseBroker.stopEnvironment(environmentId, "interrupted"),
+                    previewAutomationBroker.stopEnvironment(environmentId),
+                  ]).pipe(Effect.map(([native, browser]) => native + browser));
+                }).pipe(
                   Effect.tap((stopped) =>
                     computerUseHistory.append({
                       environmentId,

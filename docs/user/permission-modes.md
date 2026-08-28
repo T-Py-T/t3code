@@ -29,6 +29,52 @@ there.
 For Grok, **Always allow this session** remembers the matching command or tool input. Other
 actions still ask for approval. It does not change the thread to **Full access**.
 
+## Computer Use
+
+Computer Use permissions are separate from the thread's permission mode. **Full access** never
+bypasses an app grant or a point-of-risk confirmation.
+
+On web or desktop, turn on **Settings** → **Integrations** → **Computer Use** before starting a new
+Codex, Pi, or Atomic session. The setting is off by default, and an existing session keeps the tools
+it started with. T3 Code asks separately before observing or operating an app. An app grant can last
+for one action, the current turn, the provider session, or permanently on that verified computer.
+Actions that may have an external effect require another confirmation immediately before execution.
+
+Native app control requires an environment hosted by the T3 Code desktop app on macOS or Windows;
+a CLI-only server reports that no native host is available. Web and mobile can still direct a
+desktop-hosted environment remotely.
+
+Desktop, web, and mobile show the same inline approvals and Computer Use timeline activity. An
+active card can pause, stop, or release control for human takeover. These controls end active input
+and prevent another agent action until you choose **Resume** or **Allow a new action**. Taking over
+from a remote client does not create a remote-desktop input channel; interact on the environment
+machine when physical control is required.
+
+A web or mobile client paired before its server gained Computer Use keeps its original authorization
+scopes. Pair that client again if it can see the environment but cannot use the Computer Use
+approval or lifecycle controls.
+
+Web and desktop settings also show the connected native host, permanent app grants, and 30 days of
+bounded activity metadata. You can revoke a permanent grant or clear that history there. Screenshots,
+page contents, accessibility trees, clipboard values, and typed text are not kept in the history.
+
+## Browser Tools
+
+Agent access to the in-app preview browser is on by default. On web or desktop, turn **Agent browser
+access** off under **Settings** → **Integrations** → **Browser** to withhold the `preview_*` tools
+from new Codex, Pi, and Atomic sessions. Your own browser panel remains available, and a session that
+is already running keeps the tools it started with.
+
+The desktop app can also open a dedicated, persistent T3 Code browser profile for sites that require
+a sign-in. **Signed-in browser access** is off by default and never attaches to your
+everyday Chrome profile. Enable it under the same Browser settings, choose **Open browser**, and sign
+in only to the sites you want that profile to use. Disabling access closes the controlled browser;
+external-browser recording is not supported yet.
+
+Both browser routes use the same app-grant, point-of-risk confirmation, lifecycle, and metadata
+history policy as native Computer Use. The browser settings and native **Computer Use** switch are
+independent, so disabling native app control does not silently disable the governed preview tools.
+
 ## Choosing a Mode
 
 Use **Full access** for work in a worktree or a sandbox you can throw away.
@@ -48,4 +94,8 @@ threads do the same: **Supervised** starts Grok in ask mode even if your Grok CL
 set to always-approve, and **Full access** starts Grok with always-approve. The labels above
 describe what you get; the exact per-provider translation is internal and may change.
 
-Mobile offers the same four modes with the same labels and descriptions.
+Pi and Atomic currently offer only **Full access** because their session protocol has no generic
+provider approval callback. T3-owned Computer Use app grants and action confirmations still apply
+through the bundled T3 extension.
+
+For providers that support them, mobile offers the same modes with the same labels and descriptions.

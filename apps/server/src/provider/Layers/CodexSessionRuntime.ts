@@ -2057,10 +2057,7 @@ export const makeCodexSessionRuntime = (
 
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
-      yield* client.request(
-        "initialize",
-        buildCodexSessionInitializeParams(),
-      );
+      yield* client.request("initialize", buildCodexSessionInitializeParams());
       yield* client.notify("initialized", undefined);
 
       const requestedModel = normalizeCodexModelSlug(options.model);

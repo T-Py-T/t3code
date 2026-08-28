@@ -69,23 +69,23 @@ function makeThreadOpenResponse(
 }
 
 describe("buildTurnStartParams", () => {
-  it("enables only MCP elicitations in full-access mode", () => {
-    const params = Effect.runSync(
-      buildTurnStartParams({
+  it.effect("enables only MCP elicitations in full-access mode", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
         threadId: "provider-thread-1",
         runtimeMode: "full-access",
         prompt: "Observe Safari",
-      }),
-    );
+      });
 
-    NodeAssert.deepStrictEqual(params.approvalPolicy, {
-      granular: {
-        mcp_elicitations: true,
-        rules: false,
-        sandbox_approval: false,
-      },
-    });
-  });
+      NodeAssert.deepStrictEqual(params.approvalPolicy, {
+        granular: {
+          mcp_elicitations: true,
+          rules: false,
+          sandbox_approval: false,
+        },
+      });
+    }),
+  );
 
   it("keeps invalid turn values only in the schema cause", () => {
     const secret = "codex-turn-input-secret-sentinel";

@@ -4719,7 +4719,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("cancels a pre-lease Computer Use approval when stopped", () =>
+  it.effect("cancels a pre-lease Computer Use approval for every lifecycle exit", () =>
     Effect.gen(function* () {
       const environmentId = testEnvironmentDescriptor.environmentId;
       const threadId = ThreadId.make("thread-computer-use-approval");
@@ -4758,13 +4758,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const respondToRequest = vi.fn<
         ProviderService.ProviderService["Service"]["respondToRequest"]
       >(() => Effect.void);
+      const appendHistory = vi.fn<ComputerUseHistory.ComputerUseHistory["Service"]["append"]>(
+        () => Effect.void,
+      );
 
       yield* buildAppUnderTest({
         layers: {
           computerUseBroker: {
             activeControlFor: () => Effect.succeed(undefined),
-            stopEnvironment: () => Effect.succeed(1),
+            stopEnvironment: () => Effect.succeed(0),
           },
+          computerUseHistory: { append: appendHistory },
           projectionSnapshotQuery: {
             getShellSnapshot: () => Effect.succeed({ ...readModel, threads: [thread] }),
             getThreadDetailById: (candidateThreadId) =>
@@ -4775,13 +4779,48 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       const wsUrl = yield* getWsServerUrl("/ws");
-      const result = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.computerUseStop]({})),
+      const results = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const stopped = yield* client[WS_METHODS.computerUseStop]({});
+            const takenOver = yield* client[WS_METHODS.computerUseTakeOver]({});
+            const paused = yield* client[WS_METHODS.computerUsePause]({});
+            return [stopped, takenOver, paused];
+          }),
+        ),
       );
 
-      assert.deepEqual(result, { stopped: 1 });
+      assert.deepEqual(results, [{ stopped: 0 }, { stopped: 0 }, { stopped: 0 }]);
       assert.deepEqual(respondToRequest.mock.calls, [
         [{ threadId, requestId, decision: "cancel" }],
+        [{ threadId, requestId, decision: "cancel" }],
+        [{ threadId, requestId, decision: "cancel" }],
+      ]);
+      assert.deepEqual(appendHistory.mock.calls, [
+        [
+          {
+            environmentId,
+            state: "stopped",
+            summary: "Stopped Computer Use before the next action.",
+            resultTag: "user",
+          },
+        ],
+        [
+          {
+            environmentId,
+            state: "taken-over",
+            summary: "Released Computer Use for human takeover.",
+            resultTag: "takeover",
+          },
+        ],
+        [
+          {
+            environmentId,
+            state: "paused",
+            summary: "Paused Computer Use before the next action.",
+            resultTag: "user",
+          },
+        ],
       ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

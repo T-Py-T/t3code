@@ -237,6 +237,8 @@ break:
   native library from inside `server.asar` through its `.unpacked` sibling.
 - The isolated, extracted sidecar cannot load the server entry with plain Node.
 - The external Windows resource monitor is absent.
+- The external Windows Computer Use helper is absent.
+- A signed package contains a Computer Use helper without a valid Authenticode signature.
 - The unpacked Windows application contains more than 80 files.
 
 Cross-architecture Windows builds retain every structural and extracted-sidecar

@@ -27,10 +27,7 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
   return result as Awaited<ReturnType<DesktopBridge["ensureSshEnvironment"]>>;
 }
 
-const externalBrowserTabPayload = (
-  tabId: string | null | undefined,
-  operationId?: string,
-) => ({
+const externalBrowserTabPayload = (tabId: string | null | undefined, operationId?: string) => ({
   ...(tabId === undefined ? {} : { tabId }),
   ...(operationId === undefined ? {} : { operationId }),
 });

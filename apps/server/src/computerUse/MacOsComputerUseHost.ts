@@ -48,7 +48,9 @@ interface MacOsCodeSigningIdentity {
   readonly teamId: string;
 }
 
-export function parseMacOsCodeSigningIdentity(output: string): MacOsCodeSigningIdentity | undefined {
+export function parseMacOsCodeSigningIdentity(
+  output: string,
+): MacOsCodeSigningIdentity | undefined {
   const teamId = /^TeamIdentifier=(.+)$/m.exec(output)?.[1]?.trim();
   const identifier = /^Identifier=(.+)$/m.exec(output)?.[1]?.trim();
   return !teamId || teamId === "not set" || !identifier ? undefined : { identifier, teamId };

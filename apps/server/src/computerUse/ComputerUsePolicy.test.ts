@@ -36,6 +36,13 @@ const terminalTarget: ComputerUseTarget = {
   applicationId: "com.apple.Terminal",
   stableIdentity: "macos:com.apple.Terminal:APPLE",
 };
+const accessibilityPromptTarget: ComputerUseTarget = {
+  targetId: ComputerUseTargetId.make("target-accessibility-prompt"),
+  kind: "application",
+  displayName: "Accessibility Access",
+  applicationId: "com.apple.accessibility.universalAccessAuthWarn",
+  stableIdentity: "macos:com.apple.accessibility.universalAccessAuthWarn:APPLE",
+};
 const thirdPartyTerminalTarget: ComputerUseTarget = {
   targetId: ComputerUseTargetId.make("target-third-party-terminal"),
   kind: "application",
@@ -129,6 +136,22 @@ it.effect("denies terminal targets even when the caller understates the action r
     });
 
     expect(decision).toEqual({ _tag: "deny", reason: "forbidden-target" });
+  }),
+);
+
+it.effect("denies macOS privacy prompts even when the caller understates the action risk", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+
+    expect(
+      yield* policy.evaluate({
+        scope,
+        target: accessibilityPromptTarget,
+        access: "operate",
+        risk: "reversible-local",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual({ _tag: "deny", reason: "forbidden-target" });
   }),
 );
 

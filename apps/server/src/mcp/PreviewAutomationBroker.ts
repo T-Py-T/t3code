@@ -471,8 +471,8 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       // session. A dead lease is pruned above and may fail over.
       const connection =
         hasLiveAssignment &&
-          supportsOperation(assignedConnection, input.operation) &&
-          supportsBrowser(assignedConnection, input.input)
+        supportsOperation(assignedConnection, input.operation) &&
+        supportsBrowser(assignedConnection, input.input)
           ? assignedConnection
           : hasLiveAssignment
             ? undefined

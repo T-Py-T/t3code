@@ -190,6 +190,7 @@ public struct HostResponse: Codable, Equatable, Sendable {
 
 public enum TargetPolicy {
     private static let forbiddenBundleIds: Set<String> = [
+        "com.apple.accessibility.universalaccessauthwarn",
         "com.apple.terminal",
         "com.github.wez.wezterm",
         "com.googlecode.iterm2",
@@ -202,6 +203,7 @@ public enum TargetPolicy {
     ]
 
     private static let forbiddenProcessNames: Set<String> = [
+        "universalAccessAuthWarn",
         "Terminal",
         "Alacritty",
         "Ghostty",

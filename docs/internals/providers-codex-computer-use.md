@@ -89,10 +89,9 @@ sessions; a running Codex app-server retains the MCP catalog it started with.
 ## Boundaries
 
 - macOS only; the signed client is supplied by the Codex or ChatGPT desktop installation.
-- Codex only in this slice. Pi does not expose an MCP transport, and Atomic 0.9.13's MCP client does
-  not advertise or handle the elicitation requests the signed client uses for new-app approval.
-  Attaching the client through either provider would therefore expose a partial, misleading
-  capability instead of the same approval lifecycle.
+- Codex only in this slice. The bridge is injected through Codex app-server session configuration
+  and relies on its MCP elicitation approval flow. Pi and Atomic receive T3-owned Computer Use
+  through their bundled extension; they do not attach this OpenAI bridge.
 - T3 shows provider tool lifecycle and app-access approvals, but does not duplicate the private
   Computer Use accessibility tree or screenshot stream in a separate panel.
 - The bridge does not manage macOS Accessibility or Screen Recording permissions. The signed client

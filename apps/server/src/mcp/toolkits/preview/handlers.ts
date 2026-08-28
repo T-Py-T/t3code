@@ -115,10 +115,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
         }
       : { browser };
   const policyIdentityDigest = yield* crypto
-    .digest(
-      "SHA-256",
-      new TextEncoder().encode(encodeUnknownJsonString(policyIdentitySeed)),
-    )
+    .digest("SHA-256", new TextEncoder().encode(encodeUnknownJsonString(policyIdentitySeed)))
     .pipe(Effect.orDie, Effect.map(Encoding.encodeHex));
   const target: ComputerUseTarget = {
     targetId: ComputerUseTargetId.make(`preview-${browser}`),
@@ -127,11 +124,10 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       browser === "external"
         ? `${displayName} — ${browserOrigin(externalStatus?.url ?? null)}`
         : displayName,
-    applicationId: browser === "external" ? `t3.preview.external.${profileId}` : "t3.preview.built-in",
+    applicationId:
+      browser === "external" ? `t3.preview.external.${profileId}` : "t3.preview.built-in",
     stableIdentity:
-      browser === "external"
-        ? `preview:external:${policyIdentityDigest}`
-        : "preview:built-in",
+      browser === "external" ? `preview:external:${policyIdentityDigest}` : "preview:built-in",
   };
   const access =
     operation === "status" || operation === "snapshot" || operation === "waitFor"

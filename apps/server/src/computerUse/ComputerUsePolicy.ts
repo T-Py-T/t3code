@@ -92,6 +92,7 @@ export interface ComputerUsePolicyPersistence {
 }
 
 const FORBIDDEN_APPLICATION_IDS = new Set([
+  "com.apple.accessibility.universalaccessauthwarn",
   "com.apple.terminal",
   "com.github.wez.wezterm",
   "com.googlecode.iterm2",

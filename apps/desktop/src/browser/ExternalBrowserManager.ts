@@ -17,7 +17,7 @@ import type {
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
 } from "@t3tools/contracts";
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import { normalizePreviewUrl, newPreviewTabId } from "@t3tools/shared/preview";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
 import type { BrowserContext, Page } from "playwright-core";
@@ -255,7 +255,7 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
   const fileSystem = yield* FileSystem.FileSystem;
   const mutationGate = yield* Semaphore.make(1);
   const profileDirectory = environment.path.join(environment.stateDir, "external-browser-profile");
-  const profileId = `profile:${createHash("sha256").update(profileDirectory).digest("hex")}`;
+  const profileId = `profile:${NodeCrypto.createHash("sha256").update(profileDirectory).digest("hex")}`;
   const candidates = externalBrowserExecutableCandidates(environment);
   let executablePathCache: string | null | undefined;
   let runtime: ExternalBrowserRuntime | null = null;
@@ -485,50 +485,60 @@ export const make = Effect.gen(function* ExternalBrowserManagerMake() {
     requestedTabId?: string | null,
     operationId?: string,
   ): Effect.Effect<PreviewAutomationStatus, ExternalBrowserOperationError> =>
-    runOperation("status", operationId, Effect.gen(function* () {
-      const executable = yield* findExecutable();
-      const activeRuntime = runtime;
-      if (activeRuntime === null)
-        return yield* Effect.promise(() => statusForPage(executable !== null, null, null, profileId));
-      const tabId = requestedTabId ?? activeRuntime.currentTabId;
-      const page = tabId ? (activeRuntime.pages.get(tabId) ?? null) : null;
-      return yield* Effect.promise(() =>
-        statusForPage(executable !== null, page, page ? tabId : null, profileId),
-      );
-    }));
+    runOperation(
+      "status",
+      operationId,
+      Effect.gen(function* () {
+        const executable = yield* findExecutable();
+        const activeRuntime = runtime;
+        if (activeRuntime === null)
+          return yield* Effect.promise(() =>
+            statusForPage(executable !== null, null, null, profileId),
+          );
+        const tabId = requestedTabId ?? activeRuntime.currentTabId;
+        const page = tabId ? (activeRuntime.pages.get(tabId) ?? null) : null;
+        return yield* Effect.promise(() =>
+          statusForPage(executable !== null, page, page ? tabId : null, profileId),
+        );
+      }),
+    );
 
   const open = (
     input: PreviewAutomationOpenInput,
     requestedTabId?: string | null,
     operationId?: string,
   ): Effect.Effect<PreviewAutomationStatus, ExternalBrowserOperationError> =>
-    runOperation("open", operationId, mutationGate.withPermit(
-      Effect.gen(function* () {
-        const activeRuntime = yield* launch();
-        yield* ensureNotCancelled("open", operationId);
-        let page: Page | undefined;
-        let tabId: string | null = null;
-        if (input.reuseExistingTab !== false) {
-          tabId = requestedTabId ?? activeRuntime.currentTabId;
-          page = tabId ? activeRuntime.pages.get(tabId) : undefined;
-        }
-        if (!page || page.isClosed()) {
-          page = yield* attemptPromise("open", () => activeRuntime.context.newPage());
-          tabId = registerPage(activeRuntime, page);
-        }
-        activeRuntime.currentTabId = tabId;
-        if (input.url) {
-          const url = normalizeExternalBrowserUrl(input.url);
-          yield* attemptPromise(
-            "open",
-            () => page!.goto(url, { waitUntil: "load", timeout: DEFAULT_TIMEOUT_MS }),
-            tabId,
-          );
-        }
-        yield* attemptPromise("open", () => page!.bringToFront(), tabId);
-        return yield* Effect.promise(() => statusForPage(true, page!, tabId, profileId));
-      }),
-    ));
+    runOperation(
+      "open",
+      operationId,
+      mutationGate.withPermit(
+        Effect.gen(function* () {
+          const activeRuntime = yield* launch();
+          yield* ensureNotCancelled("open", operationId);
+          let page: Page | undefined;
+          let tabId: string | null = null;
+          if (input.reuseExistingTab !== false) {
+            tabId = requestedTabId ?? activeRuntime.currentTabId;
+            page = tabId ? activeRuntime.pages.get(tabId) : undefined;
+          }
+          if (!page || page.isClosed()) {
+            page = yield* attemptPromise("open", () => activeRuntime.context.newPage());
+            tabId = registerPage(activeRuntime, page);
+          }
+          activeRuntime.currentTabId = tabId;
+          if (input.url) {
+            const url = normalizeExternalBrowserUrl(input.url);
+            yield* attemptPromise(
+              "open",
+              () => page!.goto(url, { waitUntil: "load", timeout: DEFAULT_TIMEOUT_MS }),
+              tabId,
+            );
+          }
+          yield* attemptPromise("open", () => page!.bringToFront(), tabId);
+          return yield* Effect.promise(() => statusForPage(true, page!, tabId, profileId));
+        }),
+      ),
+    );
 
   const close = mutationGate.withPermit(
     Effect.gen(function* () {

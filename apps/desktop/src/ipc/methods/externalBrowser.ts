@@ -57,7 +57,11 @@ export const navigate = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_NAVIGATE_CHANNEL,
   payload: DesktopExternalBrowserNavigateInputSchema,
   result: PreviewAutomationStatus,
-  handler: Effect.fn("desktop.ipc.externalBrowser.navigate")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.navigate")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     return yield* manager.navigate(input, tabId, operationId);
   }),
@@ -67,7 +71,11 @@ export const resize = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_RESIZE_CHANNEL,
   payload: DesktopExternalBrowserResizeInputSchema,
   result: PreviewAutomationResizeResult,
-  handler: Effect.fn("desktop.ipc.externalBrowser.resize")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.resize")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     return yield* manager.resize(input, tabId, operationId);
   }),
@@ -77,7 +85,11 @@ export const setColorScheme = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_SET_COLOR_SCHEME_CHANNEL,
   payload: DesktopExternalBrowserSetColorSchemeInputSchema,
   result: PreviewAutomationSetColorSchemeResult,
-  handler: Effect.fn("desktop.ipc.externalBrowser.setColorScheme")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.setColorScheme")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     return yield* manager.setColorScheme(input, tabId, operationId);
   }),
@@ -97,7 +109,11 @@ export const click = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_CLICK_CHANNEL,
   payload: DesktopExternalBrowserClickInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.externalBrowser.click")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.click")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     yield* manager.click(input, tabId, operationId);
   }),
@@ -117,7 +133,11 @@ export const press = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_PRESS_CHANNEL,
   payload: DesktopExternalBrowserPressInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.externalBrowser.press")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.press")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     yield* manager.press(input, tabId, operationId);
   }),
@@ -127,7 +147,11 @@ export const scroll = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_SCROLL_CHANNEL,
   payload: DesktopExternalBrowserScrollInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.externalBrowser.scroll")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.scroll")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     yield* manager.scroll(input, tabId, operationId);
   }),
@@ -137,7 +161,11 @@ export const evaluate = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_EVALUATE_CHANNEL,
   payload: DesktopExternalBrowserEvaluateInputSchema,
   result: Schema.Unknown,
-  handler: Effect.fn("desktop.ipc.externalBrowser.evaluate")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.evaluate")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     return yield* manager.evaluate(input, tabId, operationId);
   }),
@@ -147,7 +175,11 @@ export const waitFor = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.EXTERNAL_BROWSER_WAIT_FOR_CHANNEL,
   payload: DesktopExternalBrowserWaitForInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.externalBrowser.waitFor")(function* ({ input, tabId, operationId }) {
+  handler: Effect.fn("desktop.ipc.externalBrowser.waitFor")(function* ({
+    input,
+    tabId,
+    operationId,
+  }) {
     const manager = yield* ExternalBrowserManager.ExternalBrowserManager;
     yield* manager.waitFor(input, tabId, operationId);
   }),

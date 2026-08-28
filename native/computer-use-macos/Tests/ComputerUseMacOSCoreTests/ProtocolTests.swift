@@ -24,6 +24,12 @@ import Testing
 }
 
 @Test func forbiddenTargetsFailClosed() {
+    #expect(
+        TargetPolicy.isForbidden(
+            bundleId: "com.apple.accessibility.universalAccessAuthWarn",
+            processName: "universalAccessAuthWarn"
+        )
+    )
     #expect(TargetPolicy.isForbidden(bundleId: "com.apple.Terminal", processName: "Terminal"))
     #expect(TargetPolicy.isForbidden(bundleId: "com.googlecode.iterm2", processName: "iTerm2"))
     #expect(TargetPolicy.isForbidden(bundleId: "com.mitchellh.ghostty", processName: "Ghostty"))

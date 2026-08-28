@@ -447,9 +447,7 @@ const buildAppUnderTest = (options?: {
     computerUseHistory?: Partial<ComputerUseHistory.ComputerUseHistory["Service"]>;
     computerUsePolicy?: Partial<ComputerUsePolicy.ComputerUsePolicy["Service"]>;
     computerUseToolkit?: Partial<ComputerUseToolkit.ComputerUseToolkit["Service"]>;
-    previewAutomationBroker?: Partial<
-      PreviewAutomationBroker.PreviewAutomationBroker["Service"]
-    >;
+    previewAutomationBroker?: Partial<PreviewAutomationBroker.PreviewAutomationBroker["Service"]>;
   };
 }) =>
   Effect.gen(function* () {

@@ -46,6 +46,11 @@ const AtomicCommand = Schema.Struct({
   source: Schema.optional(Schema.String),
   location: Schema.optional(Schema.String),
   path: Schema.optional(Schema.String),
+  input: Schema.optional(
+    Schema.Struct({
+      hint: Schema.optional(Schema.String),
+    }),
+  ),
 });
 const AtomicCommandsData = Schema.Struct({ commands: Schema.Array(AtomicCommand) });
 
@@ -65,6 +70,11 @@ export interface PiCompatibleProviderSettings {
 export interface PiCompatibleProviderDefinition {
   readonly displayName: string;
   readonly agentDirEnvironmentVariable: "ATOMIC_CODING_AGENT_DIR" | "PI_CODING_AGENT_DIR";
+  readonly protocolVersion?: 2;
+  readonly commandRequestType?: "get_commands" | "get_available_commands";
+  readonly discoveryArgs?: ReadonlyArray<string>;
+  readonly synthesizeSkillPaths?: boolean;
+  readonly additionalSlashCommands?: ReadonlyArray<ServerProviderSlashCommand>;
   readonly versionStatus?: (
     version: string | null,
   ) => { readonly status: "ready" | "warning" | "error"; readonly message: string } | undefined;
@@ -154,7 +164,10 @@ function modelsFromRpc(input: {
   return models;
 }
 
-function commandsFromRpc(commands: ReadonlyArray<typeof AtomicCommand.Type>): {
+function commandsFromRpc(
+  commands: ReadonlyArray<typeof AtomicCommand.Type>,
+  definition: PiCompatibleProviderDefinition,
+): {
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
   readonly skills: ReadonlyArray<ServerProviderSkill>;
 } {
@@ -163,20 +176,30 @@ function commandsFromRpc(commands: ReadonlyArray<typeof AtomicCommand.Type>): {
     .map((command) => ({
       name: command.name.trim(),
       ...(command.description?.trim() ? { description: command.description.trim() } : {}),
+      ...(command.input?.hint?.trim() ? { input: { hint: command.input.hint.trim() } } : {}),
     }));
   const skills = commands
     .filter(
-      (command): command is typeof command & { readonly path: string } =>
-        command.source === "skill" && typeof command.path === "string" && command.path.length > 0,
+      (command) =>
+        command.source === "skill" &&
+        (definition.synthesizeSkillPaths === true ||
+          (typeof command.path === "string" && command.path.length > 0)),
     )
     .map((command) => ({
       name: command.name.replace(/^skill:/, ""),
       ...(command.description?.trim() ? { description: command.description.trim() } : {}),
-      path: command.path,
+      path:
+        typeof command.path === "string" && command.path.length > 0
+          ? command.path
+          : `omp://skill/${encodeURIComponent(command.name.replace(/^skill:/, ""))}`,
       ...(command.location ? { scope: command.location } : {}),
       enabled: true,
     }));
-  return { slashCommands, skills };
+  const allSlashCommands = [...slashCommands, ...(definition.additionalSlashCommands ?? [])];
+  const uniqueSlashCommands = Array.from(
+    new Map(allSlashCommands.map((command) => [command.name, command])).values(),
+  );
+  return { slashCommands: uniqueSlashCommands, skills };
 }
 
 export function buildInitialPiCompatibleProviderSnapshot(
@@ -283,17 +306,23 @@ export const checkPiCompatibleProviderStatus = Effect.fn("checkPiCompatibleProvi
       const rpc = yield* makeAtomicRpcProcess({
         binaryPath: settings.binaryPath,
         runtimeName: definition.displayName,
-        args: ["--no-session", "--no-approve"],
+        args: definition.discoveryArgs ?? ["--no-session", "--no-approve"],
         cwd,
         environment: env,
       });
+      if (definition.protocolVersion !== undefined) {
+        yield* rpc.request({
+          type: "negotiate_protocol",
+          protocolVersion: definition.protocolVersion,
+        });
+      }
       const [stateResponse, modelsResponse, commandsResponse] = yield* Effect.all(
         [
           // No explicit timeout: these are the first commands on a freshly
           // spawned process, so they inherit the RPC startup budget.
           rpc.request({ type: "get_state" }),
           rpc.request({ type: "get_available_models" }),
-          rpc.request({ type: "get_commands" }),
+          rpc.request({ type: definition.commandRequestType ?? "get_commands" }),
         ],
         { concurrency: "unbounded" },
       );
@@ -307,7 +336,7 @@ export const checkPiCompatibleProviderStatus = Effect.fn("checkPiCompatibleProvi
         // rather than passed as undefined.
         ...(state?.thinkingLevel === undefined ? {} : { thinkingLevel: state.thinkingLevel }),
       });
-      return { models, ...commandsFromRpc(commandData?.commands ?? []) };
+      return { models, ...commandsFromRpc(commandData?.commands ?? [], definition) };
     }).pipe(Effect.scoped, Effect.result);
 
     if (Result.isFailure(discovery)) {

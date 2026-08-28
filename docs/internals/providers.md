@@ -7,12 +7,13 @@ orchestration layer does not know which one is behind a thread.
 
 ## Built-in drivers
 
-[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with seven entries:
+[`builtInDrivers.ts`][drivers] exports `BUILT_IN_DRIVERS` with eight entries:
 
 | Driver kind   | Driver source                           |
 | ------------- | --------------------------------------- |
 | `atomic`      | [`Drivers/AtomicDriver.ts`][atomic]     |
 | `pi`          | [`Drivers/PiDriver.ts`][pi]             |
+| `omp`         | [`Drivers/OmpDriver.ts`][omp]           |
 | `codex`       | [`Drivers/CodexDriver.ts`][codex]       |
 | `claudeAgent` | [`Drivers/ClaudeDriver.ts`][claude]     |
 | `cursor`      | [`Drivers/CursorDriver.ts`][cursor]     |
@@ -46,8 +47,12 @@ Pi and Atomic share a Pi-RPC lifecycle adapter, while Atomic adds workflow lifec
 workflow source inspection. See [Pi and Atomic providers](./providers-pi-atomic.md) for the protocol
 contract, event mappings, extension UI behavior, and known boundaries.
 
+Oh My Pi shares that transport seam but negotiates RPC v2 and adds phased todos, lossless chunking,
+child-agent lifecycle/transcripts, explicit follow-up controls, and terminal settlement rules. See
+[Oh My Pi provider](./providers-omp.md) for the 20-group harness parity matrix and acceptance gates.
+
 When the environment enables T3-owned browser or Computer Use access, Codex receives the shared
-toolkit through T3's local MCP server. Pi and Atomic receive the same toolkit through a private
+toolkit through T3's local MCP server. Pi, Atomic, and Oh My Pi receive the same toolkit through a private
 bundled extension that proxies their tool and approval traffic to that MCP server. The
 [T3 Computer Use specification](./computer-use.md) owns the host, policy, lifecycle, authorization,
 and remaining release-gate contract.
@@ -109,6 +114,7 @@ when a request opens (approval) or user input is requested, via
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [atomic]: ../../apps/server/src/provider/Drivers/AtomicDriver.ts
 [pi]: ../../apps/server/src/provider/Drivers/PiDriver.ts
+[omp]: ../../apps/server/src/provider/Drivers/OmpDriver.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
 [cursor]: ../../apps/server/src/provider/Drivers/CursorDriver.ts

@@ -239,6 +239,13 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       });
       yield* projectionPipeline.bootstrap;
 
+      const activityRows = yield* sql<{ readonly sequence: number | null }>`
+        SELECT sequence
+        FROM projection_thread_activities
+        WHERE activity_id = 'activity-routine'
+      `;
+      assert.deepEqual(activityRows, [{ sequence: 5 }]);
+
       threadShellUpdates = yield* sql<{ readonly count: number }>`
         SELECT count FROM thread_shell_updates
       `;

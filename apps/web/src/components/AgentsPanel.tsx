@@ -22,11 +22,23 @@ import {
   formatSubagentTokenCount,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { Bot, Braces, Check, ChevronDown, ChevronRight, X } from "lucide-react";
+import {
+  Bot,
+  Braces,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  MessageSquareText,
+  Square,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import { formatOmpTranscript } from "~/ompTranscript";
 import { orchestrationEnvironment } from "~/state/orchestration";
+import { threadEnvironment } from "~/state/threads";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Button } from "~/components/ui/button";
 
@@ -136,8 +148,74 @@ function agentActivityText(agent: RuntimeSubagent): string | null {
   );
 }
 
-/** Flat, non-interactive agent status line. No unfold. */
-function AgentRow({ agent }: { agent: RuntimeSubagent }) {
+function AgentTranscriptView({
+  environmentId,
+  threadId,
+  transcriptPath,
+  live,
+  onClose,
+}: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  transcriptPath: string;
+  live: boolean;
+  onClose: () => void;
+}) {
+  const result = useAtomValue(
+    (live ? orchestrationEnvironment.agentTranscript : orchestrationEnvironment.workflowScript)({
+      environmentId,
+      input: { threadId, scriptPath: transcriptPath },
+    }),
+  );
+  return (
+    <div className="mx-1.5 mb-1 rounded-md border border-border/60 bg-background/60">
+      <div className="flex items-center gap-2 border-b border-border/50 px-2 py-1">
+        <MessageSquareText aria-hidden className="size-3 text-muted-foreground" />
+        <span className="truncate font-mono text-[.65rem] text-muted-foreground">
+          {transcriptPath.split(/[\\/]/u).at(-1)}
+        </span>
+        {live ? (
+          <span className="rounded-sm bg-info/10 px-1 text-[.6rem] font-medium uppercase tracking-wide text-info-foreground">
+            live
+          </span>
+        ) : null}
+        <Button
+          size="icon-micro"
+          variant="ghost-muted"
+          onClick={onClose}
+          aria-label="Close transcript"
+          className="ml-auto"
+        >
+          <X aria-hidden className="size-3" />
+        </Button>
+      </div>
+      <div className="max-h-80 overflow-auto p-2">
+        {result._tag === "Success" ? (
+          <pre className="whitespace-pre-wrap break-words font-mono text-[.7rem] leading-relaxed text-foreground/90">
+            {formatOmpTranscript(result.value.contents) || "No readable transcript entries yet."}
+            {result.value.truncated ? "\n\n… (transcript truncated)" : ""}
+          </pre>
+        ) : result._tag === "Failure" ? (
+          <p className="text-xs text-destructive-foreground">Could not load the transcript.</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">Loading transcript…</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Agent status line with an optional contained OMP transcript viewer. */
+function AgentRow({
+  agent,
+  environmentId,
+  threadId,
+}: {
+  agent: RuntimeSubagent;
+  environmentId?: EnvironmentId | null | undefined;
+  threadId?: ThreadId | null | undefined;
+}) {
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const visuals = STATUS_VISUALS[agent.status];
   const activity = agentActivityText(agent);
   const modelLabel = formatSubagentModelLabel(agent.model, agent.effort);
@@ -151,41 +229,75 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} tools` : null,
     agent.activationCount > 1 ? `run ${agent.activationCount}` : null,
   ].filter((value): value is string => value !== null);
+  const transcriptPath = agent.outputFile?.endsWith(".jsonl") === true ? agent.outputFile : null;
+  const canShowTranscript =
+    transcriptPath !== null &&
+    environmentId !== null &&
+    environmentId !== undefined &&
+    threadId !== null &&
+    threadId !== undefined;
+  const transcriptIsLive =
+    agent.status === "pending" || agent.status === "running" || agent.status === "waiting";
 
   return (
-    <div className="grid h-[3.875rem] grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1">
-      <span className="col-start-1 row-start-1 flex items-center">
-        <StatusDot status={agent.status} />
-      </span>
-      <span className="col-start-2 row-start-1 flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 truncate text-sm font-medium">{agent.title}</span>
-        {role ? (
-          <span className="max-w-28 shrink-0 truncate rounded-sm border border-border/60 px-1 font-mono text-[.65rem] text-muted-foreground">
-            {role}
-          </span>
-        ) : null}
-      </span>
-      <span className="col-start-3 row-start-1 min-w-14 text-right font-mono text-[.7rem] text-muted-foreground/80">
-        <span className="inline-flex items-center gap-1">
-          <AgentElapsed agent={agent} />
-          {agent.status === "completed" ? (
-            <Check aria-hidden className="size-3 text-success" />
+    <>
+      <div className="grid h-[3.875rem] grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1">
+        <span className="col-start-1 row-start-1 flex items-center">
+          <StatusDot status={agent.status} />
+        </span>
+        <span className="col-start-2 row-start-1 flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 truncate text-sm font-medium">{agent.title}</span>
+          {role ? (
+            <span className="max-w-28 shrink-0 truncate rounded-sm border border-border/60 px-1 font-mono text-[.65rem] text-muted-foreground">
+              {role}
+            </span>
           ) : null}
         </span>
-      </span>
-      <span
-        className={cn(
-          "col-start-2 col-end-4 row-start-2 block truncate text-xs",
-          agent.status === "failed" ? "text-destructive-foreground" : "text-muted-foreground",
-        )}
-      >
-        {activity ?? visuals.label}
-      </span>
-      <span className="col-start-2 col-end-4 row-start-3 truncate font-mono text-[.7rem] tabular-nums text-muted-foreground/70">
-        {metadata.join(" · ")}
-      </span>
-      <span className="sr-only">{visuals.label}</span>
-    </div>
+        <span className="col-start-3 row-start-1 min-w-14 text-right font-mono text-[.7rem] text-muted-foreground/80">
+          <span className="inline-flex items-center gap-1">
+            <AgentElapsed agent={agent} />
+            {agent.status === "completed" ? (
+              <Check aria-hidden className="size-3 text-success" />
+            ) : null}
+          </span>
+        </span>
+        <span
+          className={cn(
+            "col-start-2 col-end-4 row-start-2 block truncate text-xs",
+            agent.status === "failed" ? "text-destructive-foreground" : "text-muted-foreground",
+          )}
+        >
+          {activity ?? visuals.label}
+        </span>
+        <span className="col-start-2 col-end-4 row-start-3 flex min-w-0 items-center gap-2 font-mono text-[.7rem] tabular-nums text-muted-foreground/70">
+          <span className="min-w-0 truncate">{metadata.join(" · ")}</span>
+          {canShowTranscript ? (
+            <button
+              type="button"
+              onClick={() => setTranscriptOpen((value) => !value)}
+              className={cn(
+                "ml-auto inline-flex shrink-0 items-center gap-1 rounded-sm border border-border/60 px-1 normal-case hover:text-foreground",
+                transcriptOpen && "text-foreground",
+              )}
+              aria-expanded={transcriptOpen}
+            >
+              <MessageSquareText aria-hidden className="size-2.5" />
+              transcript
+            </button>
+          ) : null}
+        </span>
+        <span className="sr-only">{visuals.label}</span>
+      </div>
+      {transcriptOpen && canShowTranscript ? (
+        <AgentTranscriptView
+          environmentId={environmentId}
+          threadId={threadId}
+          transcriptPath={transcriptPath}
+          live={transcriptIsLive}
+          onClose={() => setTranscriptOpen(false)}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -337,9 +449,13 @@ function WorkflowScriptView({
 function PhaseSection({
   phase,
   defaultOpen = false,
+  environmentId,
+  threadId,
 }: {
   phase: AgentPanelWorkflowGroup["phases"][number];
   defaultOpen?: boolean;
+  environmentId?: EnvironmentId | null | undefined;
+  threadId?: ThreadId | null | undefined;
 }) {
   const [open, setOpen] = useState(defaultOpen || phase.state === "running");
   const previousState = useRef(phase.state);
@@ -388,7 +504,16 @@ function PhaseSection({
           </span>
         ) : null}
       </button>
-      {open ? phase.members.map((member) => <AgentRow key={member.id} agent={member} />) : null}
+      {open
+        ? phase.members.map((member) => (
+            <AgentRow
+              key={member.id}
+              agent={member}
+              environmentId={environmentId}
+              threadId={threadId}
+            />
+          ))
+        : null}
     </div>
   );
 }
@@ -458,13 +583,24 @@ function ExpandedWorkflowSection({
         />
       ) : null}
       {group.phases.map((phase) => (
-        <PhaseSection key={phase.index} phase={phase} defaultOpen={!workflowIsLive(group)} />
+        <PhaseSection
+          key={phase.index}
+          phase={phase}
+          defaultOpen={!workflowIsLive(group)}
+          environmentId={environmentId}
+          threadId={threadId}
+        />
       ))}
       {group.unphasedMembers.map((member) => (
-        <AgentRow key={member.id} agent={member} />
+        <AgentRow
+          key={member.id}
+          agent={member}
+          environmentId={environmentId}
+          threadId={threadId}
+        />
       ))}
       {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
-        <AgentRow agent={group.workflow} />
+        <AgentRow agent={group.workflow} environmentId={environmentId} threadId={threadId} />
       ) : null}
     </section>
   );
@@ -549,6 +685,18 @@ export function AgentsPanel({
   environmentId?: EnvironmentId | null;
   threadId?: ThreadId | null;
 }) {
+  const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn);
+  const [isStopping, setIsStopping] = useState(false);
+  const canStop = model.liveCount > 0 && environmentId !== null && threadId !== null;
+  const handleStop = async () => {
+    if (environmentId === null || threadId === null || model.liveCount === 0) return;
+    setIsStopping(true);
+    try {
+      await interruptTurn({ environmentId, input: { threadId } });
+    } finally {
+      setIsStopping(false);
+    }
+  };
   if (!model.hasAgents) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -580,7 +728,12 @@ export function AgentsPanel({
                 Direct spawns
               </div>
               {model.directAgents.map((agent) => (
-                <AgentRow key={agent.id} agent={agent} />
+                <AgentRow
+                  key={agent.id}
+                  agent={agent}
+                  environmentId={environmentId}
+                  threadId={threadId}
+                />
               ))}
             </section>
           ) : null}
@@ -597,7 +750,21 @@ export function AgentsPanel({
           {model.idleCount > 0 ? <span>{model.idleCount} idle</span> : null}
           {model.settledCount > 0 ? <span>{model.settledCount} settled</span> : null}
         </span>
-        <span className="tabular-nums">Σ {formatSubagentTokenCount(model.totalTokens)} tok</span>
+        <span className="flex items-center gap-2">
+          {canStop ? (
+            <Button
+              size="xs"
+              variant="ghost-muted"
+              onClick={handleStop}
+              disabled={isStopping}
+              className="h-5 gap-1 px-1.5 text-[.65rem]"
+            >
+              <Square aria-hidden className="size-2.5 fill-current" />
+              {isStopping ? "Stopping…" : "Stop all"}
+            </Button>
+          ) : null}
+          <span className="tabular-nums">Σ {formatSubagentTokenCount(model.totalTokens)} tok</span>
+        </span>
       </footer>
     </div>
   );

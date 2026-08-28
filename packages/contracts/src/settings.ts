@@ -661,6 +661,67 @@ export const PiSettings = makeProviderSettingsSchema(
 );
 export type PiSettings = typeof PiSettings.Type;
 
+export const OmpApprovalMode = Schema.Literals(["always-ask", "write", "yolo"]);
+export type OmpApprovalMode = typeof OmpApprovalMode.Type;
+
+export const OmpSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("omp").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Oh My Pi coding agent CLI used by this instance.",
+        providerSettingsForm: { placeholder: "omp", clearWhenEmpty: "omit" },
+      }),
+    ),
+    agentDir: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "OMP agent directory",
+        description: "Optional PI_CODING_AGENT_DIR for isolated Oh My Pi configuration.",
+        providerSettingsForm: { placeholder: "~/.omp/agent", clearWhenEmpty: "omit" },
+      }),
+    ),
+    trustProjectResources: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Load ambient extensions",
+        description:
+          "Load ambient Oh My Pi extensions and plugin code. Project skills, rules, prompts, and settings can still be discovered by OMP; use an isolated agent directory for a stronger trust boundary.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    approvalMode: OmpApprovalMode.pipe(
+      Schema.withDecodingDefault(Effect.succeed("write" as const)),
+      Schema.annotateKey({
+        title: "Tool approval mode",
+        description:
+          "Write prompts before write and execution tools, always-ask prompts for every tool, and yolo auto-approves tools.",
+      }),
+    ),
+    launchArgs: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Launch arguments",
+        description:
+          "Additional CLI arguments passed to Oh My Pi RPC sessions. Explicit approval arguments override the approval mode setting.",
+        providerSettingsForm: { placeholder: "e.g. --offline", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "agentDir", "trustProjectResources", "approvalMode", "launchArgs"],
+  },
+);
+export type OmpSettings = typeof OmpSettings.Type;
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -815,6 +876,7 @@ export const ServerSettings = Schema.Struct({
   providers: Schema.Struct({
     atomic: AtomicSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    omp: OmpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     codex: CodexSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -992,6 +1054,16 @@ const PiSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const OmpSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  agentDir: Schema.optionalKey(TrimmedString),
+  trustProjectResources: Schema.optionalKey(Schema.Boolean),
+  approvalMode: Schema.optionalKey(OmpApprovalMode),
+  launchArgs: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
@@ -1032,6 +1104,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       atomic: Schema.optionalKey(AtomicSettingsPatch),
       pi: Schema.optionalKey(PiSettingsPatch),
+      omp: Schema.optionalKey(OmpSettingsPatch),
       codex: Schema.optionalKey(CodexSettingsPatch),
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),

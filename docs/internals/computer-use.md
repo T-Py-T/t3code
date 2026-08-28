@@ -25,17 +25,17 @@ The native path does not depend on ChatGPT or Codex Computer Use. Providers call
 toolkit, and the environment's desktop app starts the platform helper. The older OpenAI bridge is a
 separate comparison path documented in [Codex Computer Use](./providers-codex-computer-use.md).
 
-| Capability                 | Current branch behavior                                                                                                                                             | Release status                                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| macOS native apps          | T3 helper discovers, observes, captures, and operates allowed AX targets; settings show the helper's live permission state; terminal apps and T3 Code are forbidden | Implemented; System Settings shortcut and signed/notarized release proof remain                            |
-| Windows native apps        | Native x64 and ARM64 helpers use UI Automation, capture, foreground transfer, and native input with bounded cleanup and forbidden-target policy                     | Implemented; packaged UTM development acceptance passed, while production-signed physical smoke remains    |
-| Codex, Pi, and Atomic      | Shared MCP toolkit; Pi and Atomic receive the same bundled extension, approvals, cancellation, browser tools, and Atomic workflow correlation                       | Implemented                                                                                                |
-| Lifecycle and policy       | Exclusive leases, app grants, risk confirmation, pause, resume, stop, takeover, metadata history, and persistent-grant revocation                                   | Implemented in the environment API and web, desktop, and mobile thread UI                                  |
-| Built-in browser           | Semantic snapshots, navigation, locators, actions, diagnostics, screenshots, and recordings                                                                         | Implemented                                                                                                |
-| External signed-in browser | Explicit opt-in persistent T3-owned browser profile with semantic actions and connection status                                                                     | Implemented; external recording is not yet supported                                                       |
-| Excel and PowerPoint       | Native hosts classify Office windows as `office-document` and advertise `office-accessibility` with document context and supported operations                       | Structured accessibility implemented; Office add-ins remain required for declared ChatGPT parity           |
-| macOS lock transitions     | Host fails closed, cancels control, and requires local unlock when the lock state changes                                                                           | Implemented safety boundary; unattended locked use and its signed authorization plug-in remain unavailable |
-| Remote control             | Dedicated read, operate, approve, and host scopes; ordinary remote clients cannot register as native hosts                                                          | Implemented contracts and server policy; signed T3 Connect acceptance remains                              |
+| Capability                 | Current branch behavior                                                                                                                                              | Release status                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| macOS native apps          | T3 helper discovers, observes, captures, and operates allowed AX targets; settings show the helper's live permission state; terminal apps and T3 Code are forbidden  | Implemented; System Settings shortcut and signed/notarized release proof remain                            |
+| Windows native apps        | Native x64 and ARM64 helpers use UI Automation, capture, foreground transfer, and native input with bounded cleanup and forbidden-target policy                      | Implemented; packaged UTM development acceptance passed, while production-signed physical smoke remains    |
+| Codex, Pi, Atomic, and OMP | Shared MCP toolkit; Pi-family providers receive the same bundled extension, approvals, cancellation, browser tools, workflow correlation, and child-agent visibility | Implemented                                                                                                |
+| Lifecycle and policy       | Exclusive leases, app grants, risk confirmation, pause, resume, stop, takeover, metadata history, and persistent-grant revocation                                    | Implemented in the environment API and web, desktop, and mobile thread UI                                  |
+| Built-in browser           | Semantic snapshots, navigation, locators, actions, diagnostics, screenshots, and recordings                                                                          | Implemented                                                                                                |
+| External signed-in browser | Explicit opt-in persistent T3-owned browser profile with semantic actions and connection status                                                                      | Implemented; external recording is not yet supported                                                       |
+| Excel and PowerPoint       | Native hosts classify Office windows as `office-document` and advertise `office-accessibility` with document context and supported operations                        | Structured accessibility implemented; Office add-ins remain required for declared ChatGPT parity           |
+| macOS lock transitions     | Host fails closed, cancels control, and requires local unlock when the lock state changes                                                                            | Implemented safety boundary; unattended locked use and its signed authorization plug-in remain unavailable |
+| Remote control             | Dedicated read, operate, approve, and host scopes; ordinary remote clients cannot register as native hosts                                                           | Implemented contracts and server policy; signed T3 Connect acceptance remains                              |
 
 The settings and timeline must describe these distinctions directly. In particular,
 `office-accessibility` must not be presented as an Office add-in, and lock-transition safety must not
@@ -54,7 +54,7 @@ The supported preview is feature complete when:
 
 - the operating system identifies a T3-owned signed process as the permission owner;
 - T3 can operate without ChatGPT, Codex Computer Use, or another vendor's desktop service running;
-- Codex, Pi, and Atomic can use the same T3-owned capability and policy;
+- Codex, Pi, Atomic, and Oh My Pi can use the same T3-owned capability and policy;
 - desktop, web, and mobile expose consistent status, approval, history, stop, and takeover controls;
 - native apps, browsers, and supported Office apps use the strongest available structured control
   route before falling back to visual coordinates;
@@ -111,7 +111,7 @@ companion registers through the local bootstrap flow.
 
 ### Agent caller
 
-The provider session requesting an observation or action. The caller can be Codex, Pi, Atomic, or a
+The provider session requesting an observation or action. The caller can be Codex, Pi, Atomic, Oh My Pi, or a
 later provider adapter. It receives tools but never receives OS permission or direct helper access.
 
 ### Control lease
@@ -519,14 +519,15 @@ must not imply add-in support.
 Every built-in provider needs an explicit adapter decision. The shared T3 toolkit and policy remain
 the source of truth.
 
-| Provider        | Target transport                                              | Completion rule                                                                                   |
-| --------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Codex           | T3's local MCP server                                         | Replace the OpenAI helper bridge for T3-owned mode; preserve MCP progress and approval projection |
-| Pi              | Bundled T3 Pi extension that registers the toolkit            | Tool calls, cancellation, and approval waits pass the shared conformance suite                    |
-| Atomic          | The same Pi-compatible extension plus Atomic workflow context | Computer actions show inside workflow stages without losing stage status or chat output           |
-| Claude          | Provider-supported MCP/custom tool adapter                    | Explicitly supported or shown unavailable; no silent partial mode                                 |
-| Cursor and Grok | ACP MCP/extension adapter where supported                     | Capability and elicitation negotiation pass before exposure                                       |
-| OpenCode        | Provider-supported MCP adapter                                | Capability and approval negotiation pass before exposure                                          |
+| Provider        | Target transport                                                | Completion rule                                                                                   |
+| --------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Codex           | T3's local MCP server                                           | Replace the OpenAI helper bridge for T3-owned mode; preserve MCP progress and approval projection |
+| Pi              | Bundled T3 Pi extension that registers the toolkit              | Tool calls, cancellation, and approval waits pass the shared conformance suite                    |
+| Atomic          | The same Pi-compatible extension plus Atomic workflow context   | Computer actions show inside workflow stages without losing stage status or chat output           |
+| Oh My Pi        | The same extension plus OMP phased-todo and child-agent context | Computer actions keep workflow, detached-child, transcript, and chat visibility                   |
+| Claude          | Provider-supported MCP/custom tool adapter                      | Explicitly supported or shown unavailable; no silent partial mode                                 |
+| Cursor and Grok | ACP MCP/extension adapter where supported                       | Capability and elicitation negotiation pass before exposure                                       |
+| OpenCode        | Provider-supported MCP adapter                                  | Capability and approval negotiation pass before exposure                                          |
 
 Transport adapters may format tool schemas and events, but they must not duplicate app grants,
 action policy, screenshots, host selection, or persistent history.
@@ -641,7 +642,7 @@ parity extensions do not make the supported preview's unlocked workflow partial.
 | Forbidden actions    | Terminal/T3 automation, admin auth, privacy prompts, and safety-barrier bypass fail closed                    |
 | Live UX              | Target, stage, chat output, progress, approval, screenshot reveal, pause, stop, and takeover on all clients   |
 | Remote               | Explicitly scoped T3 Connect client directs and approves the same-host capability                             |
-| Provider parity      | Codex, Pi, and Atomic pass the toolkit suite; every other provider has an explicit result                     |
+| Provider parity      | Codex, Pi, Atomic, and Oh My Pi pass the toolkit suite; every other provider has an explicit result           |
 | Atomic workflows     | Computer actions remain correlated with workflow and stage status                                             |
 | Browser              | Built-in semantic browser and external signed-in browser integration pass security and action suites          |
 | Office               | Excel and PowerPoint add-ins pass structured-operation and approval suites                                    |
@@ -664,7 +665,7 @@ parity extensions do not make the supported preview's unlocked workflow partial.
 
 ### Provider conformance suite
 
-Run the same scripted fake-host scenarios through Codex, Pi, Atomic, Claude, ACP providers, and
+Run the same scripted fake-host scenarios through Codex, Pi, Atomic, Oh My Pi, Claude, ACP providers, and
 OpenCode adapters. A provider switch cannot appear until tool discovery, action result, progress,
 approval wait/resume, interruption, session stop, and host failure all pass.
 
@@ -729,7 +730,7 @@ pre-GA capability behind the explicit preview flag.
 
 The OpenAI Computer Use bridge remains useful as a comparison harness while the native host is in
 preview. It stays labeled as an OpenAI bridge, defaults off, and is separate from the shared
-T3-owned toolkit used by Codex, Pi, and Atomic. It does not share persistent grants with T3-owned
+T3-owned toolkit used by Codex, Pi, Atomic, and Oh My Pi. It does not share persistent grants with T3-owned
 mode or count toward a T3 ownership acceptance gate. Remove it only after the T3-owned host passes
 the same integrated scenarios or when maintaining both routes creates unsafe ambiguity.
 

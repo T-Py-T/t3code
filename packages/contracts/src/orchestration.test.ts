@@ -48,9 +48,13 @@ const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 const encodeThreadCreatedPayload = Schema.encodeEffect(ThreadCreatedPayload);
 
-it("limits Atomic and Pi sessions to full access", () => {
+it("advertises only the runtime modes each Pi-family RPC can honor", () => {
   assert.deepStrictEqual(providerRuntimeModes(ProviderDriverKind.make("atomic")), ["full-access"]);
   assert.deepStrictEqual(providerRuntimeModes(ProviderDriverKind.make("pi")), ["full-access"]);
+  assert.deepStrictEqual(providerRuntimeModes(ProviderDriverKind.make("omp")), [
+    "approval-required",
+    "full-access",
+  ]);
   assert.deepStrictEqual(providerRuntimeModes(ProviderDriverKind.make("codex")), [
     "approval-required",
     "auto-accept-edits",

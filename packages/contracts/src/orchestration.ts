@@ -131,9 +131,11 @@ const FULL_ACCESS_ONLY_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("atomic"),
   ProviderDriverKind.make("pi"),
 ]);
+const OMP_RUNTIME_MODES: ReadonlyArray<RuntimeMode> = ["approval-required", "full-access"];
 
 /** Runtime modes a provider can safely honor in its session protocol. */
 export function providerRuntimeModes(provider: ProviderDriverKind): ReadonlyArray<RuntimeMode> {
+  if (provider === ProviderDriverKind.make("omp")) return OMP_RUNTIME_MODES;
   return FULL_ACCESS_ONLY_PROVIDERS.has(provider) ? FULL_ACCESS_ONLY_RUNTIME_MODES : RUNTIME_MODES;
 }
 
@@ -1680,8 +1682,9 @@ export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreads
 
 export const OrchestrationGetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
-  /** Absolute path from the workflow's runHandles.scriptPath. The server
-   * re-derives containment; the client value is a hint, never trusted. */
+  /** Absolute path from workflow runHandles.scriptPath or a provider task's
+   * outputFile. The server re-derives containment; the client value is a
+   * hint, never trusted. */
   scriptPath: TrimmedNonEmptyString,
 });
 export type OrchestrationGetWorkflowScriptInput = typeof OrchestrationGetWorkflowScriptInput.Type;
@@ -1694,8 +1697,8 @@ export const OrchestrationGetWorkflowScriptResult = Schema.Struct({
 export type OrchestrationGetWorkflowScriptResult = typeof OrchestrationGetWorkflowScriptResult.Type;
 
 const WORKFLOW_SCRIPT_ERROR_MESSAGES = {
-  "invalid-path": "Workflow scripts must be absolute .js or .ts paths.",
-  "root-unavailable": "Script root unavailable.",
+  "invalid-path": "Agent artifacts must be absolute .js, .ts, .md, or .jsonl paths.",
+  "root-unavailable": "Agent artifact root unavailable.",
   "not-found": "Script not found.",
   "outside-root": "Script path is outside the workflow scripts root.",
   "not-js": "Resolved workflow file type is unsupported.",

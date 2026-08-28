@@ -17,6 +17,7 @@ import {
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
+  buildCodexSessionInitializeParams,
   describeMcpElicitation,
   hasConfiguredMcpServer,
   hasConfiguredT3McpServer,
@@ -252,6 +253,13 @@ describe("buildTurnStartParams", () => {
 });
 
 describe("Codex MCP elicitation approvals", () => {
+  it("advertises form elicitation support to Codex", () => {
+    NodeAssert.equal(
+      buildCodexSessionInitializeParams().capabilities?.mcpServerOpenaiFormElicitation,
+      true,
+    );
+  });
+
   const request = {
     mode: "form",
     message: "Allow ChatGPT to use Safari?",

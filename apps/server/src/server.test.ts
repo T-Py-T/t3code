@@ -8,6 +8,7 @@ import {
   AuthAccessTokenType,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
+  ApprovalRequestId,
   CommandId,
   ComputerUseHostId,
   ComputerUseHistoryEntryId,
@@ -4716,6 +4717,76 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(listHistory.mock.calls, [[environmentId, 50]]);
         assert.deepEqual(clearHistory.mock.calls, [[environmentId]]);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("cancels an active Computer Use approval when stopped", () =>
+    Effect.gen(function* () {
+      const environmentId = testEnvironmentDescriptor.environmentId;
+      const threadId = ThreadId.make("thread-computer-use-approval");
+      const turnId = TurnId.make("turn-computer-use-approval");
+      const requestId = ApprovalRequestId.make("request-computer-use-approval");
+      const readModel = makeDefaultOrchestrationReadModel();
+      const thread = {
+        ...readModel.threads[0]!,
+        id: threadId,
+        latestTurn: {
+          turnId,
+          state: "running" as const,
+          requestedAt: "2026-01-01T00:00:00.000Z",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        activities: [
+          {
+            id: EventId.make("activity-computer-use-approval"),
+            tone: "approval" as const,
+            kind: "approval.requested",
+            summary: "App access approval requested",
+            payload: {
+              requestId,
+              requestKind: "mcp-elicitation",
+              requestType: "mcp_elicitation_approval",
+              computerUseApproval: true,
+            },
+            turnId,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      };
+      const respondToRequest = vi.fn<
+        ProviderService.ProviderService["Service"]["respondToRequest"]
+      >(() => Effect.void);
+
+      yield* buildAppUnderTest({
+        layers: {
+          computerUseBroker: {
+            activeControlFor: () =>
+              Effect.succeed({
+                threadId,
+                turnId,
+                providerInstanceId: ProviderInstanceId.make("codex"),
+              }),
+            stopEnvironment: () => Effect.succeed(1),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailById: (candidateThreadId) =>
+              Effect.succeed(candidateThreadId === threadId ? Option.some(thread) : Option.none()),
+          },
+          providerService: { respondToRequest },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.computerUseStop]({})),
+      );
+
+      assert.deepEqual(result, { stopped: 1 });
+      assert.deepEqual(respondToRequest.mock.calls, [
+        [{ threadId, requestId, decision: "cancel" }],
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("uploads Codex thread feedback through websocket rpc", () =>

@@ -305,7 +305,9 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   return models;
 });
 
-export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
+export function buildCodexInitializeParams(options?: {
+  readonly mcpServerOpenaiFormElicitation?: boolean;
+}): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
       name: "t3code_desktop",
@@ -314,6 +316,9 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
     },
     capabilities: {
       experimentalApi: true,
+      ...(options?.mcpServerOpenaiFormElicitation
+        ? { mcpServerOpenaiFormElicitation: true }
+        : {}),
     },
   };
 }

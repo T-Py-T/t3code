@@ -72,6 +72,10 @@ export function hasConfiguredT3McpServer(
   return appServerArgs?.some((argument) => argument.includes("mcp_servers.t3-code.")) === true;
 }
 
+export function buildCodexSessionInitializeParams(): EffectCodexSchema.V1InitializeParams {
+  return buildCodexInitializeParams({ mcpServerOpenaiFormElicitation: true });
+}
+
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
 });
@@ -2047,7 +2051,10 @@ export const makeCodexSessionRuntime = (
 
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
-      yield* client.request("initialize", buildCodexInitializeParams());
+      yield* client.request(
+        "initialize",
+        buildCodexSessionInitializeParams(),
+      );
       yield* client.notify("initialized", undefined);
 
       const requestedModel = normalizeCodexModelSlug(options.model);

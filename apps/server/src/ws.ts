@@ -10,6 +10,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
+  ApprovalRequestId,
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AuthAccessStreamError,
   AuthComputerApproveScope,
@@ -492,6 +493,44 @@ const makeWsRpcLayer = (
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+      const cancelPendingComputerUseApprovals = (threadId: ThreadId) =>
+        projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (thread) => {
+                const pending = new Map<string, ApprovalRequestId>();
+                for (const activity of thread.activities) {
+                  const payload =
+                    activity.payload && typeof activity.payload === "object"
+                      ? (activity.payload as Record<string, unknown>)
+                      : undefined;
+                  const requestId =
+                    typeof payload?.requestId === "string" ? payload.requestId : undefined;
+                  if (requestId === undefined) continue;
+                  if (
+                    activity.kind === "approval.requested" &&
+                    payload?.computerUseApproval === true
+                  ) {
+                    pending.set(requestId, ApprovalRequestId.make(requestId));
+                  } else if (activity.kind === "approval.resolved") {
+                    pending.delete(requestId);
+                  }
+                }
+                return Effect.forEach(
+                  pending.values(),
+                  (requestId) =>
+                    providerService.respondToRequest({
+                      threadId,
+                      requestId,
+                      decision: "cancel",
+                    }),
+                  { concurrency: 1, discard: true },
+                );
+              },
+            }),
+          ),
+        );
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
         Ref.get(rpcClientIds).pipe(
@@ -1861,13 +1900,29 @@ const makeWsRpcLayer = (
             WS_METHODS.computerUseStop,
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
-                computerUsePolicy.pause(environmentId).pipe(
-                  Effect.andThen(
-                    Effect.all([
-                      computerUseBroker.stopEnvironment(environmentId, "user"),
-                      previewAutomationBroker.stopEnvironment(environmentId),
-                    ]).pipe(Effect.map(([native, browser]) => native + browser)),
-                  ),
+                Effect.gen(function* () {
+                  const [nativeControl, browserControl] = yield* Effect.all([
+                    computerUseBroker.activeControlFor(environmentId),
+                    previewAutomationBroker.activeControlFor(environmentId),
+                  ]);
+                  const activeControl =
+                    nativeControl ??
+                    (browserControl?.turnId === undefined
+                      ? undefined
+                      : {
+                          threadId: browserControl.threadId,
+                          turnId: browserControl.turnId,
+                          providerInstanceId: browserControl.providerInstanceId,
+                        });
+                  yield* computerUsePolicy.pause(environmentId);
+                  if (activeControl !== undefined) {
+                    yield* cancelPendingComputerUseApprovals(activeControl.threadId);
+                  }
+                  return yield* Effect.all([
+                    computerUseBroker.stopEnvironment(environmentId, "user"),
+                    previewAutomationBroker.stopEnvironment(environmentId),
+                  ]).pipe(Effect.map(([native, browser]) => native + browser));
+                }).pipe(
                   Effect.tap((stopped) =>
                     stopped > 0
                       ? computerUseHistory.append({

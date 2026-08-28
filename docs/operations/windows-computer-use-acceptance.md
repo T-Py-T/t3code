@@ -115,6 +115,16 @@ run completed five actions, returned distinct pre/post observation IDs, exposed 
 elements, and captured a 26,092-byte PNG. This hash documents only that UTM run and is not a release
 identity.
 
+The final branch-candidate run built and installed T3 Code Alpha 0.0.37 for Windows ARM64 from
+commit `be08913f9`. The installed desktop host and helper were both signed with the same disposable
+UTM certificate, proving the packaged same-publisher trust check; the installed host SHA-256 was
+`546034BD1F893014F3F2E1134CDF3BC7DD4CAE5BF3BDB5ADA825CB917C1B244B` and the helper SHA-256 was
+`93E07334A61143B6B05DB657723BDAD735070F6FE3947D8642BDEAA4C0110A18`. Package validation reported
+version 0.0.37, a valid attached helper, and successful server-sidecar and native file-finder probes.
+A fresh interactive Notepad run completed five actions, exposed 44 accessibility elements, captured
+a 49,949-byte PNG, and returned distinct pre/post observation IDs. These hashes record the modified
+development-signed installation only; the unsigned development installer is not a release artifact.
+
 ## Remaining release gates
 
 UTM is required development evidence, not the complete Windows release gate. Before declaring the

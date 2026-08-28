@@ -330,7 +330,9 @@ and detach both threads in a guaranteed cleanup path before sending input.
 The Windows host identity includes the verified helper certificate thumbprint. Certificate renewal
 therefore changes the host identity and intentionally invalidates persistent Computer Use grants.
 The first action after rotation must be approved again; silently carrying grants across an
-unrecognized publisher identity would weaken the fail-closed trust boundary.
+unrecognized publisher identity would weaken the fail-closed trust boundary. The desktop host and
+helper must also have the same verified Authenticode publisher identity; signing only the helper is
+insufficient and must leave native Computer Use unavailable.
 
 The repeatable commands and the latest development evidence are recorded in
 [Windows Computer Use acceptance](../operations/windows-computer-use-acceptance.md).

@@ -4719,7 +4719,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("cancels an active Computer Use approval when stopped", () =>
+  it.effect("cancels a pre-lease Computer Use approval when stopped", () =>
     Effect.gen(function* () {
       const environmentId = testEnvironmentDescriptor.environmentId;
       const threadId = ThreadId.make("thread-computer-use-approval");
@@ -4729,6 +4729,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const thread = {
         ...readModel.threads[0]!,
         id: threadId,
+        hasPendingApprovals: true,
         latestTurn: {
           turnId,
           state: "running" as const,
@@ -4761,15 +4762,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           computerUseBroker: {
-            activeControlFor: () =>
-              Effect.succeed({
-                threadId,
-                turnId,
-                providerInstanceId: ProviderInstanceId.make("codex"),
-              }),
+            activeControlFor: () => Effect.succeed(undefined),
             stopEnvironment: () => Effect.succeed(1),
           },
           projectionSnapshotQuery: {
+            getShellSnapshot: () => Effect.succeed({ ...readModel, threads: [thread] }),
             getThreadDetailById: (candidateThreadId) =>
               Effect.succeed(candidateThreadId === threadId ? Option.some(thread) : Option.none()),
           },

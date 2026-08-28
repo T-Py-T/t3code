@@ -537,7 +537,13 @@ function runtimeModeToThreadConfig(input: RuntimeMode): {
     case "full-access":
     default:
       return {
-        approvalPolicy: "never",
+        approvalPolicy: {
+          granular: {
+            mcp_elicitations: true,
+            rules: false,
+            sandbox_approval: false,
+          },
+        },
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       };

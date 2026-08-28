@@ -493,44 +493,51 @@ const makeWsRpcLayer = (
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
-      const cancelPendingComputerUseApprovals = (threadId: ThreadId) =>
-        projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.void,
-              onSome: (thread) => {
-                const pending = new Map<string, ApprovalRequestId>();
-                for (const activity of thread.activities) {
-                  const payload =
-                    activity.payload && typeof activity.payload === "object"
-                      ? (activity.payload as Record<string, unknown>)
-                      : undefined;
-                  const requestId =
-                    typeof payload?.requestId === "string" ? payload.requestId : undefined;
-                  if (requestId === undefined) continue;
-                  if (
-                    activity.kind === "approval.requested" &&
-                    payload?.computerUseApproval === true
-                  ) {
-                    pending.set(requestId, ApprovalRequestId.make(requestId));
-                  } else if (activity.kind === "approval.resolved") {
-                    pending.delete(requestId);
-                  }
-                }
-                return Effect.forEach(
-                  pending.values(),
-                  (requestId) =>
-                    providerService.respondToRequest({
-                      threadId,
-                      requestId,
-                      decision: "cancel",
-                    }),
-                  { concurrency: 1, discard: true },
-                );
-              },
+      const cancelPendingComputerUseApprovals = Effect.fn(
+        "WsRpc.cancelPendingComputerUseApprovals",
+      )(function* () {
+        const shell = yield* projectionSnapshotQuery.getShellSnapshot();
+        const pending = new Map<
+          string,
+          { readonly threadId: ThreadId; readonly requestId: ApprovalRequestId }
+        >();
+        for (const threadShell of shell.threads) {
+          if (!threadShell.hasPendingApprovals) continue;
+          const thread = yield* projectionSnapshotQuery.getThreadDetailById(threadShell.id);
+          if (Option.isNone(thread)) continue;
+          for (const activity of thread.value.activities) {
+            const payload =
+              activity.payload && typeof activity.payload === "object"
+                ? (activity.payload as Record<string, unknown>)
+                : undefined;
+            const requestId =
+              typeof payload?.requestId === "string" ? payload.requestId : undefined;
+            if (requestId === undefined) continue;
+            const key = `${thread.value.id}:${requestId}`;
+            if (
+              activity.kind === "approval.requested" &&
+              payload?.computerUseApproval === true
+            ) {
+              pending.set(key, {
+                threadId: thread.value.id,
+                requestId: ApprovalRequestId.make(requestId),
+              });
+            } else if (activity.kind === "approval.resolved") {
+              pending.delete(key);
+            }
+          }
+        }
+        yield* Effect.forEach(
+          pending.values(),
+          ({ threadId, requestId }) =>
+            providerService.respondToRequest({
+              threadId,
+              requestId,
+              decision: "cancel",
             }),
-          ),
+          { concurrency: 1, discard: true },
         );
+      });
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
         Ref.get(rpcClientIds).pipe(
@@ -1901,23 +1908,8 @@ const makeWsRpcLayer = (
             serverEnvironment.getEnvironmentId.pipe(
               Effect.flatMap((environmentId) =>
                 Effect.gen(function* () {
-                  const [nativeControl, browserControl] = yield* Effect.all([
-                    computerUseBroker.activeControlFor(environmentId),
-                    previewAutomationBroker.activeControlFor(environmentId),
-                  ]);
-                  const activeControl =
-                    nativeControl ??
-                    (browserControl?.turnId === undefined
-                      ? undefined
-                      : {
-                          threadId: browserControl.threadId,
-                          turnId: browserControl.turnId,
-                          providerInstanceId: browserControl.providerInstanceId,
-                        });
                   yield* computerUsePolicy.pause(environmentId);
-                  if (activeControl !== undefined) {
-                    yield* cancelPendingComputerUseApprovals(activeControl.threadId);
-                  }
+                  yield* cancelPendingComputerUseApprovals();
                   return yield* Effect.all([
                     computerUseBroker.stopEnvironment(environmentId, "user"),
                     previewAutomationBroker.stopEnvironment(environmentId),

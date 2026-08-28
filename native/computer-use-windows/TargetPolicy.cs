@@ -24,4 +24,64 @@ public static class TargetPolicy
             || ForbiddenExecutables.Contains(processName)
             || processName.StartsWith("T3 Code", StringComparison.OrdinalIgnoreCase);
     }
+
+    public static TargetClassification Classify(
+        string executablePath,
+        string processName,
+        string? windowTitle
+    )
+    {
+        var executableName = Path.GetFileName(executablePath);
+        if (
+            executableName.Equals("EXCEL.EXE", StringComparison.OrdinalIgnoreCase)
+            || processName.Equals("EXCEL.EXE", StringComparison.OrdinalIgnoreCase)
+            || processName.Equals("Microsoft Excel", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return new TargetClassification(
+                "office-document",
+                "office-accessibility",
+                "excel",
+                DocumentName(windowTitle, " - Excel")
+            );
+        }
+        if (
+            executableName.Equals("POWERPNT.EXE", StringComparison.OrdinalIgnoreCase)
+            || processName.Equals("POWERPNT.EXE", StringComparison.OrdinalIgnoreCase)
+            || processName.Equals("Microsoft PowerPoint", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return new TargetClassification(
+                "office-document",
+                "office-accessibility",
+                "powerpoint",
+                DocumentName(windowTitle, " - PowerPoint")
+            );
+        }
+        return new TargetClassification("window", "native-accessibility", null, null);
+    }
+
+    public static bool MatchesRequestedKind(string? requestedKind, string targetKind) =>
+        requestedKind is null || requestedKind.Equals(targetKind, StringComparison.Ordinal);
+
+    private static string? DocumentName(string? title, string suffix)
+    {
+        var trimmed = title?.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return null;
+        }
+        if (trimmed.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^suffix.Length].Trim();
+        }
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed[..Math.Min(trimmed.Length, 512)];
+    }
 }
+
+public sealed record TargetClassification(
+    string Kind,
+    string Integration,
+    string? Application,
+    string? DocumentName
+);

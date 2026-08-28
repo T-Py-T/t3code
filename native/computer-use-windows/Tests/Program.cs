@@ -8,6 +8,7 @@ var tests = new (string Name, Action Run)[]
     ("cancellation round trip", CancellationRoundTrip),
     ("bounded host error", BoundedHostError),
     ("protected targets", ProtectedTargets),
+    ("structured Office targets", StructuredOfficeTargets),
     ("bounded screenshot dimensions", BoundedScreenshotDimensions),
     ("pointer interpolation", PointerInterpolation),
     ("synthetic input release tracking", SyntheticInputReleaseTracking),
@@ -70,6 +71,41 @@ static void ProtectedTargets()
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\PowerShell\7\pwsh.exe", "PowerShell"));
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\T3 Code\T3Code.exe", "T3 Code"));
     Assert(!TargetPolicy.IsForbidden(@"C:\Windows\System32\notepad.exe", "Notepad"));
+}
+
+static void StructuredOfficeTargets()
+{
+    var excel = TargetPolicy.Classify(
+        @"C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE",
+        "EXCEL.EXE",
+        "Book1 - Excel"
+    );
+    Assert(excel.Kind == "office-document");
+    Assert(excel.Integration == "office-accessibility");
+    Assert(excel.Application == "excel");
+    Assert(excel.DocumentName == "Book1");
+
+    var powerpoint = TargetPolicy.Classify(
+        @"C:\Program Files\Microsoft Office\root\Office16\POWERPNT.EXE",
+        "POWERPNT.EXE",
+        "Quarterly Review - PowerPoint"
+    );
+    Assert(powerpoint.Kind == "office-document");
+    Assert(powerpoint.Application == "powerpoint");
+    Assert(powerpoint.DocumentName == "Quarterly Review");
+
+    var notepad = TargetPolicy.Classify(
+        @"C:\Windows\System32\notepad.exe",
+        "notepad.exe",
+        "Notes"
+    );
+    Assert(notepad.Kind == "window");
+    Assert(notepad.Integration == "native-accessibility");
+    Assert(notepad.Application is null);
+
+    Assert(TargetPolicy.MatchesRequestedKind(null, notepad.Kind));
+    Assert(TargetPolicy.MatchesRequestedKind("office-document", excel.Kind));
+    Assert(!TargetPolicy.MatchesRequestedKind("window", excel.Kind));
 }
 
 static void BoundedScreenshotDimensions()

@@ -211,3 +211,68 @@ public enum TargetPolicy {
         return forbiddenProcessNames.contains(processName)
     }
 }
+
+public struct TargetClassification: Equatable, Sendable {
+    public let kind: String
+    public let integration: String
+    public let application: String?
+    public let documentName: String?
+
+    public init(
+        kind: String,
+        integration: String,
+        application: String? = nil,
+        documentName: String? = nil
+    ) {
+        self.kind = kind
+        self.integration = integration
+        self.application = application
+        self.documentName = documentName
+    }
+}
+
+public enum TargetClassifier {
+    public static func classify(
+        bundleId: String?,
+        processName: String,
+        windowTitle: String?
+    ) -> TargetClassification {
+        let normalizedBundleId = bundleId?.lowercased()
+        let normalizedProcessName = processName.lowercased()
+        if normalizedBundleId == "com.microsoft.excel" || normalizedProcessName == "microsoft excel" {
+            return TargetClassification(
+                kind: "office-document",
+                integration: "office-accessibility",
+                application: "excel",
+                documentName: documentName(windowTitle, suffixes: [" - Excel"])
+            )
+        }
+        if normalizedBundleId == "com.microsoft.powerpoint" ||
+            normalizedProcessName == "microsoft powerpoint"
+        {
+            return TargetClassification(
+                kind: "office-document",
+                integration: "office-accessibility",
+                application: "powerpoint",
+                documentName: documentName(windowTitle, suffixes: [" - PowerPoint"])
+            )
+        }
+        return TargetClassification(kind: "window", integration: "native-accessibility")
+    }
+
+    public static func matches(requestedKind: String?, targetKind: String) -> Bool {
+        requestedKind == nil || requestedKind == targetKind
+    }
+
+    private static func documentName(_ rawTitle: String?, suffixes: [String]) -> String? {
+        guard var title = rawTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty
+        else { return nil }
+        for suffix in suffixes where title.lowercased().hasSuffix(suffix.lowercased()) {
+            title.removeLast(suffix.count)
+            title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            break
+        }
+        return title.isEmpty ? nil : String(title.prefix(512))
+    }
+}

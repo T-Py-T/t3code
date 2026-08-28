@@ -36,7 +36,7 @@ public sealed class WindowsComputerUseHost : IDisposable
             var result = request.Operation switch
             {
                 "status" => Status(),
-                "listTargets" => ListTargets(),
+                "listTargets" => ListTargets(request),
                 "observe" => Observe(request),
                 "act" => Act(request),
                 _ => throw HostFailure.Unsupported(request.Operation),
@@ -88,13 +88,24 @@ public sealed class WindowsComputerUseHost : IDisposable
         return result;
     }
 
-    private static JsonObject ListTargets() =>
-        new()
+    private static JsonObject ListTargets(HostRequest request)
+    {
+        var requestedKind = request.Input.TryGetProperty("kind", out var kindValue)
+            && kindValue.ValueKind == JsonValueKind.String
+            ? kindValue.GetString()
+            : null;
+        return new JsonObject
         {
             ["targets"] = new JsonArray(
-                DiscoverTargets().Select(target => (JsonNode?)target.ToJson()).ToArray()
+                DiscoverTargets()
+                    .Where(target =>
+                        TargetPolicy.MatchesRequestedKind(requestedKind, target.Classification.Kind)
+                    )
+                    .Select(target => (JsonNode?)target.ToJson())
+                    .ToArray()
             ),
         };
+    }
 
     private JsonObject Observe(HostRequest request)
     {
@@ -850,15 +861,18 @@ public sealed class WindowsComputerUseHost : IDisposable
             var stableIdentity = appUserModelId is not null
                 ? $"windows:aumid:{appUserModelId}"
                 : BuildExecutableIdentity(executablePath);
+            var windowTitle = titleBuffer.ToString();
+            var classification = TargetPolicy.Classify(executablePath, processName, windowTitle);
             return new TargetRecord(
                 $"windows-window:{handle.ToInt64()}",
-                $"{processName} — {titleBuffer}",
+                $"{processName} — {windowTitle}",
                 applicationId,
                 stableIdentity,
                 executablePath,
                 processName,
                 handle,
-                bounds
+                bounds,
+                classification
             );
         }
         finally
@@ -1191,18 +1205,35 @@ public sealed class WindowsComputerUseHost : IDisposable
         string ExecutablePath,
         string ProcessName,
         IntPtr Handle,
-        Rectangle Bounds
+        Rectangle Bounds,
+        TargetClassification Classification
     )
     {
-        public JsonObject ToJson() =>
-            new()
+        public JsonObject ToJson()
+        {
+            var integration = new JsonObject
+            {
+                ["_tag"] = Classification.Integration,
+                ["supportedOperations"] = new JsonArray("observe", "act"),
+            };
+            if (Classification.Application is not null)
+            {
+                integration["application"] = Classification.Application;
+            }
+            if (Classification.DocumentName is not null)
+            {
+                integration["documentName"] = Classification.DocumentName;
+            }
+            return new JsonObject
             {
                 ["targetId"] = TargetId,
-                ["kind"] = "window",
+                ["kind"] = Classification.Kind,
                 ["displayName"] = DisplayName,
                 ["applicationId"] = ApplicationId,
                 ["stableIdentity"] = StableIdentity,
+                ["integration"] = integration,
             };
+        }
     }
 
     private sealed record ExecutableIdentityCacheEntry(

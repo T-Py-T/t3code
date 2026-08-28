@@ -36,6 +36,40 @@ import Testing
     #expect(!TargetPolicy.isForbidden(bundleId: "com.apple.TextEdit", processName: "TextEdit"))
 }
 
+@Test func officeTargetsAdvertiseStructuredDocumentControl() {
+    let excel = TargetClassifier.classify(
+        bundleId: "com.microsoft.Excel",
+        processName: "Microsoft Excel",
+        windowTitle: "Book1"
+    )
+    #expect(excel.kind == "office-document")
+    #expect(excel.integration == "office-accessibility")
+    #expect(excel.application == "excel")
+    #expect(excel.documentName == "Book1")
+
+    let powerpoint = TargetClassifier.classify(
+        bundleId: "com.microsoft.Powerpoint",
+        processName: "Microsoft PowerPoint",
+        windowTitle: "Quarterly Review - PowerPoint"
+    )
+    #expect(powerpoint.kind == "office-document")
+    #expect(powerpoint.application == "powerpoint")
+    #expect(powerpoint.documentName == "Quarterly Review")
+
+    let textEdit = TargetClassifier.classify(
+        bundleId: "com.apple.TextEdit",
+        processName: "TextEdit",
+        windowTitle: "Notes"
+    )
+    #expect(textEdit.kind == "window")
+    #expect(textEdit.integration == "native-accessibility")
+    #expect(textEdit.application == nil)
+
+    #expect(TargetClassifier.matches(requestedKind: nil, targetKind: textEdit.kind))
+    #expect(TargetClassifier.matches(requestedKind: "office-document", targetKind: excel.kind))
+    #expect(!TargetClassifier.matches(requestedKind: "window", targetKind: excel.kind))
+}
+
 @Test func hostErrorsAreBounded() {
     let error = HostErrorPayload(
         tag: "ComputerUseInterruptedError",

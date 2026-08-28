@@ -79,7 +79,7 @@ export const ComputerStatusTool = nativeComputerTool(
 export const ComputerListTargetsTool = nativeComputerTool(
   Tool.make("computer_list_targets", {
     description:
-      "List native application and window targets the verified T3 host can identify. T3 Code and terminal applications are excluded and cannot be targeted.",
+      "List native application, window, and structured Office document targets the verified T3 host can identify. Each target reports its strongest available integration and supported operations. Prefer office-document targets for Excel and PowerPoint. T3 Code and terminal applications are excluded and cannot be targeted.",
     parameters: ComputerUseListTargetsInput,
     success: ComputerUseTargetList,
     failure: ComputerUseFailure,

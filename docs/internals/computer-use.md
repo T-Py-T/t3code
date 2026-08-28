@@ -1,8 +1,9 @@
 # T3 Computer Use specification
 
-> Status: proposed target architecture and product acceptance contract. The current Codex bridge is
-> documented separately in [Codex Computer Use](./providers-codex-computer-use.md) and does not
-> satisfy this specification.
+> Status: native implementation and product acceptance contract. T3-owned macOS and Windows hosts,
+> the shared Codex/Pi/Atomic toolkit, policy boundaries, lifecycle controls, history, and semantic
+> browser routes are implemented behind the Computer Use setting. Release signing and the remaining
+> parity gaps below still gate a feature-complete claim.
 
 This document defines the feature-complete T3 Code Computer Use capability. It converts the verified
 gaps against ChatGPT Computer Use into buildable product requirements, module seams, security rules,
@@ -17,6 +18,28 @@ missing.
 
 Normative words such as **must**, **must not**, **should**, and **may** describe implementation and
 release requirements.
+
+## Current implementation status
+
+The native path does not depend on ChatGPT or Codex Computer Use. Providers call the same T3-owned
+toolkit, and the environment's desktop app starts the platform helper. The older OpenAI bridge is a
+separate comparison path documented in [Codex Computer Use](./providers-codex-computer-use.md).
+
+| Capability                 | Current branch behavior                                                                                                                       | Release status                                                                                             |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| macOS native apps          | T3 helper discovers, observes, captures, and operates allowed AX targets; terminal apps and T3 Code are forbidden                             | Implemented; signed/notarized release proof remains                                                        |
+| Windows native apps        | ARM64 helper uses UI Automation, capture, and native input with bounded cleanup and forbidden-target policy                                   | Implemented; packaged UTM and physical signed smoke tests remain release gates                             |
+| Codex, Pi, and Atomic      | Shared MCP toolkit; Pi and Atomic receive the same bundled extension, approvals, cancellation, browser tools, and Atomic workflow correlation | Implemented                                                                                                |
+| Lifecycle and policy       | Exclusive leases, app grants, risk confirmation, pause, resume, stop, takeover, metadata history, and persistent-grant revocation             | Implemented in the environment API and web/desktop UI; dedicated mobile rendering remains                  |
+| Built-in browser           | Semantic snapshots, navigation, locators, actions, diagnostics, screenshots, and recordings                                                   | Implemented                                                                                                |
+| External signed-in browser | Explicit opt-in persistent T3-owned browser profile with semantic actions and connection status                                               | Implemented; external recording is not yet supported                                                       |
+| Excel and PowerPoint       | Native hosts classify Office windows as `office-document` and advertise `office-accessibility` with document context and supported operations | Structured accessibility implemented; Office add-ins remain required for declared ChatGPT parity           |
+| macOS lock transitions     | Host fails closed, cancels control, and requires local unlock when the lock state changes                                                     | Implemented safety boundary; unattended locked use and its signed authorization plug-in remain unavailable |
+| Remote control             | Dedicated read, operate, approve, and host scopes; ordinary remote clients cannot register as native hosts                                    | Implemented contracts and server policy; signed T3 Connect acceptance remains                              |
+
+The settings and timeline must describe these distinctions directly. In particular,
+`office-accessibility` must not be presented as an Office add-in, and lock-transition safety must not
+be presented as unattended locked use.
 
 ## Product definition
 
@@ -647,12 +670,12 @@ unfinished capability behind an explicit experimental flag.
 9. **Feature-complete gate.** Run the entire acceptance matrix, publish supported platform/provider
    versions, remove misleading bridge wording, and graduate the feature flag.
 
-## Decisions required before native implementation
+## Release decisions still required
 
 1. Choose the fork's stable macOS bundle IDs, Apple Developer team, Windows publisher, and release
    secret ownership.
-2. Choose whether the signed companion is a nested helper, XPC service, or separately installed
-   host; it must support both desktop-embedded and CLI-only environments without permitting remote
+2. Confirm whether the packaged nested helper remains the only supported host or a separately
+   installed companion is also required for CLI-only environments. Either route must prevent remote
    host registration.
 3. Choose persistent history retention and whether screenshot retention remains permanently absent
    or becomes separately opt-in.
@@ -663,10 +686,10 @@ unfinished capability behind an explicit experimental flag.
 ## Current bridge disposition
 
 The OpenAI Computer Use bridge remains useful as a comparison harness while the native host is
-experimental. It must stay labeled as an OpenAI bridge, default off, and unavailable to Pi and
-Atomic. It must not share persistent grants with T3-owned mode or count toward any T3 ownership
-acceptance gate. Remove it only after the T3-owned host passes the same integrated scenarios or when
-maintaining both routes creates unsafe ambiguity.
+experimental. It stays labeled as an OpenAI bridge, defaults off, and is separate from the shared
+T3-owned toolkit used by Codex, Pi, and Atomic. It does not share persistent grants with T3-owned
+mode or count toward a T3 ownership acceptance gate. Remove it only after the T3-owned host passes
+the same integrated scenarios or when maintaining both routes creates unsafe ambiguity.
 
 [chatgpt-computer-use]: https://learn.chatgpt.com/docs/computer-use
 [openai-computer-use]: https://developers.openai.com/api/docs/guides/tools-computer-use

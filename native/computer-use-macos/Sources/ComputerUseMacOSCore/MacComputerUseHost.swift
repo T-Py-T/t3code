@@ -15,15 +15,30 @@ private struct TargetRecord: Sendable {
     let processId: pid_t
     let windowId: CGWindowID
     let bounds: CGRect
+    let classification: TargetClassification
 
     var json: JSONValue {
-        .object([
+        var object: [String: JSONValue] = [
             "targetId": .string(targetId),
-            "kind": .string("window"),
+            "kind": .string(classification.kind),
             "displayName": .string(displayName),
             "applicationId": .string(applicationId),
             "stableIdentity": .string(stableIdentity),
-        ])
+            "integration": .object([
+                "_tag": .string(classification.integration),
+                "supportedOperations": .array([.string("observe"), .string("act")]),
+            ]),
+        ]
+        if let application = classification.application,
+           case .object(var integration) = object["integration"]
+        {
+            integration["application"] = .string(application)
+            if let documentName = classification.documentName {
+                integration["documentName"] = .string(documentName)
+            }
+            object["integration"] = .object(integration)
+        }
+        return .object(object)
     }
 }
 
@@ -49,6 +64,7 @@ private enum HostFailure: Error {
     case unsupportedOperation(String)
     case policyDenied
     case targetClosed
+    case lockStateChanged
     case interrupted
     case malformedRequest(String)
 
@@ -90,6 +106,11 @@ private enum HostFailure: Error {
             return HostErrorPayload(
                 tag: "ComputerUseTargetClosedError",
                 message: "The target closed during the action."
+            )
+        case .lockStateChanged:
+            return HostErrorPayload(
+                tag: "ComputerUseLockStateChangedError",
+                message: "The macOS desktop locked during Computer Use. Unlock it locally to continue."
             )
         case .interrupted:
             return HostErrorPayload(
@@ -253,7 +274,15 @@ public actor MacComputerUseHost {
             let result: JSONValue
             switch request.operation {
             case "status": result = status()
-            case "listTargets": result = .object(["targets": .array(discoverTargets().map(\.json))])
+            case "listTargets":
+                let requestedKind = request.input.object?["kind"]?.string
+                let targets = discoverTargets().filter {
+                    TargetClassifier.matches(
+                        requestedKind: requestedKind,
+                        targetKind: $0.classification.kind
+                    )
+                }
+                result = .object(["targets": .array(targets.map(\.json))])
             case "observe":
                 guard let requestedTargetId = request.targetId else {
                     throw HostFailure.malformedRequest("targetId")
@@ -333,6 +362,11 @@ public actor MacComputerUseHost {
                 in: .whitespacesAndNewlines
             )
             let displayName = title.flatMap { $0.isEmpty ? nil : "\(owner) — \($0)" } ?? owner
+            let classification = TargetClassifier.classify(
+                bundleId: bundleId,
+                processName: owner,
+                windowTitle: title
+            )
             return TargetRecord(
                 targetId: targetId(windowId: windowId),
                 displayName: displayName,
@@ -340,7 +374,8 @@ public actor MacComputerUseHost {
                 stableIdentity: "macos:\(applicationId):\(teamId)",
                 processId: processId,
                 windowId: windowId,
-                bounds: bounds
+                bounds: bounds,
+                classification: classification
             )
         }
     }
@@ -447,6 +482,7 @@ public actor MacComputerUseHost {
     }
 
     private func observe(targetId requestedTargetId: String) async throws -> JSONValue {
+        if screenIsLocked() { throw HostFailure.lockStateChanged }
         let target = try requireTarget(requestedTargetId)
         let observationId = UUID().uuidString.lowercased()
         let screenshot = try await capture(target)
@@ -472,7 +508,7 @@ public actor MacComputerUseHost {
 
     private func requireActive(_ leaseId: String) throws {
         if cancellations.contains(leaseId) { throw HostFailure.interrupted }
-        if screenIsLocked() { throw HostFailure.interrupted }
+        if screenIsLocked() { throw HostFailure.lockStateChanged }
     }
 
     private func targetPoint(_ action: [String: JSONValue], target: TargetRecord) throws -> CGPoint {

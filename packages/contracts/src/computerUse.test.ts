@@ -15,6 +15,7 @@ import {
   ComputerUseHostResponse,
   ComputerUseHostStreamEvent,
   ComputerUseObservation,
+  ComputerUseTarget,
 } from "./computerUse.ts";
 
 const decodeBatch = Schema.decodeUnknownSync(ComputerUseActionBatch);
@@ -22,6 +23,7 @@ const decodeHostRequest = Schema.decodeUnknownSync(ComputerUseHostRequest);
 const decodeHostResponse = Schema.decodeUnknownSync(ComputerUseHostResponse);
 const decodeHostStreamEvent = Schema.decodeUnknownSync(ComputerUseHostStreamEvent);
 const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
+const decodeTarget = Schema.decodeUnknownSync(ComputerUseTarget);
 const decodeHistoryEntry = Schema.decodeUnknownSync(ComputerUseHistoryEntry);
 const decodeHistory = Schema.decodeUnknownSync(ComputerUseHistoryEntryList);
 const decodeHistoryInput = Schema.decodeUnknownSync(ComputerUseHistoryInput);
@@ -54,6 +56,31 @@ const allActions = [
 ] as const;
 
 describe("Computer Use contracts", () => {
+  it("advertises a structured Office document route without hiding its target identity", () => {
+    expect(
+      decodeTarget({
+        targetId: "target-excel-book-1",
+        kind: "office-document",
+        displayName: "Microsoft Excel — Book1",
+        applicationId: "com.microsoft.Excel",
+        stableIdentity: "macos:com.microsoft.Excel:team:UBF8T346G9",
+        integration: {
+          _tag: "office-accessibility",
+          application: "excel",
+          documentName: "Book1",
+          supportedOperations: ["observe", "act"],
+        },
+      }),
+    ).toMatchObject({
+      kind: "office-document",
+      integration: {
+        _tag: "office-accessibility",
+        application: "excel",
+        supportedOperations: ["observe", "act"],
+      },
+    });
+  });
+
   it("decodes the complete bounded action vocabulary", () => {
     expect(decodeBatch({ actions: allActions })).toEqual({ actions: allActions });
   });

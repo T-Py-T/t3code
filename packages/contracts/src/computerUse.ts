@@ -37,12 +37,40 @@ export const ComputerUseTargetKind = Schema.Literals([
 ]);
 export type ComputerUseTargetKind = typeof ComputerUseTargetKind.Type;
 
+export const ComputerUseTargetOperation = Schema.Literals(["observe", "act"]);
+export type ComputerUseTargetOperation = typeof ComputerUseTargetOperation.Type;
+
+export const ComputerUseOfficeApplication = Schema.Literals(["excel", "powerpoint"]);
+export type ComputerUseOfficeApplication = typeof ComputerUseOfficeApplication.Type;
+
+const ComputerUseTargetSupportedOperations = Schema.Array(ComputerUseTargetOperation).check(
+  Schema.isLengthBetween(1, 2),
+);
+
+export const ComputerUseTargetIntegration = Schema.Union([
+  Schema.TaggedStruct("native-accessibility", {
+    supportedOperations: ComputerUseTargetSupportedOperations,
+  }),
+  Schema.TaggedStruct("office-accessibility", {
+    application: ComputerUseOfficeApplication,
+    documentName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
+    supportedOperations: ComputerUseTargetSupportedOperations,
+  }),
+  Schema.TaggedStruct("office-add-in", {
+    application: ComputerUseOfficeApplication,
+    documentName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
+    supportedOperations: ComputerUseTargetSupportedOperations,
+  }),
+]);
+export type ComputerUseTargetIntegration = typeof ComputerUseTargetIntegration.Type;
+
 export const ComputerUseTarget = Schema.Struct({
   targetId: ComputerUseTargetId,
   kind: ComputerUseTargetKind,
   displayName: TrimmedNonEmptyString,
   applicationId: TrimmedNonEmptyString,
   stableIdentity: TrimmedNonEmptyString,
+  integration: Schema.optional(ComputerUseTargetIntegration),
 });
 export type ComputerUseTarget = typeof ComputerUseTarget.Type;
 

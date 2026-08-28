@@ -1,4 +1,5 @@
 import * as Haptics from "expo-haptics";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
 import { LayoutAnimation, Pressable, ScrollView, View } from "react-native";
 
@@ -8,6 +9,8 @@ import { cn } from "../../lib/cn";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import Animated, { FadeIn } from "react-native-reanimated";
 
 const WORK_LOG_LAYOUT_ANIMATION = {
@@ -95,6 +98,7 @@ export function visibleWorkLogActivities(
 // the scaled text-2xs line height. Values mirror the classNames below — keep
 // them in sync; a mismatch only costs a one-time correction on measure.
 const WORK_ROW_HEIGHT = 32; // min-h-8
+const COMPUTER_USE_ROW_HEIGHT = 132; // min-h-[132px]
 const WORK_ROW_GAP = 1; // gap-px
 const WORK_LOG_HEADER_PADDING = 2; // pb-0.5 under the "work log" label
 const WORK_LOG_BOTTOM_MARGIN = 4; // mb-1
@@ -109,19 +113,141 @@ export function collapsedWorkLogHeight(
   if (rows.length === 0) {
     return 0;
   }
-  const onlyToolRows = rows.every((row) => row.toolLike);
+  const showsHeader = rows.some((row) => !row.toolLike && !row.computerUse);
   const headerHeight =
     scaledTypographyLineHeight(MOBILE_TYPOGRAPHY.caption, baseFontSize) + WORK_LOG_HEADER_PADDING;
   return (
     WORK_LOG_BOTTOM_MARGIN +
-    (onlyToolRows ? 0 : headerHeight) +
-    rows.length * WORK_ROW_HEIGHT +
+    (showsHeader ? headerHeight : 0) +
+    rows.reduce(
+      (height, row) => height + (row.computerUse ? COMPUTER_USE_ROW_HEIGHT : WORK_ROW_HEIGHT),
+      0,
+    ) +
     (rows.length - 1) * WORK_ROW_GAP
+  );
+}
+
+function ComputerUseActionButton(props: {
+  readonly label: string;
+  readonly destructive?: boolean;
+  readonly onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={props.label}
+      className={cn(
+        "min-h-9 items-center justify-center rounded-lg border px-3 active:opacity-60",
+        props.destructive ? "border-rose-500/40" : "border-border bg-subtle",
+      )}
+      onPress={props.onPress}
+    >
+      <Text
+        className={cn(
+          "text-xs font-t3-medium",
+          props.destructive ? "text-rose-600 dark:text-rose-400" : "text-foreground",
+        )}
+      >
+        {props.label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function ComputerUseWorkRow(props: {
+  readonly activity: ThreadFeedActivity;
+  readonly environmentId: EnvironmentId;
+}) {
+  const iconColor = useThemeColor("--color-foreground-muted");
+  const pauseComputerUse = useAtomCommand(serverEnvironment.pauseComputerUse, "pause Computer Use");
+  const stopComputerUse = useAtomCommand(serverEnvironment.stopComputerUse, "stop Computer Use");
+  const takeOverComputerUse = useAtomCommand(
+    serverEnvironment.takeOverComputerUse,
+    "take over Computer Use",
+  );
+  const resumeComputerUse = useAtomCommand(
+    serverEnvironment.resumeComputerUse,
+    "resume Computer Use",
+  );
+  const state = props.activity.computerUse;
+  if (!state) return null;
+  const active =
+    state.state === "requested" ||
+    state.state === "waiting-approval" ||
+    state.state === "observing" ||
+    state.state === "acting";
+  const resumeRequired =
+    state.state === "paused" || state.state === "stopped" || state.state === "taken-over";
+  const stateLabel = state.state.replaceAll("-", " ");
+
+  return (
+    <View
+      className="min-h-[132px] rounded-xl border border-border bg-card px-3 py-2.5"
+      accessibilityLabel={`Computer Use ${stateLabel}`}
+    >
+      <View className="flex-row items-center gap-2">
+        <View className="h-7 w-7 items-center justify-center rounded-lg bg-subtle">
+          <SymbolView
+            name={
+              state.operation === "observe"
+                ? { ios: "eye", android: "visibility" }
+                : { ios: "square.and.pencil", android: "edit" }
+            }
+            size={14}
+            tintColor={iconColor}
+            type="monochrome"
+          />
+        </View>
+        <Text className="font-t3-medium text-sm text-foreground">Computer Use</Text>
+        <View className="rounded-full border border-border px-2 py-0.5">
+          <Text className="text-3xs font-t3-bold uppercase text-foreground-muted">
+            {stateLabel}
+          </Text>
+        </View>
+      </View>
+      <Text className="mt-1.5 text-sm text-foreground" numberOfLines={1}>
+        {props.activity.summary}
+      </Text>
+      <Text className="mt-0.5 text-xs text-foreground-muted" numberOfLines={1}>
+        {[state.target?.displayName, state.providerInstanceId, state.risk?.replaceAll("-", " ")]
+          .filter(Boolean)
+          .join(" · ")}
+      </Text>
+      {active ? (
+        <View className="mt-2 flex-row justify-end gap-2 border-t border-border pt-2">
+          <ComputerUseActionButton
+            label="Pause"
+            onPress={() => void pauseComputerUse({ environmentId: props.environmentId, input: {} })}
+          />
+          <ComputerUseActionButton
+            label="Stop"
+            destructive
+            onPress={() => void stopComputerUse({ environmentId: props.environmentId, input: {} })}
+          />
+          <ComputerUseActionButton
+            label="Take over"
+            onPress={() =>
+              void takeOverComputerUse({ environmentId: props.environmentId, input: {} })
+            }
+          />
+        </View>
+      ) : resumeRequired ? (
+        <View className="mt-2 flex-row justify-end border-t border-border pt-2">
+          <ComputerUseActionButton
+            label="Allow a new action"
+            onPress={() =>
+              void resumeComputerUse({ environmentId: props.environmentId, input: {} })
+            }
+          />
+        </View>
+      ) : null}
+    </View>
   );
 }
 
 export function ThreadWorkLog(props: {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
+  readonly environmentId: EnvironmentId;
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly iconSubtleColor: import("react-native").ColorValue;
@@ -138,11 +264,11 @@ export function ThreadWorkLog(props: {
     return null;
   }
 
-  const onlyToolRows = rows.every((row) => row.toolLike);
+  const showsHeader = rows.some((row) => !row.toolLike && !row.computerUse);
 
   return (
     <View className="-mx-1 mb-1 px-1 py-0">
-      {!onlyToolRows ? (
+      {showsHeader ? (
         <Text className="px-0.5 pb-0.5 font-t3-medium text-2xs text-foreground-muted opacity-60">
           work log
         </Text>
@@ -150,6 +276,11 @@ export function ThreadWorkLog(props: {
 
       <View className="gap-px">
         {rows.map((row) => {
+          if (row.computerUse) {
+            return (
+              <ComputerUseWorkRow key={row.id} activity={row} environmentId={props.environmentId} />
+            );
+          }
           const expanded = props.expandedRows[row.id] ?? false;
           const canExpand = row.canExpand;
           const fullDetail = expanded ? row.getFullDetail() : null;

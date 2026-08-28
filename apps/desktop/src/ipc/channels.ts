@@ -83,3 +83,17 @@ export const PREVIEW_RECORDING_SAVE_CHANNEL = "desktop:preview-recording-save";
 export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame";
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
+export const EXTERNAL_BROWSER_STATUS_CHANNEL = "desktop:external-browser-status";
+export const EXTERNAL_BROWSER_OPEN_CHANNEL = "desktop:external-browser-open";
+export const EXTERNAL_BROWSER_CLOSE_CHANNEL = "desktop:external-browser-close";
+export const EXTERNAL_BROWSER_NAVIGATE_CHANNEL = "desktop:external-browser-navigate";
+export const EXTERNAL_BROWSER_RESIZE_CHANNEL = "desktop:external-browser-resize";
+export const EXTERNAL_BROWSER_SET_COLOR_SCHEME_CHANNEL =
+  "desktop:external-browser-set-color-scheme";
+export const EXTERNAL_BROWSER_SNAPSHOT_CHANNEL = "desktop:external-browser-snapshot";
+export const EXTERNAL_BROWSER_CLICK_CHANNEL = "desktop:external-browser-click";
+export const EXTERNAL_BROWSER_TYPE_CHANNEL = "desktop:external-browser-type";
+export const EXTERNAL_BROWSER_PRESS_CHANNEL = "desktop:external-browser-press";
+export const EXTERNAL_BROWSER_SCROLL_CHANNEL = "desktop:external-browser-scroll";
+export const EXTERNAL_BROWSER_EVALUATE_CHANNEL = "desktop:external-browser-evaluate";
+export const EXTERNAL_BROWSER_WAIT_FOR_CHANNEL = "desktop:external-browser-wait-for";

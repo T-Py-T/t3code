@@ -18,10 +18,12 @@ import {
   PREVIEW_VIEWPORT_MIN_DIMENSION,
   PREVIEW_ZOOM_LEVELS,
   type PreviewAppearancePreference,
+  type PreviewAutomationStatus,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
 import {
+  Globe2Icon,
   HistoryIcon,
   InfoIcon,
   PauseIcon,
@@ -32,7 +34,7 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
 import { isElectron } from "../../env";
@@ -407,6 +409,121 @@ function AgentBrowserAccessSetting() {
   );
 }
 
+function ExternalBrowserAccessSetting() {
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const [status, setStatus] = useState<PreviewAutomationStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const bridge = typeof window === "undefined" ? undefined : window.desktopBridge?.externalBrowser;
+
+  const refresh = useCallback(async () => {
+    if (!bridge) return;
+    try {
+      setStatus(await bridge.status());
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not read browser status.");
+    }
+  }, [bridge]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const openBrowser = async () => {
+    if (!bridge) return;
+    setPending(true);
+    try {
+      setStatus(
+        await bridge.open({
+          browser: "external",
+          open: true,
+          reuseExistingTab: true,
+        }),
+      );
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not open the browser.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!bridge) return;
+    setPending(true);
+    try {
+      await bridge.close();
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not disconnect the browser.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const statusText = !bridge
+    ? "Available in the desktop app."
+    : error
+      ? error
+      : status?.connectionState === "connected"
+        ? `${status.profileName ?? "T3 Code browser"} is open and ready.`
+        : status && !status.available
+          ? "Install Chrome, Edge, Brave, or Chromium to use this feature."
+          : settings.enableExternalBrowserAccess
+            ? "Access enabled. Open the browser and sign in to the sites you want T3 Code to use."
+            : "Off by default. This permission is separate from the in-app preview browser.";
+
+  return (
+    <SettingsRow
+      {...searchableSetting("external-browser-access")}
+      description="Let agents use a dedicated, persistent T3 Code browser profile for signed-in websites. It never attaches to your everyday Chrome profile, and disabling access closes the controlled browser."
+      status={statusText}
+      resetAction={
+        settings.enableExternalBrowserAccess !==
+        DEFAULT_UNIFIED_SETTINGS.enableExternalBrowserAccess ? (
+          <SettingResetButton
+            label="signed-in browser access"
+            onClick={() => {
+              updateSettings({
+                enableExternalBrowserAccess: DEFAULT_UNIFIED_SETTINGS.enableExternalBrowserAccess,
+              });
+              void disconnect();
+            }}
+          />
+        ) : null
+      }
+      control={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {settings.enableExternalBrowserAccess && bridge ? (
+            status?.connectionState === "connected" ? (
+              <Button size="sm" variant="outline" disabled={pending} onClick={disconnect}>
+                Disconnect
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" disabled={pending} onClick={openBrowser}>
+                <Globe2Icon className="size-3" />
+                Open browser
+              </Button>
+            )
+          ) : null}
+          <Switch
+            disabled={!bridge}
+            checked={settings.enableExternalBrowserAccess}
+            onCheckedChange={(checked) => {
+              const enabled = Boolean(checked);
+              updateSettings({ enableExternalBrowserAccess: enabled });
+              if (!enabled) void disconnect();
+            }}
+            aria-label="Allow signed-in external browser access"
+          />
+        </div>
+      }
+    />
+  );
+}
+
 function AgentComputerUseSetting() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
@@ -724,6 +841,7 @@ export function IntegrationsSettingsPanel() {
         {/* Server-authoritative, so it stays editable on every client and sits
             outside the block covering the desktop-only defaults. */}
         <AgentBrowserAccessSetting />
+        <ExternalBrowserAccessSetting />
         {previewDefaultsDisabled ? (
           <DesktopOnlyBrowserDefaults>{previewDefaults}</DesktopOnlyBrowserDefaults>
         ) : (

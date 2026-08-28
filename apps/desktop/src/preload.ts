@@ -27,6 +27,9 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
   return result as Awaited<ReturnType<DesktopBridge["ensureSshEnvironment"]>>;
 }
 
+const externalBrowserTabPayload = (tabId: string | null | undefined) =>
+  tabId === undefined ? {} : { tabId };
+
 contextBridge.exposeInMainWorld("desktopBridge", {
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
@@ -163,6 +166,69 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
+  },
+  externalBrowser: {
+    status: (tabId) =>
+      ipcRenderer.invoke(
+        IpcChannels.EXTERNAL_BROWSER_STATUS_CHANNEL,
+        externalBrowserTabPayload(tabId),
+      ),
+    open: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_OPEN_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    close: () => ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_CLOSE_CHANNEL),
+    navigate: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_NAVIGATE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    resize: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_RESIZE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    setColorScheme: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_SET_COLOR_SCHEME_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    snapshot: (tabId) =>
+      ipcRenderer.invoke(
+        IpcChannels.EXTERNAL_BROWSER_SNAPSHOT_CHANNEL,
+        externalBrowserTabPayload(tabId),
+      ),
+    click: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_CLICK_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    type: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_TYPE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    press: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_PRESS_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    scroll: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_SCROLL_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    evaluate: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_EVALUATE_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
+    waitFor: (input, tabId) =>
+      ipcRenderer.invoke(IpcChannels.EXTERNAL_BROWSER_WAIT_FOR_CHANNEL, {
+        input,
+        ...externalBrowserTabPayload(tabId),
+      }),
   },
   preview: {
     createTab: (tabId, defaults) =>

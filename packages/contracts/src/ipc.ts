@@ -67,9 +67,15 @@ import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationHost,
   PreviewAutomationHostFocus,
+  PreviewAutomationNavigateInput,
+  PreviewAutomationOpenInput,
   PreviewAutomationPressInput,
+  PreviewAutomationResizeInput,
+  PreviewAutomationResizeResult,
   PreviewAutomationResponse,
   PreviewAutomationScrollInput,
+  PreviewAutomationSetColorSchemeInput,
+  PreviewAutomationSetColorSchemeResult,
   PreviewAutomationSnapshot,
   PreviewAutomationStatus,
   PreviewAutomationStreamEvent,
@@ -1061,6 +1067,62 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
+const DesktopExternalBrowserOptionalTabSchema = Schema.Struct({
+  tabId: Schema.optionalKey(Schema.NullOr(DesktopPreviewTabIdSchema)),
+});
+
+export const DesktopExternalBrowserStatusInputSchema = DesktopExternalBrowserOptionalTabSchema;
+
+export const DesktopExternalBrowserOpenInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationOpenInput,
+});
+
+export const DesktopExternalBrowserNavigateInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationNavigateInput,
+});
+
+export const DesktopExternalBrowserResizeInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationResizeInput,
+});
+
+export const DesktopExternalBrowserSetColorSchemeInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationSetColorSchemeInput,
+});
+
+export const DesktopExternalBrowserClickInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationClickInput,
+});
+
+export const DesktopExternalBrowserTypeInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationTypeInput,
+});
+
+export const DesktopExternalBrowserPressInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationPressInput,
+});
+
+export const DesktopExternalBrowserScrollInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationScrollInput,
+});
+
+export const DesktopExternalBrowserEvaluateInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationEvaluateInput,
+});
+
+export const DesktopExternalBrowserWaitForInputSchema = Schema.Struct({
+  ...DesktopExternalBrowserOptionalTabSchema.fields,
+  input: PreviewAutomationWaitForInput,
+});
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   /**
@@ -1150,6 +1212,36 @@ export interface DesktopBridge {
    * Electron desktop build; web builds have `preview === undefined`.
    */
   preview?: DesktopPreviewBridge;
+  /** Dedicated persistent browser profile used for explicitly enabled signed-in automation. */
+  externalBrowser?: DesktopExternalBrowserBridge;
+}
+
+export interface DesktopExternalBrowserBridge {
+  status: (tabId?: string | null) => Promise<PreviewAutomationStatus>;
+  open: (
+    input: PreviewAutomationOpenInput,
+    tabId?: string | null,
+  ) => Promise<PreviewAutomationStatus>;
+  close: () => Promise<void>;
+  navigate: (
+    input: PreviewAutomationNavigateInput,
+    tabId?: string | null,
+  ) => Promise<PreviewAutomationStatus>;
+  resize: (
+    input: PreviewAutomationResizeInput,
+    tabId?: string | null,
+  ) => Promise<PreviewAutomationResizeResult>;
+  setColorScheme: (
+    input: PreviewAutomationSetColorSchemeInput,
+    tabId?: string | null,
+  ) => Promise<PreviewAutomationSetColorSchemeResult>;
+  snapshot: (tabId?: string | null) => Promise<PreviewAutomationSnapshot>;
+  click: (input: PreviewAutomationClickInput, tabId?: string | null) => Promise<void>;
+  type: (input: PreviewAutomationTypeInput, tabId?: string | null) => Promise<void>;
+  press: (input: PreviewAutomationPressInput, tabId?: string | null) => Promise<void>;
+  scroll: (input: PreviewAutomationScrollInput, tabId?: string | null) => Promise<void>;
+  evaluate: (input: PreviewAutomationEvaluateInput, tabId?: string | null) => Promise<unknown>;
+  waitFor: (input: PreviewAutomationWaitForInput, tabId?: string | null) => Promise<void>;
 }
 
 export interface DesktopPreviewBridge {

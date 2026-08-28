@@ -31,6 +31,21 @@ describe("Computer Use settings", () => {
   });
 });
 
+describe("External browser settings", () => {
+  it("defaults signed-in external browser access off until the user enables it", () => {
+    expect(decodeServerSettings({}).enableExternalBrowserAccess).toBe(false);
+  });
+
+  it("accepts an explicit external browser toggle in settings and patches", () => {
+    expect(
+      decodeServerSettings({ enableExternalBrowserAccess: true }).enableExternalBrowserAccess,
+    ).toBe(true);
+    expect(
+      decodeServerSettingsPatch({ enableExternalBrowserAccess: true }).enableExternalBrowserAccess,
+    ).toBe(true);
+  });
+});
+
 describe("ClaudeSettings auto-compaction", () => {
   it("uses Claude's default threshold when no override is configured", () => {
     expect(decodeClaudeSettings({}).autoCompactWindow).toBe("");

@@ -47,6 +47,10 @@ it("exports provider-compatible object schemas with described parameters", () =>
       schema.properties?.tabId,
       `${tool.name} must allow an explicit collaborative browser tab target`,
     ).toBeDefined();
+    expect(
+      schema.properties?.browser,
+      `${tool.name} must expose built-in and dedicated external browser routing`,
+    ).toBeDefined();
     for (const [field, fieldSchema] of Object.entries(schema.properties ?? {})) {
       expect(
         schemaHasDescription(fieldSchema),

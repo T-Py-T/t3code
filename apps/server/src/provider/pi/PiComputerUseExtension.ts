@@ -21,10 +21,11 @@ const emptyObject = { type: "object", additionalProperties: false, properties: {
 const targetId = { type: "string", minLength: 1, description: "Exact targetId from computer_list_targets." };
 const observationId = { type: "string", minLength: 1, description: "Exact observationId from computer_observe or the preceding computer_act result." };
 const tabId = { type: "string", minLength: 1, maxLength: 128, description: "Exact collaborative browser tab ID. Omit to use this agent session's current tab." };
+const browser = { enum: ["built-in", "external"], description: "Browser surface. Defaults to built-in; external uses the explicitly enabled persistent T3 Code profile for signed-in sites." };
 const timeoutMs = { type: "integer", minimum: 1, maximum: 60000, description: "Maximum wait in milliseconds." };
 const locator = { type: "string", minLength: 1, description: "Prefer a semantic Playwright locator such as role=button[name='Send']." };
 const selector = { type: "string", minLength: 1, description: "Legacy CSS selector. Prefer locator." };
-const browserTabProperties = { tabId };
+const browserTabProperties = { browser, tabId };
 const browserTargetProperties = { ...browserTabProperties, locator, selector };
 const objectParameters = (properties, required = []) => ({
   type: "object",
@@ -279,7 +280,7 @@ export default function t3ComputerUseExtension(pi) {
       pi.registerTool({
         ...toolDefinition,
         promptSnippet: capability === "preview"
-          ? "Use " + toolDefinition.name + " for user-authorized semantic browser interaction through T3 Code. Prefer this route over native coordinates for web pages."
+          ? "Use " + toolDefinition.name + " for user-authorized semantic browser interaction through T3 Code. Prefer this route over native coordinates for web pages. Pass browser='external' only when a signed-in site is required and the user enabled the dedicated T3 browser profile."
           : "Use " + toolDefinition.name + " only for user-authorized native computer interaction through T3 Code.",
         executionMode: "sequential",
         async execute(_toolCallId, args, signal, _onUpdate, ctx) {

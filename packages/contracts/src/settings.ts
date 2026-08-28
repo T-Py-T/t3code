@@ -748,6 +748,14 @@ export const ServerSettings = Schema.Struct({
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
+   * Whether agents may open and control T3 Code's dedicated persistent
+   * external browser profile. Kept separate from the built-in preview gate
+   * because this surface can retain signed-in sessions across app launches.
+   */
+  enableExternalBrowserAccess: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  /**
    * Whether provider sessions may receive governed access to the host
    * computer. Off by default because this capability can operate applications
    * outside T3 Code; enabling it only exposes tools and never bypasses policy
@@ -989,6 +997,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  enableExternalBrowserAccess: Schema.optionalKey(Schema.Boolean),
   enableComputerUse: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({

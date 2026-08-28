@@ -48,7 +48,26 @@ export const PREVIEW_AUTOMATION_OPERATIONS = [
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
 
+export const PreviewAutomationBrowser = Schema.Literals(["built-in", "external"]);
+export type PreviewAutomationBrowser = typeof PreviewAutomationBrowser.Type;
+
+export const PreviewAutomationConnectionState = Schema.Literals([
+  "unavailable",
+  "disconnected",
+  "connected",
+]);
+export type PreviewAutomationConnectionState = typeof PreviewAutomationConnectionState.Type;
+
 const PreviewAutomationTabTargetFields = {
+  browser: Schema.optional(
+    PreviewAutomationBrowser.annotate({
+      description:
+        "Browser surface to control. Defaults to built-in. Use external for T3 Code's dedicated signed-in browser profile.",
+    }),
+  ).annotate({
+    description:
+      "Browser surface to control. Defaults to built-in. Use external for T3 Code's dedicated signed-in browser profile.",
+  }),
   tabId: Schema.optional(
     PreviewTabId.annotate({
       description:
@@ -66,6 +85,9 @@ export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetI
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
   visible: Schema.Boolean,
+  browser: Schema.optional(PreviewAutomationBrowser),
+  connectionState: Schema.optional(PreviewAutomationConnectionState),
+  profileName: Schema.optional(Schema.String),
   tabId: Schema.NullOr(PreviewTabId),
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),

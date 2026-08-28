@@ -226,6 +226,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "browser",
   },
   {
+    id: "external-browser-access",
+    title: "Signed-in browser access",
+    to: "/settings/integrations",
+    targetId: "browser",
+    desktopOnly: true,
+  },
+  {
     id: "browser-default-viewport",
     title: "Default browser viewport",
     to: "/settings/integrations",

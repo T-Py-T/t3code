@@ -46,6 +46,7 @@ import { useEnvironments } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useEnvironmentSettings } from "~/hooks/useSettings";
 
 import { previewBridge } from "./previewBridge";
 import {
@@ -73,6 +74,10 @@ import {
 } from "./previewAutomationTarget";
 import { isPreviewViewportReady } from "./previewViewportReadiness";
 import { shouldRollbackPreviewViewport } from "./previewViewportRollback";
+import {
+  isExternalBrowserAutomationRequest,
+  routeExternalBrowserAutomationRequest,
+} from "./externalBrowserAutomation";
 
 const PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS = 500;
 
@@ -266,6 +271,10 @@ export function PreviewAutomationHosts() {
 
 function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId }) {
   const { environmentId } = props;
+  const enableExternalBrowserAccess = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.enableExternalBrowserAccess,
+  );
   const registry = useContext(RegistryContext);
   const [automationClientId] = useState(createPreviewAutomationClientId);
   const initialAutomationHost = useMemo<PreviewAutomationHostState>(
@@ -308,6 +317,22 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
       };
       let tabId = request.tabId ?? null;
       try {
+        if (isExternalBrowserAutomationRequest(request)) {
+          return await routeExternalBrowserAutomationRequest({
+            bridge: window.desktopBridge?.externalBrowser,
+            enabled: enableExternalBrowserAccess,
+            environmentId,
+            request,
+            resolveNavigation: (navigateInput) =>
+              resolveBrowserNavigationTarget(
+                environmentId,
+                navigateInput.target ?? {
+                  kind: "url",
+                  url: navigateInput.url!,
+                },
+              ).resolvedUrl,
+          });
+        }
         let state = readThreadPreviewState(threadRef);
         const needsSessionSync = needsPreviewAutomationSessionSync(state, request.tabId);
         if (needsSessionSync) {
@@ -680,7 +705,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
         });
       }
     },
-    [environmentId, listPreviews, open, registry, resize],
+    [enableExternalBrowserAccess, environmentId, listPreviews, open, registry, resize],
   );
   const [requestHandlerAtom] = useState(() => Atom.make({ handle: handleRequest }));
   const setRequestHandler = useAtomSet(requestHandlerAtom);

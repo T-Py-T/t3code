@@ -57,6 +57,7 @@ import {
   stageResourceMonitor,
   stageMacComputerUseHelper,
   stageWindowsComputerUseHelper,
+  shouldRunPackagedServerSelfCheck,
   STAGE_INSTALL_ARGS,
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
@@ -1065,7 +1066,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
-        }).pipe(Effect.flip);
+        }).pipe(Effect.provideService(HostProcessPlatform, "win32"), Effect.flip);
 
         assert.instanceOf(error, BundleNotSelfContainedError);
         assert.include(error.output, "t3code-deliberately-missing-package");
@@ -1455,6 +1456,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+  });
+  it("runs the executable sidecar self-check only on the target operating system", () => {
+    assert.equal(shouldRunPackagedServerSelfCheck("win32", "win"), true);
+    assert.equal(shouldRunPackagedServerSelfCheck("darwin", "win"), false);
+    assert.equal(shouldRunPackagedServerSelfCheck("linux", "win"), false);
   });
   it("stages the macOS Computer Use helper as an external executable resource", () => {
     assert.deepStrictEqual(MAC_COMPUTER_USE_EXTRA_RESOURCES, [

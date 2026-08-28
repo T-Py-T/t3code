@@ -1709,6 +1709,18 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
   },
 );
 
+/**
+ * The extracted sidecar can only execute against native dependencies for the
+ * host OS. Cross-builds still receive the structural/native payload checks and
+ * must execute this check later on the target platform acceptance runner.
+ */
+export function shouldRunPackagedServerSelfCheck(
+  hostPlatform: NodeJS.Platform,
+  targetPlatform: typeof BuildPlatform.Type,
+): boolean {
+  return detectHostBuildPlatform(hostPlatform) === targetPlatform;
+}
+
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -2760,6 +2772,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const hostPlatform = yield* HostProcessPlatform;
   const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
@@ -2907,10 +2920,16 @@ export const validateWindowsPackagedPayload = Effect.fn(
     verbose: input.verbose ?? false,
   });
 
-  yield* verifyPackagedBundleIsSelfContained({
-    asarPath,
-    verbose: input.verbose ?? false,
-  });
+  if (shouldRunPackagedServerSelfCheck(hostPlatform, "win")) {
+    yield* verifyPackagedBundleIsSelfContained({
+      asarPath,
+      verbose: input.verbose ?? false,
+    });
+  } else {
+    yield* Effect.logWarning(
+      `[desktop-artifact] Deferred the executable server sidecar self-check to the Windows acceptance run because the package was built on ${hostPlatform}.`,
+    );
+  }
 
   yield* Effect.log(
     `[desktop-artifact] Validated Windows payload (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives).`,

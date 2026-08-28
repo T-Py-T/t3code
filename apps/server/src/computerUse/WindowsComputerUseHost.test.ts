@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   parseWindowsAuthenticodeIdentity,
+  windowsAuthenticodeProbeInput,
   windowsComputerUseHelperPathCandidates,
 } from "./WindowsComputerUseHost.ts";
 
@@ -92,5 +93,29 @@ describe("parseWindowsAuthenticodeIdentity", () => {
         JSON.stringify({ Status: "Valid", Subject: "CN=T3 Code", Thumbprint: "" }),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("windowsAuthenticodeProbeInput", () => {
+  it("passes the helper path outside the PowerShell command text", () => {
+    const helperPath = "C:\\Program Files\\T3 Code\\T3CodeComputerUse.exe";
+
+    expect(windowsAuthenticodeProbeInput(helperPath)).toEqual({
+      command: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        [
+          "$signature = Get-AuthenticodeSignature -LiteralPath $env:T3CODE_COMPUTER_USE_HELPER_PATH",
+          "$certificate = $signature.SignerCertificate",
+          "[pscustomobject]@{ Status = [string]$signature.Status; Subject = $certificate.Subject; Thumbprint = $certificate.Thumbprint } | ConvertTo-Json -Compress",
+        ].join("; "),
+      ],
+      env: { T3CODE_COMPUTER_USE_HELPER_PATH: helperPath },
+      timeout: "10 seconds",
+      maxOutputBytes: 64 * 1_024,
+    });
   });
 });

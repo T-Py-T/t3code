@@ -28,6 +28,28 @@ const decodeWindowsAuthenticodeIdentity = Schema.decodeUnknownOption(
   Schema.fromJsonString(WindowsAuthenticodeIdentity),
 );
 
+const WINDOWS_COMPUTER_USE_HELPER_PATH_ENV = "T3CODE_COMPUTER_USE_HELPER_PATH";
+
+export function windowsAuthenticodeProbeInput(path: string): ProcessRunner.ProcessRunInput {
+  return {
+    command: "powershell.exe",
+    args: [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      [
+        `$signature = Get-AuthenticodeSignature -LiteralPath $env:${WINDOWS_COMPUTER_USE_HELPER_PATH_ENV}`,
+        "$certificate = $signature.SignerCertificate",
+        "[pscustomobject]@{ Status = [string]$signature.Status; Subject = $certificate.Subject; Thumbprint = $certificate.Thumbprint } | ConvertTo-Json -Compress",
+      ].join("; "),
+    ],
+    env: { [WINDOWS_COMPUTER_USE_HELPER_PATH_ENV]: path },
+    timeout: "10 seconds",
+    maxOutputBytes: 64 * 1_024,
+  };
+}
+
 export const windowsComputerUseHelperPathCandidates = (
   config: Pick<ServerConfig.ServerConfig["Service"], "computerUseHelperPath">,
   architecture: NodeJS.Architecture,
@@ -135,34 +157,16 @@ const verifyHelper = Effect.fn("WindowsComputerUseHost.verifyHelper")(function* 
     } satisfies VerifiedLocalComputerUseHelper;
   }
 
-  const signature = yield* processRunner
-    .run({
-      command: "powershell.exe",
-      args: [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        [
-          "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]",
-          "$certificate = $signature.SignerCertificate",
-          "[pscustomobject]@{ Status = [string]$signature.Status; Subject = $certificate.Subject; Thumbprint = $certificate.Thumbprint } | ConvertTo-Json -Compress",
-        ].join("; "),
-        path,
-      ],
-      timeout: "10 seconds",
-      maxOutputBytes: 64 * 1_024,
-    })
-    .pipe(
-      Effect.mapError(
-        (cause) =>
-          new LocalComputerUseHostTransportError({
-            operation: "verify",
-            detail: "The Windows helper Authenticode identity could not be read.",
-            cause,
-          }),
-      ),
-    );
+  const signature = yield* processRunner.run(windowsAuthenticodeProbeInput(path)).pipe(
+    Effect.mapError(
+      (cause) =>
+        new LocalComputerUseHostTransportError({
+          operation: "verify",
+          detail: "The Windows helper Authenticode identity could not be read.",
+          cause,
+        }),
+    ),
+  );
   const identity = signature.code === 0 ? parseWindowsAuthenticodeIdentity(signature.stdout) : null;
   if (identity === null || identity === undefined) {
     return yield* new LocalComputerUseHostTransportError({

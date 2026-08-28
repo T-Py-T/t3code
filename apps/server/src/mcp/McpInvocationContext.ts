@@ -19,6 +19,8 @@ export interface McpInvocationScope {
   readonly providerInstanceId: ProviderInstanceId;
   readonly turnId?: TurnId;
   readonly runtimeMode?: RuntimeMode;
+  readonly workflowRunId?: string;
+  readonly workflowStageId?: string;
   readonly capabilities: ReadonlySet<McpCapability>;
   readonly issuedAt: number;
 }

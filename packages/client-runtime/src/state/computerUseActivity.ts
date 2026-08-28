@@ -2,6 +2,9 @@ import {
   ComputerUseActionRisk,
   ComputerUseHistoryOperation,
   ComputerUseHistoryState,
+  type ComputerUseHostId,
+  type ComputerUseObservationId,
+  type ComputerUseScreenshotRevealToken,
   type ComputerUseActionRisk as ComputerUseActionRiskValue,
   type ComputerUseHistoryOperation as ComputerUseHistoryOperationValue,
   type ComputerUseHistoryState as ComputerUseHistoryStateValue,
@@ -22,6 +25,11 @@ export interface ComputerUseActivityState {
   };
   readonly risk?: ComputerUseActionRiskValue;
   readonly providerInstanceId?: string;
+  readonly hostId?: ComputerUseHostId;
+  readonly workflowRunId?: string;
+  readonly workflowStageId?: string;
+  readonly observationId?: ComputerUseObservationId;
+  readonly screenshotRevealToken?: ComputerUseScreenshotRevealToken;
   readonly resultTag?: string;
 }
 
@@ -54,6 +62,17 @@ export function decodeComputerUseActivity(
     ...(isActionRisk(payload.risk) ? { risk: payload.risk } : {}),
     ...(typeof payload.providerInstanceId === "string"
       ? { providerInstanceId: payload.providerInstanceId }
+      : {}),
+    ...(typeof payload.hostId === "string" ? { hostId: payload.hostId as ComputerUseHostId } : {}),
+    ...(typeof payload.workflowRunId === "string" ? { workflowRunId: payload.workflowRunId } : {}),
+    ...(typeof payload.workflowStageId === "string"
+      ? { workflowStageId: payload.workflowStageId }
+      : {}),
+    ...(typeof payload.observationId === "string"
+      ? { observationId: payload.observationId as ComputerUseObservationId }
+      : {}),
+    ...(typeof payload.screenshotRevealToken === "string"
+      ? { screenshotRevealToken: payload.screenshotRevealToken as ComputerUseScreenshotRevealToken }
       : {}),
     ...(typeof payload.resultTag === "string" ? { resultTag: payload.resultTag } : {}),
   };

@@ -213,6 +213,8 @@ import {
   ComputerUseRevokePersistentGrantInput,
   ComputerUseRevokePersistentGrantResult,
   ComputerUseResumeResult,
+  ComputerUseRevealScreenshotInput,
+  ComputerUseRevealScreenshotResult,
   ComputerUseStopResult,
 } from "./computerUse.ts";
 
@@ -305,6 +307,7 @@ export const WS_METHODS = {
   // Computer Use controls
   computerUseGetControlState: "computerUse.getControlState",
   computerUseGetHistory: "computerUse.getHistory",
+  computerUseRevealScreenshot: "computerUse.revealScreenshot",
   computerUseClearHistory: "computerUse.clearHistory",
   computerUseRevokePersistentGrant: "computerUse.revokePersistentGrant",
   computerUseStop: "computerUse.stop",
@@ -488,6 +491,12 @@ export const WsComputerUseGetControlStateRpc = Rpc.make(WS_METHODS.computerUseGe
 export const WsComputerUseGetHistoryRpc = Rpc.make(WS_METHODS.computerUseGetHistory, {
   payload: ComputerUseHistoryInput,
   success: ComputerUseHistoryResult,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsComputerUseRevealScreenshotRpc = Rpc.make(WS_METHODS.computerUseRevealScreenshot, {
+  payload: ComputerUseRevealScreenshotInput,
+  success: ComputerUseRevealScreenshotResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -1109,6 +1118,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSignalProcessRpc,
   WsComputerUseGetControlStateRpc,
   WsComputerUseGetHistoryRpc,
+  WsComputerUseRevealScreenshotRpc,
   WsComputerUseClearHistoryRpc,
   WsComputerUseRevokePersistentGrantRpc,
   WsComputerUseStopRpc,

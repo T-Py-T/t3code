@@ -833,7 +833,7 @@ export function IntegrationsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="computer-use" title="Computer Use (experimental)">
+      <SettingsSection id="computer-use" title="Computer Use (preview)">
         <AgentComputerUseSetting />
         <ComputerUseAccessControls />
       </SettingsSection>

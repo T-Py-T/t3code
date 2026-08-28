@@ -1,6 +1,7 @@
 import {
   ProviderDriverKind,
   providerRuntimeModes,
+  type EnvironmentId,
   type ModelSelection,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
@@ -43,6 +44,9 @@ import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection } from "../../lib/providerOptions";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { useEnvironmentQuery } from "../../state/query";
 import {
   NativeHeaderToolbar,
   NativeStackScreenOptions,
@@ -283,6 +287,7 @@ type ThreadSettingsSubmenuPage =
   | { readonly kind: "runtime" };
 
 type ThreadSettingsSessionProps = {
+  readonly environmentId?: EnvironmentId;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly selectedModel: ModelSelection | null;
   readonly onSelectModel: (option: ModelOption) => void;
@@ -334,6 +339,7 @@ export function useExistingThreadSettingsRoutePresentation() {
 }
 
 type ThreadSettingsSessionValue = {
+  readonly environmentId?: EnvironmentId;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly runtimeMode: RuntimeMode;
   readonly runtimeModeChoices: typeof RUNTIME_MODE_CHOICES;
@@ -486,6 +492,7 @@ function ThreadSettingsSessionProvider(
 
   const value = useMemo<ThreadSettingsSessionValue>(
     () => ({
+      ...(props.environmentId === undefined ? {} : { environmentId: props.environmentId }),
       providerGroups: props.providerGroups,
       runtimeMode: props.runtimeMode,
       runtimeModeChoices,
@@ -519,6 +526,7 @@ function ThreadSettingsSessionProvider(
       pressModel,
       providerFilter,
       props.onUpdateRuntimeMode,
+      props.environmentId,
       props.providerGroups,
       props.runtimeMode,
       runtimeModeChoices,
@@ -754,6 +762,10 @@ function ThreadSettingsOptionsItem(props: {
         </Animated.View>
       </Animated.View>
 
+      {session.environmentId ? (
+        <ComputerUseSettingsRows environmentId={session.environmentId} />
+      ) : null}
+
       {Platform.OS !== "ios" && session.hasLegacyModels ? (
         <>
           <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
@@ -770,6 +782,125 @@ function ThreadSettingsOptionsItem(props: {
         </>
       ) : null}
     </View>
+  );
+}
+
+function ComputerUseSettingsRows(props: { readonly environmentId: EnvironmentId }) {
+  const control = useEnvironmentQuery(
+    serverEnvironment.computerUseControlState({ environmentId: props.environmentId, input: {} }),
+  );
+  const history = useEnvironmentQuery(
+    serverEnvironment.computerUseHistory({
+      environmentId: props.environmentId,
+      input: { limit: 10 },
+    }),
+  );
+  const pause = useAtomCommand(serverEnvironment.pauseComputerUse, "pause Computer Use");
+  const resume = useAtomCommand(serverEnvironment.resumeComputerUse, "resume Computer Use");
+  const stop = useAtomCommand(serverEnvironment.stopComputerUse, "stop Computer Use");
+  const clearHistory = useAtomCommand(
+    serverEnvironment.clearComputerUseHistory,
+    "clear Computer Use history",
+  );
+  const state = control.data;
+  const status = state?.paused
+    ? "Paused"
+    : state?.activeControl
+      ? `${state.activeControl.providerInstanceId} has control`
+      : state?.host
+        ? `${state.host.platform === "macos" ? "Mac" : "Windows"} host ready`
+        : control.isPending
+          ? "Checking host…"
+          : "Host disconnected";
+
+  return (
+    <>
+      <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">
+        Computer Use
+      </Text>
+      <View className="mx-4 overflow-hidden rounded-2xl bg-card px-4 py-3">
+        <Text className="text-sm font-t3-medium text-foreground">{status}</Text>
+        {control.error ? (
+          <Text className="mt-1 text-xs text-rose-600 dark:text-rose-400">{control.error}</Text>
+        ) : null}
+        <View className="mt-3 flex-row flex-wrap gap-2">
+          {state?.paused ? (
+            <ComputerUseSettingsButton
+              label="Resume"
+              onPress={() => void resume({ environmentId: props.environmentId, input: {} })}
+            />
+          ) : state?.activeControl ? (
+            <ComputerUseSettingsButton
+              label="Pause"
+              onPress={() => void pause({ environmentId: props.environmentId, input: {} })}
+            />
+          ) : null}
+          {state?.activeControl ? (
+            <ComputerUseSettingsButton
+              destructive
+              label="Stop"
+              onPress={() => void stop({ environmentId: props.environmentId, input: {} })}
+            />
+          ) : null}
+          {history.data?.entries.length ? (
+            <ComputerUseSettingsButton
+              label="Clear history"
+              onPress={() => void clearHistory({ environmentId: props.environmentId, input: {} })}
+            />
+          ) : null}
+        </View>
+      </View>
+      <View className="mx-4 mt-2 overflow-hidden rounded-2xl bg-card">
+        {history.data?.entries.slice(0, 5).map((entry, index, entries) => (
+          <View
+            key={entry.entryId}
+            className={cn(
+              "px-4 py-3",
+              index < entries.length - 1 && "border-b border-border-subtle",
+            )}
+          >
+            <Text className="text-sm text-foreground" numberOfLines={2}>
+              {entry.summary}
+            </Text>
+            <Text className="mt-0.5 text-xs text-foreground-muted" numberOfLines={1}>
+              {[entry.state.replaceAll("-", " "), entry.providerInstanceId, entry.workflowStageId]
+                .filter(Boolean)
+                .join(" · ")}
+            </Text>
+          </View>
+        ))}
+        {history.data?.entries.length === 0 ? (
+          <Text className="px-4 py-3 text-sm text-foreground-muted">No recorded activity.</Text>
+        ) : null}
+      </View>
+    </>
+  );
+}
+
+function ComputerUseSettingsButton(props: {
+  readonly label: string;
+  readonly destructive?: boolean;
+  readonly onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={props.label}
+      className={cn(
+        "rounded-lg border px-3 py-2 active:opacity-60",
+        props.destructive ? "border-rose-500/40" : "border-border bg-subtle",
+      )}
+      onPress={props.onPress}
+    >
+      <Text
+        className={cn(
+          "text-xs font-t3-medium",
+          props.destructive ? "text-rose-600 dark:text-rose-400" : "text-foreground",
+        )}
+      >
+        {props.label}
+      </Text>
+    </Pressable>
   );
 }
 

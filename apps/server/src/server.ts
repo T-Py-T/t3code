@@ -14,6 +14,7 @@ import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
 import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
 import * as ComputerUseProjection from "./computerUse/ComputerUseProjection.ts";
+import * as ComputerUseScreenshotStore from "./computerUse/ComputerUseScreenshotStore.ts";
 import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
 import * as MacOsComputerUseHost from "./computerUse/MacOsComputerUseHost.ts";
 import * as WindowsComputerUseHost from "./computerUse/WindowsComputerUseHost.ts";
@@ -154,12 +155,14 @@ const PtyAdapterLive = Layer.unwrap(
 
 const ComputerUseHistoryLive = ComputerUseHistory.layer;
 const ComputerUseControlLive = ComputerUseControl.layer;
+const ComputerUseScreenshotStoreLive = ComputerUseScreenshotStore.layer;
 const ComputerUsePolicyLive = ComputerUsePolicy.layer.pipe(Layer.provide(ComputerUseHistoryLive));
 const ComputerUseDependenciesLive = Layer.mergeAll(
   ComputerUseBroker.layer,
   ComputerUseControlLive,
   ComputerUseHistoryLive,
   ComputerUsePolicyLive,
+  ComputerUseScreenshotStoreLive,
   PreviewAutomationBroker.layer,
 );
 const ComputerUseCoreLayerLive = Layer.mergeAll(

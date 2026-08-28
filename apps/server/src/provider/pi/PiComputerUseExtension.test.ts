@@ -118,7 +118,10 @@ it("registers governed native and semantic browser tools in bare Pi and forwards
   await expect(
     tools
       .find((tool) => tool.name === "preview_status")!
-      .execute("call-browser-status", {}, new AbortController().signal),
+      .execute("call-browser-status", {}, new AbortController().signal, undefined, {
+        workflowRunId: "workflow-1",
+        workflowStageId: "stage-2",
+      }),
   ).resolves.toMatchObject({
     content: [{ type: "text", text: "host ready" }],
     details: { status: "ready" },
@@ -139,8 +142,15 @@ it("registers governed native and semantic browser tools in bare Pi and forwards
     method: "tools/call",
     params: { name: "preview_status", arguments: {} },
   });
+  expect(requests[3]?.headers.get("x-t3-workflow-run-id")).toBe("workflow-1");
+  expect(requests[3]?.headers.get("x-t3-workflow-stage-id")).toBe("stage-2");
   expect(requests[1]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
   expect(requests[2]?.headers.get("mcp-protocol-version")).toBe("2025-06-18");
+});
+
+it("loads Atomic's bundled workflow controller from Windows paths", () => {
+  expect(T3_COMPUTER_USE_PI_EXTENSION_SOURCE).toContain('bundlePath.replaceAll("\\\\", "/")');
+  expect(T3_COMPUTER_USE_PI_EXTENSION_SOURCE).toContain("import(pathToFileURL(bundlePath).href)");
 });
 
 it("registers only the semantic browser tools when native Computer Use is disabled", async () => {

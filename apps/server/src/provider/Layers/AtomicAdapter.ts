@@ -190,6 +190,7 @@ interface AtomicSessionContext {
   readonly pendingUi: Map<ApprovalRequestId, PendingUiRequest>;
   readonly workflowRuns: Map<string, AtomicWorkflowRunContext>;
   readonly workflowLifecycleSignatures: Map<string, string>;
+  readonly privateComputerUseToolCalls: Map<string, string>;
   mappedEventSequence: number;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   stopped: boolean;
@@ -240,27 +241,39 @@ function stringField(record: Readonly<Record<string, unknown>>, name: string): s
   return isString(value) ? value : undefined;
 }
 
-function omitComputerUseScreenshotBytes(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(omitComputerUseScreenshotBytes);
-  if (!isRecord(value)) return value;
-  if (value.type === "image") {
-    const { data: _data, base64: _base64, ...metadata } = value;
-    return metadata;
-  }
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (key === "base64") continue;
-    sanitized[key] = omitComputerUseScreenshotBytes(nested);
-  }
-  return sanitized;
-}
+const PRIVATE_COMPUTER_USE_TOOL_PREFIXES = ["computer_", "preview_"] as const;
+const PRIVATE_COMPUTER_USE_EVENT_TYPES = new Set([
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+]);
 
-/** Screenshot bytes belong only on the live provider transport, never in T3's event log. */
-export function sanitizePiComputerUseEvent(event: AtomicRpcEvent): AtomicRpcEvent {
+export function sanitizePiComputerUseEvent(
+  event: AtomicRpcEvent,
+  privateToolCalls: ReadonlyMap<string, string> = new Map(),
+): AtomicRpcEvent {
   const type = field(event, "type");
-  const toolName = field(event, "toolName");
-  if (!type?.startsWith("tool_execution_") || !toolName?.startsWith("computer_")) return event;
-  return omitComputerUseScreenshotBytes(event) as AtomicRpcEvent;
+  const toolCallId = field(event, "toolCallId") ?? field(event, "id");
+  const toolName =
+    field(event, "toolName") ??
+    (toolCallId === undefined ? undefined : privateToolCalls.get(toolCallId));
+  if (
+    !type ||
+    !PRIVATE_COMPUTER_USE_EVENT_TYPES.has(type) ||
+    !toolName ||
+    !PRIVATE_COMPUTER_USE_TOOL_PREFIXES.some((prefix) => toolName.startsWith(prefix))
+  ) {
+    return event;
+  }
+  const boundedToolCallId = field(event, "toolCallId")?.slice(0, 512);
+  const boundedId = field(event, "id")?.slice(0, 512);
+  return {
+    type,
+    ...(boundedToolCallId === undefined ? {} : { toolCallId: boundedToolCallId }),
+    ...(boundedId === undefined ? {} : { id: boundedId }),
+    toolName: toolName.slice(0, 512),
+    ...(isBoolean(event.isError) ? { isError: event.isError } : {}),
+  };
 }
 
 function workflowStageTaskId(runId: string, stageId: string): string {
@@ -1618,7 +1631,22 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
         type === "tool_execution_update" ||
         type === "tool_execution_end"
       ) {
-        const persistedEvent = sanitizePiComputerUseEvent(event);
+        const eventToolCallId = field(event, "toolCallId") ?? field(event, "id");
+        const eventToolName = field(event, "toolName");
+        if (
+          eventToolCallId &&
+          eventToolName &&
+          PRIVATE_COMPUTER_USE_TOOL_PREFIXES.some((prefix) => eventToolName.startsWith(prefix))
+        ) {
+          context.privateComputerUseToolCalls.set(eventToolCallId, eventToolName);
+        }
+        const persistedEvent = sanitizePiComputerUseEvent(
+          event,
+          context.privateComputerUseToolCalls,
+        );
+        if (type === "tool_execution_end" && eventToolCallId) {
+          context.privateComputerUseToolCalls.delete(eventToolCallId);
+        }
         const toolCallId =
           field(persistedEvent, "toolCallId") ?? field(persistedEvent, "id") ?? `${turnId}:tool`;
         const itemId = RuntimeItemId.make(toolCallId);
@@ -1958,6 +1986,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             pendingUi: new Map(),
             workflowRuns: new Map(),
             workflowLifecycleSignatures: new Map(),
+            privateComputerUseToolCalls: new Map(),
             mappedEventSequence: 0,
             turns: [],
             stopped: false,

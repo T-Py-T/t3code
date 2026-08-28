@@ -44,8 +44,14 @@ export const historyEntryToActivityCommand = (
         historyEntryId: entry.entryId,
         state: entry.state,
         ...(entry.hostId === undefined ? {} : { hostId: entry.hostId }),
+        ...(entry.workflowRunId === undefined ? {} : { workflowRunId: entry.workflowRunId }),
+        ...(entry.workflowStageId === undefined ? {} : { workflowStageId: entry.workflowStageId }),
         ...(entry.operation === undefined ? {} : { operation: entry.operation }),
         ...(entry.target === undefined ? {} : { target: entry.target }),
+        ...(entry.observationId === undefined ? {} : { observationId: entry.observationId }),
+        ...(entry.screenshotRevealToken === undefined
+          ? {}
+          : { screenshotRevealToken: entry.screenshotRevealToken }),
         ...(entry.risk === undefined ? {} : { risk: entry.risk }),
         ...(entry.providerInstanceId === undefined
           ? {}
@@ -63,7 +69,7 @@ export const projectComputerUseHistoryChanges = <E>(
   changes: Stream.Stream<ComputerUseHistoryEntry>,
   dispatch: (command: OrchestrationCommand) => Effect.Effect<unknown, E>,
   retryDelayMs = 1_000,
-): Effect.Effect<void> =>
+): Effect.Effect<void, E> =>
   changes.pipe(
     Stream.runForEach((entry) => {
       const command = historyEntryToActivityCommand(entry);

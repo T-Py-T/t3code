@@ -704,6 +704,11 @@ export function createServerEnvironmentAtoms<R, E>(
     tag: WS_METHODS.computerUseGetHistory,
     staleTimeMs: 1_000,
   });
+  const computerUseScreenshot = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:computer-use:screenshot",
+    tag: WS_METHODS.computerUseRevealScreenshot,
+    staleTimeMs: 60_000,
+  });
   const refreshComputerUseControlState = (
     environmentId: EnvironmentId,
     registry: Parameters<
@@ -722,6 +727,7 @@ export function createServerEnvironmentAtoms<R, E>(
     providersValueAtom,
     computerUseControlState,
     computerUseHistory,
+    computerUseScreenshot,
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,

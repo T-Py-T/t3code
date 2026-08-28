@@ -4,6 +4,8 @@
  * transport without relying on either user's global extension installation.
  */
 export const T3_COMPUTER_USE_PI_EXTENSION_SOURCE = String.raw`
+import { pathToFileURL } from "node:url";
+
 const endpoint = process.env.T3CODE_MCP_ENDPOINT;
 const authorization = process.env.T3CODE_MCP_AUTHORIZATION;
 const enabledCapabilities = new Set(
@@ -71,12 +73,22 @@ function responsePayload(text, contentType, requestId) {
   return JSON.parse(text);
 }
 
-async function post(payload, signal) {
+function workflowContext(ctx) {
+  const candidates = [ctx, ctx && ctx.workflow, ctx && ctx.metadata].filter(Boolean);
+  const runId = candidates.map((value) => value.workflowRunId || value.runId).find((value) => typeof value === "string" && value.length > 0 && value.length <= 512);
+  const stageId = candidates.map((value) => value.workflowStageId || value.stageId).find((value) => typeof value === "string" && value.length > 0 && value.length <= 512);
+  return { runId, stageId };
+}
+
+async function post(payload, signal, ctx) {
   const headers = {
     accept: "application/json, text/event-stream",
     authorization,
     "content-type": "application/json",
   };
+  const workflow = workflowContext(ctx);
+  if (workflow.runId) headers["x-t3-workflow-run-id"] = workflow.runId;
+  if (workflow.stageId) headers["x-t3-workflow-stage-id"] = workflow.stageId;
   if (mcpSessionId) headers["mcp-session-id"] = mcpSessionId;
   if (mcpProtocolVersion) headers["mcp-protocol-version"] = mcpProtocolVersion;
   const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload), signal });
@@ -94,22 +106,22 @@ async function post(payload, signal) {
   return parsed && parsed.result;
 }
 
-async function initialize(signal) {
+async function initialize(signal, ctx) {
   if (mcpSessionId) return;
   if (!initializePromise) {
     initializePromise = (async () => {
       const id = nextRequestId++;
-      await post({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t3-code-pi-computer-use", version: "1" } } }, signal);
-      await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, signal);
+      await post({ jsonrpc: "2.0", id, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t3-code-pi-computer-use", version: "1" } } }, signal, ctx);
+      await post({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, signal, ctx);
     })().finally(() => { initializePromise = undefined; });
   }
   await initializePromise;
 }
 
-async function callTool(name, args, signal) {
-  await initialize(signal);
+async function callTool(name, args, signal, ctx) {
+  await initialize(signal, ctx);
   const id = nextRequestId++;
-  return await post({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args || {} } }, signal);
+  return await post({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args || {} } }, signal, ctx);
 }
 
 const approvalOptions = {
@@ -176,15 +188,16 @@ async function loadWorkflowExecutor(pi) {
   const workflowTool = pi.getAllTools().find((entry) => entry && entry.name === "workflow");
   const sourceInfo = workflowTool && workflowTool.sourceInfo;
   const bundlePath = sourceInfo && sourceInfo.path;
+  const normalizedBundlePath = typeof bundlePath === "string" ? bundlePath.replaceAll("\\", "/") : "";
   if (
     typeof bundlePath !== "string" ||
     sourceInfo.configurationOrigin !== "bundled" ||
-    !bundlePath.includes("/builtin/workflows/") ||
-    !bundlePath.endsWith("/index.bundle.mjs")
+    !normalizedBundlePath.includes("/builtin/workflows/") ||
+    !normalizedBundlePath.endsWith("/index.bundle.mjs")
   ) {
     throw new Error("Atomic's bundled workflow controller is unavailable.");
   }
-  const workflowModule = await import(bundlePath);
+  const workflowModule = await import(pathToFileURL(bundlePath).href);
   if (typeof workflowModule.default !== "function") {
     throw new Error("Atomic's bundled workflow controller is incompatible.");
   }
@@ -286,14 +299,14 @@ export default function t3ComputerUseExtension(pi) {
           : "Use " + toolDefinition.name + " only for user-authorized native computer interaction through T3 Code.",
         executionMode: "sequential",
         async execute(_toolCallId, args, signal, _onUpdate, ctx) {
-          let result = await callTool(definition.name, args, signal);
+          let result = await callTool(definition.name, args, signal, ctx);
           let previousApprovalId;
           for (let approvalCount = 0; approvalCount < 4; approvalCount += 1) {
             const boundary = result && result.structuredContent;
             if (!boundary || boundary.approvalId === previousApprovalId) break;
             if (!(await approvePolicyBoundary(boundary, signal, ctx))) break;
             previousApprovalId = boundary.approvalId;
-            result = await callTool(definition.name, args, signal);
+            result = await callTool(definition.name, args, signal, ctx);
           }
           const content = Array.isArray(result && result.content)
             ? result.content

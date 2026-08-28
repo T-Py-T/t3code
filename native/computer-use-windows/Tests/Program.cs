@@ -72,6 +72,21 @@ static void ProtectedTargets()
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\T3 Code\T3Code.exe", "T3 Code"));
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\WezTerm\wezterm-gui.exe", "wezterm-gui.exe"));
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\Alacritty\alacritty.exe", "alacritty.exe"));
+    Assert(TargetPolicy.IsForbidden(@"C:\Program Files\Rio\Rio.exe", "Rio.exe"));
+    Assert(
+        TargetPolicy.IsForbidden(
+            new TargetSecurityEvidence(
+                @"C:\Program Files\Unknown\surface.exe",
+                "surface.exe",
+                "surface",
+                "Winit Window",
+                null,
+                null,
+                false,
+                []
+            )
+        )
+    );
     Assert(!TargetPolicy.IsForbidden(@"C:\Windows\System32\notepad.exe", "Notepad"));
 }
 

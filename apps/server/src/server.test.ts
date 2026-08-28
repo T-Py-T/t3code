@@ -110,6 +110,7 @@ import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
 import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
 import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
+import * as ComputerUseScreenshotStore from "./computerUse/ComputerUseScreenshotStore.ts";
 import * as ComputerUseToolkit from "./computerUse/ComputerUseToolkit.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
@@ -446,6 +447,9 @@ const buildAppUnderTest = (options?: {
     computerUseControl?: Partial<ComputerUseControl.ComputerUseControl["Service"]>;
     computerUseHistory?: Partial<ComputerUseHistory.ComputerUseHistory["Service"]>;
     computerUsePolicy?: Partial<ComputerUsePolicy.ComputerUsePolicy["Service"]>;
+    computerUseScreenshotStore?: Partial<
+      ComputerUseScreenshotStore.ComputerUseScreenshotStore["Service"]
+    >;
     computerUseToolkit?: Partial<ComputerUseToolkit.ComputerUseToolkit["Service"]>;
     previewAutomationBroker?: Partial<PreviewAutomationBroker.PreviewAutomationBroker["Service"]>;
   };
@@ -997,6 +1001,8 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         Layer.mock(ComputerUsePolicy.ComputerUsePolicy)({
           evaluate: () => Effect.die("Computer Use policy evaluation is not stubbed in this test"),
+          evaluateAndAdmit: () =>
+            Effect.die("Computer Use policy admission is not stubbed in this test"),
           grant: () => Effect.void,
           revoke: () => Effect.succeed(0),
           listPersistent: () => Effect.succeed([]),
@@ -1048,6 +1054,13 @@ const buildAppUnderTest = (options?: {
               effect.pipe(Effect.map((value) => ({ _tag: "success", value }) as const)),
             ...options?.layers?.computerUseToolkit,
           }),
+          Layer.mock(ComputerUseScreenshotStore.ComputerUseScreenshotStore)({
+            retain: () =>
+              Effect.die("Computer Use screenshot retention is not stubbed in this test"),
+            reveal: () => Effect.succeed(Option.none()),
+            clear: () => Effect.void,
+            ...options?.layers?.computerUseScreenshotStore,
+          }),
         ),
       ),
       Layer.provide(
@@ -1090,9 +1103,9 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provideMerge(makeAuthTestLayer()),
       Layer.provideMerge(ServerSecretStore.layer),
-      Layer.provide(workspaceAndProjectServicesLayer),
-      Layer.provideMerge(FetchHttpClient.layer),
-      Layer.provide(layerConfig),
+      Layer.provide(
+        Layer.mergeAll(workspaceAndProjectServicesLayer, FetchHttpClient.layer, layerConfig),
+      ),
     );
 
     yield* Layer.build(appLayer).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));

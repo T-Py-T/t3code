@@ -196,6 +196,8 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
     turnId: scope.turnId,
     providerSessionId: scope.providerSessionId,
     providerInstanceId: scope.providerInstanceId,
+    ...(scope.workflowRunId === undefined ? {} : { workflowRunId: scope.workflowRunId }),
+    ...(scope.workflowStageId === undefined ? {} : { workflowStageId: scope.workflowStageId }),
   };
   const outcome = yield* resolvePolicyBoundary(
     toolkit,

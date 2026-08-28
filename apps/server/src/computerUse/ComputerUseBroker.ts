@@ -46,6 +46,8 @@ export interface ComputerUseInvocationScope {
   readonly turnId: TurnId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly workflowRunId?: string;
+  readonly workflowStageId?: string;
 }
 
 export interface ComputerUseInvokeInput {

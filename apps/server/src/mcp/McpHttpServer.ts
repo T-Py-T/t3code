@@ -41,6 +41,11 @@ const unauthorized = HttpServerResponse.jsonUnsafe(
   },
 );
 
+const boundedWorkflowHeader = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length <= 512 ? trimmed : undefined;
+};
+
 type AuthenticatedHttpEffect = Effect.Effect<
   HttpServerResponse.HttpServerResponse,
   Types.unhandled,
@@ -87,8 +92,14 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
           });
           return unauthorized;
         }
+        const workflowRunId = boundedWorkflowHeader(request.headers["x-t3-workflow-run-id"]);
+        const workflowStageId = boundedWorkflowHeader(request.headers["x-t3-workflow-stage-id"]);
         return yield* httpEffect.pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...invocation,
+            ...(workflowRunId === undefined ? {} : { workflowRunId }),
+            ...(workflowStageId === undefined ? {} : { workflowStageId }),
+          }),
           Effect.map(normalizeMcpHttpResponse),
         );
       }),

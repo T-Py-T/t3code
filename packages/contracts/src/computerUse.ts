@@ -30,6 +30,10 @@ export const ComputerUseRequestIdentity = makeComputerUseId("ComputerUseRequestI
 export type ComputerUseRequestIdentity = typeof ComputerUseRequestIdentity.Type;
 export const ComputerUseHistoryEntryId = makeComputerUseId("ComputerUseHistoryEntryId");
 export type ComputerUseHistoryEntryId = typeof ComputerUseHistoryEntryId.Type;
+export const ComputerUseScreenshotRevealToken = makeComputerUseId(
+  "ComputerUseScreenshotRevealToken",
+);
+export type ComputerUseScreenshotRevealToken = typeof ComputerUseScreenshotRevealToken.Type;
 
 export const ComputerUseTargetKind = Schema.Literals([
   "application",
@@ -457,8 +461,12 @@ export const ComputerUseHistoryEntry = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   turnId: Schema.optional(TurnId),
   providerInstanceId: Schema.optional(ProviderInstanceId),
+  workflowRunId: Schema.optional(ComputerUseShortString),
+  workflowStageId: Schema.optional(ComputerUseShortString),
   operation: Schema.optional(ComputerUseHistoryOperation),
   target: Schema.optional(ComputerUseHistoryTarget),
+  observationId: Schema.optional(ComputerUseObservationId),
+  screenshotRevealToken: Schema.optional(ComputerUseScreenshotRevealToken),
   risk: Schema.optional(ComputerUseActionRisk),
   state: ComputerUseHistoryState,
   summary: ComputerUseShortString,
@@ -495,6 +503,16 @@ export const ComputerUseResumeResult = Schema.Struct({
   resumed: Schema.Boolean,
 });
 export type ComputerUseResumeResult = typeof ComputerUseResumeResult.Type;
+
+export const ComputerUseRevealScreenshotInput = Schema.Struct({
+  token: ComputerUseScreenshotRevealToken,
+});
+export type ComputerUseRevealScreenshotInput = typeof ComputerUseRevealScreenshotInput.Type;
+
+export const ComputerUseRevealScreenshotResult = Schema.Struct({
+  screenshot: Schema.optional(ComputerUseScreenshot),
+});
+export type ComputerUseRevealScreenshotResult = typeof ComputerUseRevealScreenshotResult.Type;
 
 const ComputerUseHostRequestFields = {
   requestId: ComputerUseRequestId,

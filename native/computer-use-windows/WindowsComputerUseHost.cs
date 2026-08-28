@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -18,6 +19,8 @@ public sealed class WindowsComputerUseHost : IDisposable
 {
     private const int MaximumAccessibilityElements = 5_000;
     private static readonly SyntheticInputTracker InputTracker = new();
+    private static readonly ConcurrentDictionary<IntPtr, TargetSecurityEvidenceCacheEntry>
+        TargetSecurityEvidenceCache = new();
     private readonly ConcurrentDictionary<string, byte> _cancelledLeases;
     private readonly HumanInputMonitor _humanInputMonitor = new();
     private readonly Dictionary<string, ObservationRecord> _observations = new(
@@ -182,6 +185,7 @@ public sealed class WindowsComputerUseHost : IDisposable
 
         var humanInputGeneration = _humanInputMonitor.Snapshot()
             ?? throw HostFailure.Permission("input-monitoring");
+        RequireActive(request.LeaseId, humanInputGeneration);
         Focus(target);
         RequireActive(request.LeaseId, humanInputGeneration);
         var completed = 0;
@@ -307,7 +311,11 @@ public sealed class WindowsComputerUseHost : IDisposable
                     return;
                 }
             case "text-entry":
-                TypeUnicode(OptionalString(action, "text", string.Empty));
+                TypeUnicode(
+                    OptionalString(action, "text", string.Empty),
+                    leaseId,
+                    humanInputGeneration
+                );
                 return;
             case "paste":
                 Paste(OptionalString(action, "text", string.Empty));
@@ -818,7 +826,7 @@ public sealed class WindowsComputerUseHost : IDisposable
             throw HostFailure.TargetMissing();
         }
 
-        if (TargetPolicy.IsForbidden(target.ExecutablePath, target.ProcessName))
+        if (TargetPolicy.IsForbidden(target.SecurityEvidence))
         {
             throw HostFailure.PolicyDenied();
         }
@@ -901,6 +909,16 @@ public sealed class WindowsComputerUseHost : IDisposable
             {
                 return null;
             }
+            var securityEvidence = ReadTargetSecurityEvidence(
+                handle,
+                executablePath,
+                processName,
+                titleBuffer.ToString()
+            );
+            if (TargetPolicy.IsForbidden(securityEvidence))
+            {
+                return null;
+            }
 
             var appUserModelId = TryGetApplicationUserModelId(process);
             var applicationId = appUserModelId ?? executablePath;
@@ -918,13 +936,101 @@ public sealed class WindowsComputerUseHost : IDisposable
                 processName,
                 handle,
                 bounds,
-                classification
+                classification,
+                securityEvidence
             );
         }
         finally
         {
             NativeMethods.CloseHandle(process);
         }
+    }
+
+    private static TargetSecurityEvidence ReadTargetSecurityEvidence(
+        IntPtr handle,
+        string executablePath,
+        string processName,
+        string windowTitle
+    )
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (
+            TargetSecurityEvidenceCache.TryGetValue(handle, out var cached)
+            && cached.ExecutablePath.Equals(executablePath, StringComparison.OrdinalIgnoreCase)
+            && cached.WindowTitle.Equals(windowTitle, StringComparison.Ordinal)
+            && now - cached.CheckedAt <= TimeSpan.FromSeconds(1)
+        )
+        {
+            return cached.Evidence;
+        }
+        var windowClass = new StringBuilder(512);
+        _ = NativeMethods.GetClassName(handle, windowClass, windowClass.Capacity);
+        string? fileDescription = null;
+        string? productName = null;
+        try
+        {
+            var version = FileVersionInfo.GetVersionInfo(executablePath);
+            fileDescription = version.FileDescription;
+            productName = version.ProductName;
+        }
+        catch (FileNotFoundException) { }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        catch (System.ComponentModel.Win32Exception) { }
+
+        var descriptors = new List<string>();
+        var hasStructuredAccessibility = false;
+        try
+        {
+            var root = AutomationElement.FromHandle(handle);
+            var elements = root.FindAll(TreeScope.Descendants, Condition.TrueCondition);
+            for (var index = 0; index < Math.Min(elements.Count, 256); index++)
+            {
+                var element = elements[index];
+                var current = element.Current;
+                foreach (
+                    var descriptor in new[]
+                    {
+                        current.ClassName,
+                        current.AutomationId,
+                        current.LocalizedControlType,
+                    }
+                )
+                {
+                    if (!string.IsNullOrWhiteSpace(descriptor)) descriptors.Add(descriptor);
+                }
+                hasStructuredAccessibility |=
+                    element.TryGetCurrentPattern(ValuePattern.Pattern, out _)
+                    || element.TryGetCurrentPattern(TextPattern.Pattern, out _)
+                    || element.TryGetCurrentPattern(InvokePattern.Pattern, out _)
+                    || element.TryGetCurrentPattern(SelectionPattern.Pattern, out _)
+                    || element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _);
+            }
+        }
+        catch (ElementNotAvailableException) { }
+        catch (InvalidOperationException) { }
+
+        var evidence = new TargetSecurityEvidence(
+            executablePath,
+            processName,
+            windowTitle,
+            windowClass.ToString(),
+            fileDescription,
+            productName,
+            hasStructuredAccessibility,
+            descriptors
+        );
+        TargetSecurityEvidenceCache[handle] = new TargetSecurityEvidenceCacheEntry(
+            executablePath,
+            windowTitle,
+            now,
+            evidence
+        );
+        if (TargetSecurityEvidenceCache.Count > 512)
+        {
+            TargetSecurityEvidenceCache.Clear();
+        }
+        return evidence;
     }
 
     private static string? TryGetApplicationUserModelId(IntPtr process)
@@ -1062,10 +1168,11 @@ public sealed class WindowsComputerUseHost : IDisposable
         }
     }
 
-    private static void TypeUnicode(string text)
+    private void TypeUnicode(string text, string leaseId, long humanInputGeneration)
     {
         foreach (var chunk in text.Chunk(64))
         {
+            RequireActive(leaseId, humanInputGeneration);
             var inputs = new List<NativeInput>(chunk.Length * 2);
             foreach (var character in chunk)
             {
@@ -1079,6 +1186,7 @@ public sealed class WindowsComputerUseHost : IDisposable
                 );
             }
             SendKeyboard(inputs.ToArray());
+            RequireActive(leaseId, humanInputGeneration);
         }
     }
 
@@ -1255,6 +1363,13 @@ public sealed class WindowsComputerUseHost : IDisposable
         Dictionary<string, AutomationElement> Elements
     );
 
+    private sealed record TargetSecurityEvidenceCacheEntry(
+        string ExecutablePath,
+        string WindowTitle,
+        DateTimeOffset CheckedAt,
+        TargetSecurityEvidence Evidence
+    );
+
     private sealed record TargetRecord(
         string TargetId,
         string DisplayName,
@@ -1264,7 +1379,8 @@ public sealed class WindowsComputerUseHost : IDisposable
         string ProcessName,
         IntPtr Handle,
         Rectangle Bounds,
-        TargetClassification Classification
+        TargetClassification Classification,
+        TargetSecurityEvidence SecurityEvidence
     )
     {
         public JsonObject ToJson()
@@ -1917,6 +2033,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", EntryPoint = "GetWindowTextW", CharSet = CharSet.Unicode)]
     internal static extern int GetWindowText(IntPtr handle, StringBuilder text, int maximumCount);
+
+    [DllImport("user32.dll", EntryPoint = "GetClassNameW", CharSet = CharSet.Unicode)]
+    internal static extern int GetClassName(IntPtr handle, StringBuilder className, int maximumCount);
 
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);

@@ -50,6 +50,13 @@ const thirdPartyTerminalTarget: ComputerUseTarget = {
   applicationId: "com.mitchellh.ghostty",
   stableIdentity: "macos:com.mitchellh.ghostty:TEAM",
 };
+const rioTerminalTarget: ComputerUseTarget = {
+  targetId: ComputerUseTargetId.make("target-rio-terminal"),
+  kind: "application",
+  displayName: "Rio",
+  applicationId: "com.raphaelamorim.rio",
+  stableIdentity: "macos:com.raphaelamorim.rio:TEAM",
+};
 const developmentT3Target: ComputerUseTarget = {
   targetId: ComputerUseTargetId.make("target-t3-development"),
   kind: "application",
@@ -168,6 +175,52 @@ it.effect("denies third-party terminal targets", () =>
         runtimeMode: "full-access",
       }),
     ).toEqual({ _tag: "deny", reason: "forbidden-target" });
+  }),
+);
+
+it.effect("denies terminal targets added through native classification", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+
+    expect(
+      yield* policy.evaluate({
+        scope,
+        target: rioTerminalTarget,
+        access: "operate",
+        risk: "reversible-local",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual({ _tag: "deny", reason: "forbidden-target" });
+  }),
+);
+
+it.effect("cancels admitted actions when the environment pauses", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+    yield* policy.grant({ scope, target, access: "operate", duration: "turn" });
+
+    const result = yield* policy.evaluateAndAdmit({
+      scope,
+      target,
+      access: "operate",
+      risk: "reversible-local",
+      runtimeMode: "full-access",
+    });
+
+    expect(result.decision).toEqual({ _tag: "allow" });
+    expect(result.admission).toBeDefined();
+    yield* policy.pause(environmentId);
+    yield* result.admission!.cancelled;
+    yield* result.admission!.release;
+    expect(
+      yield* policy.evaluate({
+        scope,
+        target,
+        access: "operate",
+        risk: "reversible-local",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual({ _tag: "deny", reason: "paused" });
   }),
 );
 

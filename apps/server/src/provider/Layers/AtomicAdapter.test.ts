@@ -74,26 +74,53 @@ function makeAdapter(options?: { readonly requestTimeout?: Duration.Input }) {
 }
 
 describe("AtomicAdapter", () => {
-  it("removes screenshots from persisted Pi/Atomic tool events", () => {
+  it("persists only bounded metadata for Pi/Atomic computer and preview events", () => {
     const sanitized = sanitizePiComputerUseEvent({
       type: "tool_execution_end",
       toolName: "computer_observe",
-      args: { targetId: "target-1" },
+      toolCallId: "tool-1",
+      args: { targetId: "target-1", text: "TYPED_SECRET" },
       result: {
         content: [{ type: "image", mimeType: "image/png", data: "SCREENSHOT_SENTINEL" }],
         details: {
           observationId: "observation-1",
+          accessibility: { value: "ACCESSIBILITY_SECRET" },
           screenshot: { mimeType: "image/png", base64: "SCREENSHOT_SENTINEL" },
         },
       },
     });
 
     assert.notInclude(JSON.stringify(sanitized), "SCREENSHOT_SENTINEL");
-    assert.equal(sanitized.toolName, "computer_observe");
-    assert.deepEqual(sanitized.args, { targetId: "target-1" });
-    assert.equal(
-      (sanitized.result as { details?: { observationId?: string } }).details?.observationId,
-      "observation-1",
+    assert.notInclude(JSON.stringify(sanitized), "TYPED_SECRET");
+    assert.notInclude(JSON.stringify(sanitized), "ACCESSIBILITY_SECRET");
+    assert.deepEqual(sanitized, {
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      toolName: "computer_observe",
+    });
+    assert.deepEqual(
+      sanitizePiComputerUseEvent({
+        type: "tool_execution_update",
+        toolName: "preview_type",
+        partialResult: { text: "PREVIEW_SECRET" },
+        isError: false,
+      }),
+      { type: "tool_execution_update", toolName: "preview_type", isError: false },
+    );
+    assert.deepEqual(
+      sanitizePiComputerUseEvent(
+        {
+          type: "tool_execution_end",
+          toolCallId: "tool-2",
+          result: { details: { accessibility: "ACCESSIBILITY_SECRET" } },
+        },
+        new Map([["tool-2", "computer_observe"]]),
+      ),
+      {
+        type: "tool_execution_end",
+        toolCallId: "tool-2",
+        toolName: "computer_observe",
+      },
     );
   });
 

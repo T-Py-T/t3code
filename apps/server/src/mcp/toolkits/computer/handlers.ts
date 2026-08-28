@@ -82,6 +82,10 @@ export const requireComputerUseScope: Effect.Effect<
     turnId: invocation.turnId,
     providerSessionId: invocation.providerSessionId,
     providerInstanceId: invocation.providerInstanceId,
+    ...(invocation.workflowRunId === undefined ? {} : { workflowRunId: invocation.workflowRunId }),
+    ...(invocation.workflowStageId === undefined
+      ? {}
+      : { workflowStageId: invocation.workflowStageId }),
     runtimeMode: invocation.runtimeMode ?? "full-access",
   };
 });

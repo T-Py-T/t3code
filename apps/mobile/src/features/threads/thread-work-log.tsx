@@ -1,7 +1,8 @@
 import * as Haptics from "expo-haptics";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { ComputerUseScreenshotRevealToken, EnvironmentId } from "@t3tools/contracts";
 import { type AppSymbolName, SymbolView } from "../../components/AppSymbol";
-import { LayoutAnimation, Pressable, ScrollView, View } from "react-native";
+import { Image, LayoutAnimation, Pressable, ScrollView, View } from "react-native";
+import { useState } from "react";
 
 import { AppText as Text } from "../../components/AppText";
 import { scaledTypographyLineHeight } from "../../lib/appearancePreferences";
@@ -11,6 +12,7 @@ import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useEnvironmentQuery } from "../../state/query";
 import Animated, { FadeIn } from "react-native-reanimated";
 
 const WORK_LOG_LAYOUT_ANIMATION = {
@@ -98,7 +100,7 @@ export function visibleWorkLogActivities(
 // the scaled text-2xs line height. Values mirror the classNames below — keep
 // them in sync; a mismatch only costs a one-time correction on measure.
 const WORK_ROW_HEIGHT = 32; // min-h-8
-const COMPUTER_USE_ROW_HEIGHT = 132; // min-h-[132px]
+const COMPUTER_USE_ROW_HEIGHT = 172; // min-h-[172px]
 const WORK_ROW_GAP = 1; // gap-px
 const WORK_LOG_HEADER_PADDING = 2; // pb-0.5 under the "work log" label
 const WORK_LOG_BOTTOM_MARGIN = 4; // mb-1
@@ -182,7 +184,7 @@ function ComputerUseWorkRow(props: {
 
   return (
     <View
-      className="min-h-[132px] rounded-xl border border-border bg-card px-3 py-2.5"
+      className="min-h-[172px] rounded-xl border border-border bg-card px-3 py-2.5"
       accessibilityLabel={`Computer Use ${stateLabel}`}
     >
       <View className="flex-row items-center gap-2">
@@ -209,10 +211,30 @@ function ComputerUseWorkRow(props: {
         {props.activity.summary}
       </Text>
       <Text className="mt-0.5 text-xs text-foreground-muted" numberOfLines={1}>
-        {[state.target?.displayName, state.providerInstanceId, state.risk?.replaceAll("-", " ")]
+        {[
+          state.target?.displayName,
+          state.providerInstanceId,
+          state.hostId ? `host ${state.hostId}` : null,
+          state.risk?.replaceAll("-", " "),
+        ]
           .filter(Boolean)
           .join(" · ")}
       </Text>
+      <Text className="mt-0.5 text-xs text-foreground-muted" numberOfLines={1}>
+        {[
+          state.workflowRunId ? `workflow ${state.workflowRunId}` : null,
+          state.workflowStageId ? `stage ${state.workflowStageId}` : null,
+          state.observationId ? `observation ${state.observationId}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      </Text>
+      {state.screenshotRevealToken ? (
+        <ComputerUseScreenshotReveal
+          environmentId={props.environmentId}
+          token={state.screenshotRevealToken}
+        />
+      ) : null}
       {active ? (
         <View className="mt-2 flex-row justify-end gap-2 border-t border-border pt-2">
           <ComputerUseActionButton
@@ -242,6 +264,49 @@ function ComputerUseWorkRow(props: {
         </View>
       ) : null}
     </View>
+  );
+}
+
+function ComputerUseScreenshotReveal(props: {
+  readonly environmentId: EnvironmentId;
+  readonly token: ComputerUseScreenshotRevealToken;
+}) {
+  const [reveal, setReveal] = useState(false);
+  const screenshot = useEnvironmentQuery(
+    reveal
+      ? serverEnvironment.computerUseScreenshot({
+          environmentId: props.environmentId,
+          input: { token: props.token },
+        })
+      : null,
+  );
+  if (!reveal) {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Reveal Computer Use screenshot"
+        className="mt-2 self-start rounded-lg border border-border bg-subtle px-3 py-2 active:opacity-60"
+        onPress={() => setReveal(true)}
+      >
+        <Text className="text-xs font-t3-medium text-foreground">Reveal screenshot</Text>
+      </Pressable>
+    );
+  }
+  if (screenshot.data?.screenshot) {
+    const image = screenshot.data.screenshot;
+    return (
+      <Image
+        accessibilityLabel="Computer Use observation"
+        className="mt-2 h-36 w-full rounded-lg border border-border"
+        resizeMode="contain"
+        source={{ uri: `data:${image.mimeType};base64,${image.base64}` }}
+      />
+    );
+  }
+  return (
+    <Text className="mt-2 text-xs text-foreground-muted">
+      {screenshot.error ?? (screenshot.isPending ? "Loading screenshot…" : "Screenshot expired.")}
+    </Text>
   );
 }
 

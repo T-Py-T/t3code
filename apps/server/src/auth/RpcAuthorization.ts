@@ -50,6 +50,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverGetUsageSummary]: AuthOrchestrationReadScope,
   [WS_METHODS.computerUseGetControlState]: AuthComputerReadScope,
   [WS_METHODS.computerUseGetHistory]: AuthComputerReadScope,
+  [WS_METHODS.computerUseRevealScreenshot]: AuthComputerReadScope,
   [WS_METHODS.computerUseClearHistory]: AuthComputerOperateScope,
   [WS_METHODS.computerUseRevokePersistentGrant]: AuthComputerOperateScope,
   [WS_METHODS.computerUseStop]: AuthComputerOperateScope,

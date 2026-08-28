@@ -214,6 +214,8 @@ describe("Computer Use contracts", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       providerInstanceId: "atomic",
+      workflowRunId: "workflow-1",
+      workflowStageId: "stage-2",
       operation: "act",
       target: {
         kind: "application",
@@ -222,6 +224,8 @@ describe("Computer Use contracts", () => {
         stableIdentity: "macos:com.apple.TextEdit:APPLE",
       },
       risk: "reversible-local",
+      observationId: "observation-1",
+      screenshotRevealToken: "reveal-1",
       state: "completed",
       summary: "Completed 1 action in TextEdit.",
       resultTag: "success",
@@ -232,6 +236,12 @@ describe("Computer Use contracts", () => {
 
     expect(entry).not.toHaveProperty("screenshot");
     expect(entry).not.toHaveProperty("text");
+    expect(entry).toMatchObject({
+      workflowRunId: "workflow-1",
+      workflowStageId: "stage-2",
+      observationId: "observation-1",
+      screenshotRevealToken: "reveal-1",
+    });
     expect(() =>
       decodeHistory(Array.from({ length: COMPUTER_USE_HISTORY_MAX_ENTRIES + 1 }, () => entry)),
     ).toThrow();

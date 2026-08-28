@@ -22,6 +22,7 @@ import * as ComputerUseControl from "./ComputerUseControl.ts";
 import * as ComputerUsePolicy from "./ComputerUsePolicy.ts";
 import * as ComputerUseHistory from "./ComputerUseHistory.ts";
 import * as ComputerUseToolkit from "./ComputerUseToolkit.ts";
+import * as ComputerUseScreenshotStore from "./ComputerUseScreenshotStore.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const invocationScope: ComputerUseBroker.ComputerUseInvocationScope = {
@@ -56,6 +57,12 @@ const observation: ComputerUseObservation = {
   width: 1280,
   height: 720,
   elements: [],
+  screenshot: {
+    mimeType: "image/png",
+    base64: "c2NyZWVuc2hvdA==",
+    width: 1280,
+    height: 720,
+  },
 };
 
 const makeHarness = Effect.gen(function* () {
@@ -63,11 +70,15 @@ const makeHarness = Effect.gen(function* () {
   const control = yield* ComputerUseControl.make;
   const policy = yield* ComputerUsePolicy.make;
   const history = yield* ComputerUseHistory.make;
+  const screenshotStore = yield* ComputerUseScreenshotStore.make.pipe(
+    Effect.provide(NodeServices.layer),
+  );
   const toolkit = yield* ComputerUseToolkit.make.pipe(
     Effect.provideService(ComputerUseBroker.ComputerUseBroker, broker),
     Effect.provideService(ComputerUseControl.ComputerUseControl, control),
     Effect.provideService(ComputerUsePolicy.ComputerUsePolicy, policy),
     Effect.provideService(ComputerUseHistory.ComputerUseHistory, history),
+    Effect.provideService(ComputerUseScreenshotStore.ComputerUseScreenshotStore, screenshotStore),
     Effect.provide(NodeServices.layer),
   );
   return { broker, history, policy, toolkit } as const;
@@ -200,6 +211,13 @@ for (const providerInstance of ["codex", "pi", "atomic"] as const) {
           .join("\n");
         expect(persistedMetadata).not.toContain("typed-secret");
         expect(persistedMetadata).not.toContain("field-1");
+        expect(
+          (yield* history.list(environmentId)).some(
+            (entry) =>
+              entry.observationId === observation.observationId &&
+              entry.screenshotRevealToken !== undefined,
+          ),
+        ).toBe(true);
         const externalBoundary = yield* toolkit.act({
           scope: providerScope,
           target,

@@ -42,6 +42,22 @@ import Testing
         )
     )
     #expect(TargetPolicy.isForbidden(bundleId: nil, processName: "T3 Code (Alpha)"))
+    #expect(TargetPolicy.isForbidden(bundleId: "com.raphaelamorim.rio", processName: "Rio"))
+    #expect(
+        TargetPolicy.isForbidden(
+            bundleId: "com.example.surface",
+            processName: "Surface",
+            surfaceDescriptors: ["Terminal Window"],
+            hasStructuredAccessibility: true
+        )
+    )
+    #expect(
+        TargetPolicy.isForbidden(
+            bundleId: "com.example.surface",
+            processName: "Surface",
+            hasStructuredAccessibility: false
+        )
+    )
     #expect(!TargetPolicy.isForbidden(bundleId: "com.apple.TextEdit", processName: "TextEdit"))
 }
 

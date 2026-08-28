@@ -9,6 +9,8 @@ import {
   type ComputerUseHistoryState,
   type ComputerUseHostId,
   type ComputerUseHistoryOperation,
+  type ComputerUseObservationId,
+  type ComputerUseScreenshotRevealToken,
   type ComputerUseTarget,
   type EnvironmentId,
   type ProviderInstanceId,
@@ -40,8 +42,12 @@ export interface ComputerUseHistoryAppendInput {
   readonly threadId?: ThreadId;
   readonly turnId?: TurnId;
   readonly providerInstanceId?: ProviderInstanceId;
+  readonly workflowRunId?: string;
+  readonly workflowStageId?: string;
   readonly operation?: ComputerUseHistoryOperation;
   readonly target?: ComputerUseTarget;
+  readonly observationId?: ComputerUseObservationId;
+  readonly screenshotRevealToken?: ComputerUseScreenshotRevealToken;
   readonly risk?: ComputerUseActionRisk;
   readonly state: ComputerUseHistoryState;
   readonly summary: string;
@@ -125,8 +131,18 @@ export const makeWithPersistence = (persistence?: ComputerUseHistoryPersistence)
               ...(input.providerInstanceId === undefined
                 ? {}
                 : { providerInstanceId: input.providerInstanceId }),
+              ...(input.workflowRunId === undefined
+                ? {}
+                : { workflowRunId: bounded(input.workflowRunId) }),
+              ...(input.workflowStageId === undefined
+                ? {}
+                : { workflowStageId: bounded(input.workflowStageId) }),
               ...(input.operation === undefined ? {} : { operation: input.operation }),
               ...(input.target === undefined ? {} : { target: toHistoryTarget(input.target) }),
+              ...(input.observationId === undefined ? {} : { observationId: input.observationId }),
+              ...(input.screenshotRevealToken === undefined
+                ? {}
+                : { screenshotRevealToken: input.screenshotRevealToken }),
               ...(input.risk === undefined ? {} : { risk: input.risk }),
               state: input.state,
               summary: bounded(input.summary),

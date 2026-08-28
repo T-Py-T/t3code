@@ -34,9 +34,10 @@ actions still ask for approval. It does not change the thread to **Full access**
 Computer Use permissions are separate from the thread's permission mode. **Full access** never
 bypasses an app grant or a point-of-risk confirmation.
 
-Computer Use is an experimental preview while native signing, physical-platform acceptance, Office
-add-in parity, and locked-use gates remain in progress. On web or desktop, turn on **Settings** →
-**Integrations** → **Computer Use (experimental)** before starting a new Codex, Pi, or Atomic
+Computer Use is a feature-complete preview for unlocked native-app and browser workflows. Native
+release signing, physical-platform acceptance, Office add-in parity, and unattended locked use
+remain outside that supported preview scope. On web or desktop, turn on **Settings** →
+**Integrations** → **Computer Use (preview)** before starting a new Codex, Pi, or Atomic
 session. The setting is off by default, and an existing session keeps the tools it started with. T3
 Code asks separately before observing or operating an app. An app grant can last
 for one action, the current turn, the provider session, or permanently on that verified computer.
@@ -56,7 +57,8 @@ A web or mobile client paired before its server gained Computer Use keeps its or
 scopes. Pair that client again if it can see the environment but cannot use the Computer Use
 approval or lifecycle controls.
 
-Web and desktop settings also show the connected native host, permanent app grants, and 30 days of
+Web, desktop, and mobile thread settings also show the connected native host and recent bounded
+activity metadata. Web and desktop settings additionally show permanent app grants and 30 days of
 bounded activity metadata. You can revoke a permanent grant or clear that history there. Screenshots,
 page contents, accessibility trees, clipboard values, and typed text are not kept in the history.
 
@@ -71,7 +73,7 @@ The desktop app can also open a dedicated, persistent T3 Code browser profile fo
 a sign-in. **Signed-in browser access** is off by default and never attaches to your
 everyday Chrome profile. Enable it under the same Browser settings, choose **Open browser**, and sign
 in only to the sites you want that profile to use. Disabling access closes the controlled browser;
-external-browser recording is not supported yet and is part of the experimental preview.
+external-browser recording is not supported in the preview.
 
 Both browser routes use the same app-grant, point-of-risk confirmation, lifecycle, and metadata
 history policy as native Computer Use. The browser settings and native **Computer Use** switch are

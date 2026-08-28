@@ -17,6 +17,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -71,6 +72,16 @@ export interface ComputerUseApprovalResolutionInput {
   readonly decision: ProviderApprovalDecision;
 }
 
+export interface ComputerUsePolicyAdmission {
+  readonly cancelled: Effect.Effect<void>;
+  readonly release: Effect.Effect<void>;
+}
+
+export interface ComputerUsePolicyAdmissionResult {
+  readonly decision: ComputerUsePolicyDecision;
+  readonly admission?: ComputerUsePolicyAdmission;
+}
+
 interface GrantRecord extends ComputerUseGrantInput {}
 
 interface ConfirmationRecord {
@@ -101,6 +112,7 @@ const FORBIDDEN_APPLICATION_IDS = new Set([
   "dev.warp.warp-stable",
   "net.kovidgoyal.kitty",
   "org.alacritty",
+  "com.raphaelamorim.rio",
   "alacritty.exe",
   "cmd.exe",
   "cmder.exe",
@@ -114,6 +126,7 @@ const FORBIDDEN_APPLICATION_IDS = new Set([
   "openconsole.exe",
   "powershell.exe",
   "pwsh.exe",
+  "rio.exe",
   "tabby.exe",
   "wezterm-gui.exe",
   "wt.exe",
@@ -142,6 +155,9 @@ export class ComputerUsePolicy extends Context.Service<
   ComputerUsePolicy,
   {
     readonly evaluate: (input: ComputerUsePolicyInput) => Effect.Effect<ComputerUsePolicyDecision>;
+    readonly evaluateAndAdmit: (
+      input: ComputerUsePolicyInput,
+    ) => Effect.Effect<ComputerUsePolicyAdmissionResult>;
     readonly grant: (input: ComputerUseGrantInput) => Effect.Effect<void>;
     readonly revoke: (input: ComputerUseRevokeInput) => Effect.Effect<number>;
     readonly listPersistent: (
@@ -175,6 +191,16 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
     // transition with lifecycle cleanup so a turn cannot finish between
     // removing a pending approval and materializing its scoped grant.
     const lifecycleGate = yield* Semaphore.make(1);
+    const admissions = yield* SynchronizedRef.make<{
+      readonly nextId: number;
+      readonly active: ReadonlyMap<
+        number,
+        {
+          readonly scope: ComputerUsePolicyScope;
+          readonly cancellation: Deferred.Deferred<void>;
+        }
+      >;
+    }>({ nextId: 0, active: new Map() });
 
     const savePersistentGrants = (current: ReadonlyArray<GrantRecord>) =>
       persistence
@@ -281,9 +307,9 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
       ),
     );
 
-    const evaluate: ComputerUsePolicy["Service"]["evaluate"] = Effect.fn(
-      "ComputerUsePolicy.evaluate",
-    )(function* (input) {
+    const evaluateUnlocked = Effect.fn("ComputerUsePolicy.evaluateUnlocked")(function* (
+      input: ComputerUsePolicyInput,
+    ) {
       if (isForbiddenApplicationId(input.target.applicationId)) {
         return { _tag: "deny", reason: "forbidden-target" } as const;
       }
@@ -372,6 +398,39 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
       return { _tag: "allow" } as const;
     });
 
+    const evaluate: ComputerUsePolicy["Service"]["evaluate"] = Effect.fn(
+      "ComputerUsePolicy.evaluate",
+    )((input) => lifecycleGate.withPermit(evaluateUnlocked(input)));
+
+    const evaluateAndAdmit: ComputerUsePolicy["Service"]["evaluateAndAdmit"] = Effect.fn(
+      "ComputerUsePolicy.evaluateAndAdmit",
+    )((input) =>
+      lifecycleGate.withPermit(
+        Effect.gen(function* () {
+          const decision = yield* evaluateUnlocked(input);
+          if (decision._tag !== "allow") return { decision };
+          const cancellation = yield* Deferred.make<void>();
+          const admissionId = yield* SynchronizedRef.modify(admissions, (current) => {
+            const active = new Map(current.active);
+            active.set(current.nextId, { scope: input.scope, cancellation });
+            return [current.nextId, { nextId: current.nextId + 1, active }] as const;
+          });
+          return {
+            decision,
+            admission: {
+              cancelled: Deferred.await(cancellation),
+              release: SynchronizedRef.update(admissions, (current) => {
+                if (!current.active.has(admissionId)) return current;
+                const active = new Map(current.active);
+                active.delete(admissionId);
+                return { ...current, active };
+              }),
+            },
+          };
+        }),
+      ),
+    );
+
     const requestApproval: ComputerUsePolicy["Service"]["requestApproval"] = Effect.fn(
       "ComputerUsePolicy.requestApproval",
     )((input) =>
@@ -387,22 +446,45 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
       ),
     );
 
+    const cancelAdmissions = (
+      matches: (scope: ComputerUsePolicyScope) => boolean,
+    ): Effect.Effect<void> =>
+      SynchronizedRef.get(admissions).pipe(
+        Effect.flatMap((current) =>
+          Effect.forEach(
+            current.active.values(),
+            (admission) =>
+              matches(admission.scope)
+                ? Deferred.succeed(admission.cancellation, undefined)
+                : Effect.void,
+            { discard: true },
+          ),
+        ),
+      );
+
     const pause: ComputerUsePolicy["Service"]["pause"] = Effect.fn("ComputerUsePolicy.pause")(
       (environmentId) =>
-        SynchronizedRef.update(
-          pausedEnvironments,
-          (current) => new Set([...current, environmentId]),
+        lifecycleGate.withPermit(
+          Effect.gen(function* () {
+            yield* SynchronizedRef.update(
+              pausedEnvironments,
+              (current) => new Set([...current, environmentId]),
+            );
+            yield* cancelAdmissions((scope) => scope.environmentId === environmentId);
+          }),
         ),
     );
 
     const resume: ComputerUsePolicy["Service"]["resume"] = Effect.fn("ComputerUsePolicy.resume")(
       (environmentId) =>
-        SynchronizedRef.modify(pausedEnvironments, (current) => {
-          if (!current.has(environmentId)) return [false, current] as const;
-          const next = new Set(current);
-          next.delete(environmentId);
-          return [true, next] as const;
-        }),
+        lifecycleGate.withPermit(
+          SynchronizedRef.modify(pausedEnvironments, (current) => {
+            if (!current.has(environmentId)) return [false, current] as const;
+            const next = new Set(current);
+            next.delete(environmentId);
+            return [true, next] as const;
+          }),
+        ),
     );
 
     const isPaused: ComputerUsePolicy["Service"]["isPaused"] = Effect.fn(
@@ -493,6 +575,9 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
               ),
             ),
           }));
+          yield* cancelAdmissions(
+            (scope) => scope.threadId === threadId && scope.turnId === turnId,
+          );
         }),
       ),
     );
@@ -518,12 +603,14 @@ export const makeWithPersistence = (persistence?: ComputerUsePolicyPersistence) 
               ),
             ),
           }));
+          yield* cancelAdmissions((scope) => scope.threadId === threadId);
         }),
       ),
     );
 
     return ComputerUsePolicy.of({
       evaluate,
+      evaluateAndAdmit,
       grant,
       revoke,
       listPersistent,

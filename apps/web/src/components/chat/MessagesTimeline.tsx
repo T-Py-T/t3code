@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   type MessageId,
+  type ComputerUseScreenshotRevealToken,
   type ScopedThreadRef,
   type ServerProviderSkill,
   type TurnId,
@@ -71,6 +72,7 @@ import {
 import { Button } from "../ui/button";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useEnvironmentQuery } from "../../state/query";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
@@ -2695,8 +2697,24 @@ const ComputerUseWorkEntryRow = memo(function ComputerUseWorkEntryRow({
           <div className="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
             {state.target ? <span className="truncate">{state.target.displayName}</span> : null}
             {state.providerInstanceId ? <span>{state.providerInstanceId}</span> : null}
+            {state.hostId ? <span className="max-w-full truncate">host {state.hostId}</span> : null}
+            {state.workflowRunId ? (
+              <span className="max-w-full truncate">workflow {state.workflowRunId}</span>
+            ) : null}
+            {state.workflowStageId ? (
+              <span className="max-w-full truncate">stage {state.workflowStageId}</span>
+            ) : null}
+            {state.observationId ? (
+              <span className="max-w-full truncate">observation {state.observationId}</span>
+            ) : null}
             {state.risk ? <span>{state.risk.replaceAll("-", " ")}</span> : null}
           </div>
+          {state.screenshotRevealToken ? (
+            <ComputerUseScreenshotReveal
+              environmentId={activeThreadEnvironmentId}
+              token={state.screenshotRevealToken}
+            />
+          ) : null}
         </div>
       </div>
       {active ? (
@@ -2753,6 +2771,44 @@ const ComputerUseWorkEntryRow = memo(function ComputerUseWorkEntryRow({
     </section>
   );
 });
+
+function ComputerUseScreenshotReveal(props: {
+  readonly environmentId: EnvironmentId;
+  readonly token: ComputerUseScreenshotRevealToken;
+}) {
+  const [reveal, setReveal] = useState(false);
+  const screenshot = useEnvironmentQuery(
+    reveal
+      ? serverEnvironment.computerUseScreenshot({
+          environmentId: props.environmentId,
+          input: { token: props.token },
+        })
+      : null,
+  );
+  if (!reveal) {
+    return (
+      <Button size="sm" variant="ghost-muted" className="mt-2" onClick={() => setReveal(true)}>
+        <EyeIcon className="size-3" />
+        Reveal screenshot
+      </Button>
+    );
+  }
+  if (screenshot.data?.screenshot) {
+    const image = screenshot.data.screenshot;
+    return (
+      <img
+        alt="Computer Use observation"
+        className="mt-2 max-h-72 w-auto max-w-full rounded-lg border border-border object-contain"
+        src={`data:${image.mimeType};base64,${image.base64}`}
+      />
+    );
+  }
+  return (
+    <p className="mt-2 text-[11px] text-muted-foreground">
+      {screenshot.error ?? (screenshot.isPending ? "Loading screenshot…" : "Screenshot expired.")}
+    </p>
+  );
+}
 
 const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;

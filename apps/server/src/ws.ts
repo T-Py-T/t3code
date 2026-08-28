@@ -75,6 +75,7 @@ import * as ComputerUseBroker from "./computerUse/ComputerUseBroker.ts";
 import * as ComputerUseControl from "./computerUse/ComputerUseControl.ts";
 import * as ComputerUseHistory from "./computerUse/ComputerUseHistory.ts";
 import * as ComputerUsePolicy from "./computerUse/ComputerUsePolicy.ts";
+import * as ComputerUseScreenshotStore from "./computerUse/ComputerUseScreenshotStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -472,6 +473,8 @@ const makeWsRpcLayer = (
       const computerUseControl = yield* ComputerUseControl.ComputerUseControl;
       const computerUseHistory = yield* ComputerUseHistory.ComputerUseHistory;
       const computerUsePolicy = yield* ComputerUsePolicy.ComputerUsePolicy;
+      const computerUseScreenshotStore =
+        yield* ComputerUseScreenshotStore.ComputerUseScreenshotStore;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
@@ -1872,12 +1875,30 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "computer-use" },
           ),
+        [WS_METHODS.computerUseRevealScreenshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.computerUseRevealScreenshot,
+            serverEnvironment.getEnvironmentId.pipe(
+              Effect.flatMap((environmentId) =>
+                computerUseScreenshotStore.reveal(environmentId, input.token),
+              ),
+              Effect.map((screenshot) =>
+                Option.isSome(screenshot) ? { screenshot: screenshot.value } : {},
+              ),
+            ),
+            { "rpc.aggregate": "computer-use" },
+          ),
         [WS_METHODS.computerUseClearHistory]: (_input) =>
           observeRpcEffect(
             WS_METHODS.computerUseClearHistory,
             serverEnvironment.getEnvironmentId.pipe(
-              Effect.flatMap((environmentId) => computerUseHistory.clear(environmentId)),
-              Effect.map((deleted) => ({ deleted })),
+              Effect.flatMap((environmentId) =>
+                Effect.all({
+                  deleted: computerUseHistory.clear(environmentId),
+                  clearedScreenshots: computerUseScreenshotStore.clear(environmentId),
+                }),
+              ),
+              Effect.map(({ deleted }) => ({ deleted })),
             ),
             { "rpc.aggregate": "computer-use" },
           ),

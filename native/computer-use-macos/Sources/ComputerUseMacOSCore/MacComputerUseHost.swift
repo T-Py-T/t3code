@@ -18,6 +18,8 @@ private struct TargetRecord: Sendable {
     let windowId: CGWindowID
     let bounds: CGRect
     let classification: TargetClassification
+    let securityDescriptors: [String]
+    let hasStructuredAccessibility: Bool
 
     var json: JSONValue {
         var object: [String: JSONValue] = [
@@ -42,6 +44,19 @@ private struct TargetRecord: Sendable {
         }
         return .object(object)
     }
+}
+
+private struct AccessibilitySecurityEvidence: Sendable {
+    let descriptors: [String]
+    let hasStructuredAccessibility: Bool
+}
+
+private struct AccessibilitySecurityEvidenceCacheEntry: Sendable {
+    let processId: pid_t
+    let bounds: CGRect
+    let windowTitle: String?
+    let checkedAt: TimeInterval
+    let evidence: AccessibilitySecurityEvidence
 }
 
 private struct ObservationRecord {
@@ -153,6 +168,57 @@ private func axValue(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? 
         return nil
     }
     return value
+}
+
+private func accessibilitySecurityEvidence(
+    processId: pid_t,
+    bounds: CGRect,
+    windowTitle: String?
+) -> (descriptors: [String], hasStructuredAccessibility: Bool) {
+    let application = AXUIElementCreateApplication(processId)
+    guard let windows = axValue(application, kAXWindowsAttribute) as? [AXUIElement],
+        let window = windows.first(where: { element in
+            guard let rawPosition = axValue(element, kAXPositionAttribute),
+                CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+                let rawSize = axValue(element, kAXSizeAttribute),
+                CFGetTypeID(rawSize) == AXValueGetTypeID()
+            else { return false }
+            var position = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(rawPosition as! AXValue, .cgPoint, &position),
+                AXValueGetValue(rawSize as! AXValue, .cgSize, &size)
+            else { return false }
+            return abs(position.x - bounds.minX) <= 2 && abs(position.y - bounds.minY) <= 2
+                && abs(size.width - bounds.width) <= 2
+                && abs(size.height - bounds.height) <= 2
+        })
+    else { return (windowTitle.map { [$0] } ?? [], false) }
+
+    var descriptors = windowTitle.map { [$0] } ?? []
+    var queue = [window]
+    var cursor = 0
+    var structured = false
+    let containerRoles: Set<String> = [
+        kAXWindowRole, kAXGroupRole, kAXScrollAreaRole, kAXSplitGroupRole,
+    ]
+    while cursor < queue.count, cursor < 128 {
+        let element = queue[cursor]
+        cursor += 1
+        if let role = string(axValue(element, kAXRoleAttribute)) {
+            descriptors.append(role)
+            if !containerRoles.contains(role) { structured = true }
+        }
+        if let subrole = string(axValue(element, kAXSubroleAttribute)) {
+            descriptors.append(subrole)
+        }
+        if let roleDescription = string(axValue(element, kAXRoleDescriptionAttribute)) {
+            descriptors.append(roleDescription)
+        }
+        if let children = axValue(element, kAXChildrenAttribute) as? [AXUIElement] {
+            queue.append(contentsOf: children.prefix(max(0, 128 - queue.count)))
+        }
+    }
+    return (Array(descriptors.prefix(128)), structured)
 }
 
 private func sha256Hex(_ data: Data) -> String {
@@ -424,6 +490,9 @@ public actor MacComputerUseHost {
     private var cancellations = LeaseCancellationRegistry()
     private let humanInputMonitor = HumanInputMonitor()
     private var executableIdentityCache: [String: (ExecutableIdentityCacheKey, String)] = [:]
+    private var accessibilitySecurityEvidenceCache: [
+        CGWindowID: AccessibilitySecurityEvidenceCacheEntry
+    ] = [:]
 
     public init() {}
 
@@ -528,15 +597,54 @@ public actor MacComputerUseHost {
             guard !TargetPolicy.isForbidden(bundleId: bundleId, processName: owner) else {
                 return nil
             }
+            let title = (window[kCGWindowName as String] as? String)?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            let now = Date().timeIntervalSinceReferenceDate
+            let securityEvidence: AccessibilitySecurityEvidence
+            if let cached = accessibilitySecurityEvidenceCache[windowId],
+                cached.processId == processId,
+                cached.bounds == bounds,
+                cached.windowTitle == title,
+                now - cached.checkedAt <= 1
+            {
+                securityEvidence = cached.evidence
+            } else {
+                let checked = accessibilitySecurityEvidence(
+                    processId: processId,
+                    bounds: bounds,
+                    windowTitle: title
+                )
+                securityEvidence = AccessibilitySecurityEvidence(
+                    descriptors: checked.descriptors,
+                    hasStructuredAccessibility: checked.hasStructuredAccessibility
+                )
+                accessibilitySecurityEvidenceCache[windowId] =
+                    AccessibilitySecurityEvidenceCacheEntry(
+                        processId: processId,
+                        bounds: bounds,
+                        windowTitle: title,
+                        checkedAt: now,
+                        evidence: securityEvidence
+                    )
+                if accessibilitySecurityEvidenceCache.count > 512 {
+                    accessibilitySecurityEvidenceCache.removeValue(
+                        forKey: accessibilitySecurityEvidenceCache.keys.first!
+                    )
+                }
+            }
+            guard !TargetPolicy.isForbidden(
+                bundleId: bundleId,
+                processName: owner,
+                surfaceDescriptors: securityEvidence.descriptors,
+                hasStructuredAccessibility: securityEvidence.hasStructuredAccessibility
+            ) else { return nil }
             let applicationId = bundleId ?? application?.executableURL?.path ?? owner
             guard
                 let executableIdentity = cachedExecutableIdentity(
                     executableURL: application?.executableURL
                 )
             else { return nil }
-            let title = (window[kCGWindowName as String] as? String)?.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
             let displayName = title.flatMap { $0.isEmpty ? nil : "\(owner) — \($0)" } ?? owner
             let classification = TargetClassifier.classify(
                 bundleId: bundleId,
@@ -551,7 +659,9 @@ public actor MacComputerUseHost {
                 processId: processId,
                 windowId: windowId,
                 bounds: bounds,
-                classification: classification
+                classification: classification,
+                securityDescriptors: securityEvidence.descriptors,
+                hasStructuredAccessibility: securityEvidence.hasStructuredAccessibility
             )
         }
     }
@@ -578,7 +688,11 @@ public actor MacComputerUseHost {
         }
         let app = NSRunningApplication(processIdentifier: target.processId)
         if TargetPolicy.isForbidden(
-            bundleId: app?.bundleIdentifier, processName: app?.localizedName ?? "")
+            bundleId: app?.bundleIdentifier,
+            processName: app?.localizedName ?? "",
+            surfaceDescriptors: target.securityDescriptors,
+            hasStructuredAccessibility: target.hasStructuredAccessibility
+        )
         {
             throw HostFailure.policyDenied
         }
@@ -971,6 +1085,7 @@ public actor MacComputerUseHost {
         guard let humanInputGeneration = humanInputMonitor.snapshot() else {
             throw HostFailure.permissionMissing("input-monitoring")
         }
+        try requireActive(request.leaseId, humanInputGeneration: humanInputGeneration)
         try await focus(target)
         try requireActive(request.leaseId, humanInputGeneration: humanInputGeneration)
         var completed = 0

@@ -195,6 +195,7 @@ public enum TargetPolicy {
         "com.github.wez.wezterm",
         "com.googlecode.iterm2",
         "com.mitchellh.ghostty",
+        "com.raphaelamorim.rio",
         "com.t3tools.t3code",
         "com.t3tools.t3code.dev",
         "dev.warp.warp-stable",
@@ -210,6 +211,7 @@ public enum TargetPolicy {
         "Hyper",
         "iTerm2",
         "kitty",
+        "Rio",
         "Warp",
         "WezTerm",
         "T3 Code",
@@ -217,13 +219,33 @@ public enum TargetPolicy {
         "T3 Code (Alpha)",
     ]
 
-    public static func isForbidden(bundleId: String?, processName: String) -> Bool {
+    private static let terminalMarkers: Set<String> = [
+        "terminal", "console", "shell", "cmd", "powershell", "pwsh", "rio",
+    ]
+
+    public static func isForbidden(
+        bundleId: String?,
+        processName: String,
+        surfaceDescriptors: [String] = [],
+        hasStructuredAccessibility: Bool = true
+    ) -> Bool {
         if let bundleId = bundleId?.lowercased(),
            forbiddenBundleIds.contains(bundleId) || bundleId.hasPrefix("com.t3tools.t3code.")
         {
             return true
         }
-        return forbiddenProcessNames.contains { $0.caseInsensitiveCompare(processName) == .orderedSame }
+        if forbiddenProcessNames.contains(where: {
+            $0.caseInsensitiveCompare(processName) == .orderedSame
+        }) {
+            return true
+        }
+        let identifiesTerminal = ([processName] + surfaceDescriptors).contains { descriptor in
+            let words = descriptor.lowercased().split(whereSeparator: {
+                !$0.isLetter && !$0.isNumber
+            })
+            return words.contains { terminalMarkers.contains(String($0)) }
+        }
+        return identifiesTerminal || !hasStructuredAccessibility
     }
 }
 

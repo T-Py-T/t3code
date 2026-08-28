@@ -1,8 +1,8 @@
 # T3 Computer Use specification
 
-> Status: experimental preview and product acceptance contract. The Computer Use setting is an
-> explicit containment boundary, not a general-availability or feature-complete claim. Release
-> signing and every remaining parity gate below must pass before that label is removed.
+> Status: feature-complete preview for the supported unlocked native-app and browser scope. It is
+> not a general-availability or exact ChatGPT-parity claim. Release signing, physical-platform
+> acceptance, Office add-ins, and unattended locked use remain explicit release extensions below.
 
 This document defines the feature-complete T3 Code Computer Use capability. It converts the verified
 gaps against ChatGPT Computer Use into buildable product requirements, module seams, security rules,
@@ -11,9 +11,10 @@ provider decisions, delivery slices, and release gates.
 The parity baseline is the official [ChatGPT Computer Use documentation][chatgpt-computer-use] and
 the [OpenAI computer-use tool guide][openai-computer-use]. The baseline includes macOS and Windows
 GUI control, app approvals, sensitive-action confirmation, remote direction, browser control,
-Office add-ins, locked use on macOS, stop/takeover, and the screenshot/action loop. T3 may improve
-the experience, but it must not call the feature complete while any required capability below is
-missing.
+Office integrations, locked use on macOS, stop/takeover, and the screenshot/action loop. The
+supported preview implements the complete unlocked native-app and browser workflow; Office add-ins,
+unattended locked use, and external-browser recording are documented parity extensions rather than
+silently implied capabilities.
 
 Normative words such as **must**, **must not**, **should**, and **may** describe implementation and
 release requirements.
@@ -40,7 +41,7 @@ The settings and timeline must describe these distinctions directly. In particul
 `office-accessibility` must not be presented as an Office add-in, and lock-transition safety must not
 be presented as unattended locked use.
 
-The preview must remain off by default and visibly labeled experimental on every settings surface.
+The preview must remain off by default and visibly labeled preview on every settings surface.
 It must not be enabled in a production release channel until all release gates in this document pass.
 
 ## Product definition
@@ -49,7 +50,7 @@ T3 Computer Use lets an agent inspect and operate graphical applications on the 
 T3 environment while the user observes, approves, pauses, stops, or takes over from any authorized
 T3 client.
 
-Feature complete means:
+The supported preview is feature complete when:
 
 - the operating system identifies a T3-owned signed process as the permission owner;
 - T3 can operate without ChatGPT, Codex Computer Use, or another vendor's desktop service running;
@@ -57,8 +58,11 @@ Feature complete means:
 - desktop, web, and mobile expose consistent status, approval, history, stop, and takeover controls;
 - native apps, browsers, and supported Office apps use the strongest available structured control
   route before falling back to visual coordinates;
-- macOS and Windows pass the platform acceptance suites;
-- macOS locked use passes its additional security gates.
+- macOS and Windows implement the same bounded action, cancellation, identity, and takeover
+  contracts for an unlocked interactive session.
+
+Exact ChatGPT parity additionally requires Office add-ins and unattended locked macOS use. General
+availability additionally requires the signed-artifact and physical-platform release gates.
 
 ## Goals
 
@@ -505,8 +509,9 @@ adapters. Each add-in must:
 - fall back to native visual control only when the user allows it;
 - report actions through the same thread card and history.
 
-Office add-ins are required for declared ChatGPT feature parity. They may ship after native control,
-but the product must remain labeled incomplete until they pass their conformance suite.
+Office add-ins are required for declared exact ChatGPT parity. Until they pass their conformance
+suite, settings and target metadata must describe the implemented native accessibility route and
+must not imply add-in support.
 
 ## Provider transport decisions
 
@@ -618,7 +623,8 @@ Requirements:
 
 ## Acceptance matrix
 
-The feature is complete only when every required row passes on a signed release artifact.
+General availability requires every release row below to pass on a signed artifact. Rows marked as
+parity extensions do not make the supported preview's unlocked workflow partial.
 
 | Area                 | Required acceptance evidence                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -685,7 +691,7 @@ helper behavior.
 ## Delivery slices
 
 These slices are ordered by dependency. Each slice must leave normal provider chat usable and keep
-unfinished capability behind an explicit experimental flag.
+pre-GA capability behind the explicit preview flag.
 
 1. **Contracts and fake host.** Add domain schemas, broker, policy interface, fake host, tagged
    failures, authorization scopes, and deterministic conformance tests.
@@ -703,7 +709,7 @@ unfinished capability behind an explicit experimental flag.
    seam.
 8. **Locked use and hardening.** Ship the authorization plug-in only after independent security
    review, recovery tests, signed upgrade/uninstall tests, and remote active-turn verification.
-9. **Feature-complete gate.** Run the entire acceptance matrix, publish supported platform/provider
+9. **General-availability gate.** Run the entire acceptance matrix, publish supported platform/provider
    versions, remove misleading bridge wording, and graduate the feature flag.
 
 ## Release decisions still required
@@ -714,12 +720,12 @@ unfinished capability behind an explicit experimental flag.
    installed companion is also required for CLI-only environments. Either route must prevent remote
    host registration.
 3. Choose the Office add-in distribution and authentication model.
-4. Schedule an independent security review before locked use can leave experimental status.
+4. Schedule an independent security review before unattended locked use can join the supported scope.
 
 ## Current bridge disposition
 
-The OpenAI Computer Use bridge remains useful as a comparison harness while the native host is
-experimental. It stays labeled as an OpenAI bridge, defaults off, and is separate from the shared
+The OpenAI Computer Use bridge remains useful as a comparison harness while the native host is in
+preview. It stays labeled as an OpenAI bridge, defaults off, and is separate from the shared
 T3-owned toolkit used by Codex, Pi, and Atomic. It does not share persistent grants with T3-owned
 mode or count toward a T3 ownership acceptance gate. Remove it only after the T3-owned host passes
 the same integrated scenarios or when maintaining both routes creates unsafe ambiguity.

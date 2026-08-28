@@ -50,6 +50,9 @@ describe("RPC authorization scopes", () => {
       AuthComputerReadScope,
     );
     expect(requiredScopeForRpcMethod(WS_METHODS.computerUseGetHistory)).toBe(AuthComputerReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.computerUseRevealScreenshot)).toBe(
+      AuthComputerReadScope,
+    );
     expect(requiredScopeForRpcMethod(WS_METHODS.computerUseClearHistory)).toBe(
       AuthComputerOperateScope,
     );

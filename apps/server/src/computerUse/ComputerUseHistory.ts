@@ -23,6 +23,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -104,6 +105,8 @@ export const makeWithPersistence = (persistence?: ComputerUseHistoryPersistence)
       sequence: restored.length,
     });
     const changes = yield* PubSub.unbounded<ComputerUseHistoryEntry>();
+    const projectionQueue = yield* Queue.unbounded<ComputerUseHistoryEntry>();
+    yield* Queue.offerAll(projectionQueue, restored);
 
     const append: ComputerUseHistory["Service"]["append"] = Effect.fn("ComputerUseHistory.append")(
       (input) =>
@@ -133,6 +136,7 @@ export const makeWithPersistence = (persistence?: ComputerUseHistoryPersistence)
             const entries = retainedEntries([...current.entries, nextEntry], now);
             if (persistence) yield* persistence.save(entries);
             yield* PubSub.publish(changes, nextEntry);
+            yield* Queue.offer(projectionQueue, nextEntry);
             return [nextEntry, { entries, sequence: current.sequence + 1 }] as const;
           }),
         ),
@@ -164,20 +168,12 @@ export const makeWithPersistence = (persistence?: ComputerUseHistoryPersistence)
         ),
     );
 
-    const projectionChanges = Stream.unwrapScoped(
-      Effect.gen(function* () {
-        const subscription = yield* PubSub.subscribe(changes);
-        const snapshot = yield* SynchronizedRef.get(state);
-        return Stream.concat(Stream.fromIterable(snapshot.entries), Stream.fromQueue(subscription));
-      }),
-    );
-
     return ComputerUseHistory.of({
       append,
       list,
       clear,
       changes: Stream.fromPubSub(changes),
-      projectionChanges,
+      projectionChanges: Stream.fromQueue(projectionQueue),
     });
   });
 

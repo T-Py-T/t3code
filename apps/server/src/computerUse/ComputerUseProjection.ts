@@ -68,9 +68,9 @@ export const projectComputerUseHistoryChanges = <E>(
     Stream.runForEach((entry) => {
       const command = historyEntryToActivityCommand(entry);
       if (command === null) return Effect.void;
-      return dispatch(command).pipe(
+      return Effect.suspend(() => dispatch(command)).pipe(
         Effect.asVoid,
-        Effect.tapErrorCause((cause) =>
+        Effect.tapCause((cause) =>
           Effect.logError("Could not project a Computer Use history entry.", {
             historyEntryId: entry.entryId,
             cause,

@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
@@ -120,4 +121,47 @@ it.effect("replays restored history to the durable projection stream", () =>
       expect([...replayed]).toEqual([restoredEntry]);
     }),
   ),
+);
+
+it.effect("streams newly appended history from an empty durable projection stream", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const history = yield* ComputerUseHistory.make;
+      const replay = yield* history.projectionChanges.pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      const appended = yield* history.append(appendInput);
+
+      expect([...(yield* Fiber.join(replay))]).toEqual([appended]);
+    }),
+  ),
+);
+
+it.effect("keeps the durable projection stream alive for the acquired history layer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "computer-use-history-" });
+      const configLayer = ServerConfig.layerTest(process.cwd(), baseDir).pipe(
+        Layer.provide(NodeServices.layer),
+      );
+      const services = yield* Layer.build(
+        ComputerUseHistory.layer.pipe(
+          Layer.provide(configLayer),
+          Layer.provide(NodeServices.layer),
+        ),
+      );
+      const history = yield* ComputerUseHistory.ComputerUseHistory.pipe(Effect.provide(services));
+      const replay = yield* history.projectionChanges.pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      const appended = yield* history.append(appendInput);
+
+      expect([...(yield* Fiber.join(replay))]).toEqual([appended]);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
 );

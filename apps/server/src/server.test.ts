@@ -121,6 +121,7 @@ import {
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -446,6 +447,9 @@ const buildAppUnderTest = (options?: {
     computerUseHistory?: Partial<ComputerUseHistory.ComputerUseHistory["Service"]>;
     computerUsePolicy?: Partial<ComputerUsePolicy.ComputerUsePolicy["Service"]>;
     computerUseToolkit?: Partial<ComputerUseToolkit.ComputerUseToolkit["Service"]>;
+    previewAutomationBroker?: Partial<
+      PreviewAutomationBroker.PreviewAutomationBroker["Service"]
+    >;
   };
 }) =>
   Effect.gen(function* () {
@@ -966,6 +970,19 @@ const buildAppUnderTest = (options?: {
           activeControlFor: () => Effect.succeed(undefined),
           stopEnvironment: () => Effect.succeed(0),
           ...options?.layers?.computerUseBroker,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({
+          connect: () => Effect.succeed(Stream.empty),
+          focusHost: () => Effect.void,
+          respond: () => Effect.void,
+          invoke: () => Effect.die("Preview automation invocation is not stubbed in this test"),
+          activeControlFor: () => Effect.succeed(undefined),
+          stopEnvironment: () => Effect.succeed(0),
+          stopTurn: () => Effect.void,
+          stopThread: () => Effect.void,
+          ...options?.layers?.previewAutomationBroker,
         }),
       ),
       Layer.provide(

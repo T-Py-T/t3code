@@ -170,6 +170,11 @@ private func signingTeamId(executableURL: URL?) -> String {
 
 private func targetId(windowId: CGWindowID) -> String { "macos-window:\(windowId)" }
 
+func macOsSessionIsLocked(_ session: [String: Any]?) -> Bool {
+    guard let session else { return true }
+    return session["CGSSessionScreenIsLocked"] as? Bool ?? false
+}
+
 private func mouseEvent(
     type: CGEventType,
     point: CGPoint,
@@ -328,10 +333,7 @@ public actor MacComputerUseHost {
     }
 
     private func screenIsLocked() -> Bool {
-        guard let dictionary = CGSessionCopyCurrentDictionary() as? [String: Any] else {
-            return false
-        }
-        return dictionary["CGSSessionScreenIsLocked"] as? Bool ?? false
+        macOsSessionIsLocked(CGSessionCopyCurrentDictionary() as? [String: Any])
     }
 
     private func discoverTargets() -> [TargetRecord] {

@@ -23,6 +23,25 @@ it("classifies pointer and keyboard actions on the server instead of trusting th
       actions: [{ _tag: "keypress", key: "Enter", modifiers: [], phase: "press" }],
     }),
   ).toBe("external-side-effect");
+
+  expect(classifyComputerUseBatch({ actions: [{ _tag: "click", x: 10, y: 20 }] }, "inspect")).toBe(
+    "external-side-effect",
+  );
+  expect(
+    classifyComputerUseBatch(
+      { actions: [{ _tag: "text-entry", text: "account number" }] },
+      "sensitive-data",
+    ),
+  ).toBe("sensitive-data");
+  expect(
+    classifyComputerUseBatch(
+      { actions: [{ _tag: "click", x: 10, y: 20 }] },
+      "destructive-or-privileged",
+    ),
+  ).toBe("destructive-or-privileged");
+  expect(classifyComputerUseBatch({ actions: [{ _tag: "move", x: 10, y: 20 }] }, "forbidden")).toBe(
+    "forbidden",
+  );
 });
 
 it.effect("requires an active provider turn before exposing a Computer Use scope", () => {

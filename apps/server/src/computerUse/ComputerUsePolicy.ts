@@ -93,20 +93,45 @@ export interface ComputerUsePolicyPersistence {
 
 const FORBIDDEN_APPLICATION_IDS = new Set([
   "com.apple.terminal",
+  "com.github.wez.wezterm",
+  "com.googlecode.iterm2",
+  "com.mitchellh.ghostty",
+  "dev.warp.warp-stable",
+  "net.kovidgoyal.kitty",
+  "org.alacritty",
+  "alacritty.exe",
   "cmd.exe",
+  "cmder.exe",
+  "conemu.exe",
+  "conemu64.exe",
+  "conhost.exe",
+  "hyper.exe",
+  "kitty.exe",
+  "mintty.exe",
   "microsoft.windowsterminal_8wekyb3d8bbwe",
+  "openconsole.exe",
   "powershell.exe",
   "pwsh.exe",
+  "tabby.exe",
+  "wezterm-gui.exe",
   "wt.exe",
 ]);
-const FORBIDDEN_APPLICATION_PREFIXES = ["com.t3tools.t3code"];
+const FORBIDDEN_APPLICATION_PREFIXES = [
+  "com.t3tools.t3code",
+  "microsoft.windowsterminal_8wekyb3d8bbwe",
+];
 
 const isForbiddenApplicationId = (applicationId: string): boolean => {
   const normalized = applicationId.toLowerCase();
+  const executableName = normalized.split(/[\\/]/).at(-1) ?? normalized;
   return (
     FORBIDDEN_APPLICATION_IDS.has(normalized) ||
+    FORBIDDEN_APPLICATION_IDS.has(executableName) ||
     FORBIDDEN_APPLICATION_PREFIXES.some(
-      (prefix) => normalized === prefix || normalized.startsWith(`${prefix}.`),
+      (prefix) =>
+        normalized === prefix ||
+        normalized.startsWith(`${prefix}.`) ||
+        normalized.startsWith(`${prefix}!`),
     )
   );
 };

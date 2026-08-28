@@ -63,6 +63,7 @@ export class PreviewAutomationBroker extends Context.Service<
     ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
     readonly stopEnvironment: (environmentId: EnvironmentId) => Effect.Effect<number>;
     readonly stopTurn: (threadId: ThreadId, turnId: TurnId) => Effect.Effect<void>;
+    readonly stopThread: (threadId: ThreadId) => Effect.Effect<void>;
   }
 >()("t3/mcp/PreviewAutomationBroker") {}
 
@@ -660,6 +661,10 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     ),
   );
 
+  const stopThread: PreviewAutomationBroker["Service"]["stopThread"] = Effect.fn(
+    "PreviewAutomationBroker.stopThread",
+  )((threadId) => stopMatching((scope) => scope.threadId === threadId).pipe(Effect.asVoid));
+
   return PreviewAutomationBroker.of({
     connect,
     focusHost,
@@ -668,6 +673,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     activeControlFor,
     stopEnvironment,
     stopTurn,
+    stopThread,
   });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
@@ -691,5 +697,8 @@ export const stopActivePreviewAutomationTurn = (
   threadId: ThreadId,
   turnId: TurnId,
 ): Effect.Effect<void> => activePreviewAutomationBroker?.stopTurn(threadId, turnId) ?? Effect.void;
+
+export const stopActivePreviewAutomationThread = (threadId: ThreadId): Effect.Effect<void> =>
+  activePreviewAutomationBroker?.stopThread(threadId) ?? Effect.void;
 
 export const layer = Layer.effect(PreviewAutomationBroker, makeActive);

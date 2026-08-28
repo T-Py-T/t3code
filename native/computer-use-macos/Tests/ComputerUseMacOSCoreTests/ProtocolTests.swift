@@ -25,6 +25,8 @@ import Testing
 
 @Test func forbiddenTargetsFailClosed() {
     #expect(TargetPolicy.isForbidden(bundleId: "com.apple.Terminal", processName: "Terminal"))
+    #expect(TargetPolicy.isForbidden(bundleId: "com.googlecode.iterm2", processName: "iTerm2"))
+    #expect(TargetPolicy.isForbidden(bundleId: "com.mitchellh.ghostty", processName: "Ghostty"))
     #expect(TargetPolicy.isForbidden(bundleId: "com.t3tools.t3code.dev", processName: "T3 Code"))
     #expect(
         TargetPolicy.isForbidden(
@@ -85,4 +87,10 @@ import Testing
     cancellations.cancel("lease-2")
     #expect(cancellations.contains("lease-1"))
     #expect(cancellations.contains("lease-2"))
+}
+
+@Test func unreadableSessionStateFailsClosedAsLocked() {
+    #expect(macOsSessionIsLocked(nil))
+    #expect(macOsSessionIsLocked([:]) == false)
+    #expect(macOsSessionIsLocked(["CGSSessionScreenIsLocked": true]))
 }

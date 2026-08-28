@@ -190,25 +190,38 @@ public struct HostResponse: Codable, Equatable, Sendable {
 
 public enum TargetPolicy {
     private static let forbiddenBundleIds: Set<String> = [
-        "com.apple.Terminal",
+        "com.apple.terminal",
+        "com.github.wez.wezterm",
+        "com.googlecode.iterm2",
+        "com.mitchellh.ghostty",
         "com.t3tools.t3code",
         "com.t3tools.t3code.dev",
+        "dev.warp.warp-stable",
+        "net.kovidgoyal.kitty",
+        "org.alacritty",
     ]
 
     private static let forbiddenProcessNames: Set<String> = [
         "Terminal",
+        "Alacritty",
+        "Ghostty",
+        "Hyper",
+        "iTerm2",
+        "kitty",
+        "Warp",
+        "WezTerm",
         "T3 Code",
         "T3 Code (Dev)",
         "T3 Code (Alpha)",
     ]
 
     public static func isForbidden(bundleId: String?, processName: String) -> Bool {
-        if let bundleId,
+        if let bundleId = bundleId?.lowercased(),
            forbiddenBundleIds.contains(bundleId) || bundleId.hasPrefix("com.t3tools.t3code.")
         {
             return true
         }
-        return forbiddenProcessNames.contains(processName)
+        return forbiddenProcessNames.contains { $0.caseInsensitiveCompare(processName) == .orderedSame }
     }
 }
 

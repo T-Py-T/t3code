@@ -1720,11 +1720,113 @@ const releasedComputerUseTurns: Array<{
   readonly turnId: TurnId;
   readonly reason: ComputerUseStopReason;
 }> = [];
+const releasedComputerUseThreads: Array<{
+  readonly threadId: ThreadId;
+  readonly reason: ComputerUseStopReason;
+}> = [];
 const fanout = makeProviderServiceLayer({
   finishComputerUseTurn: (threadId, turnId, reason) =>
     Effect.sync(() => void releasedComputerUseTurns.push({ threadId, turnId, reason })),
+  finishComputerUseThread: (threadId, reason) =>
+    Effect.sync(() => void releasedComputerUseThreads.push({ threadId, reason })),
 });
 fanout.layer("ProviderServiceLive fanout", (it) => {
+  it.effect("releases stale Computer Use when an existing provider session restarts", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-restart-computer-use");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const releasesBeforeRestart = releasedComputerUseThreads.length;
+
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "approval-required",
+      });
+
+      assert.equal(releasedComputerUseThreads.length, releasesBeforeRestart + 1);
+      assert.deepEqual(releasedComputerUseThreads.at(-1), {
+        threadId,
+        reason: "interrupted",
+      });
+    }),
+  );
+
+  it.effect(
+    "releases Computer Use when a provider session stops without a terminal turn event",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-stop-computer-use");
+        yield* provider.startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "use the computer", attachments: [] });
+
+        yield* provider.stopSession({ threadId });
+
+        assert.deepEqual(releasedComputerUseThreads.at(-1), {
+          threadId,
+          reason: "interrupted",
+        });
+      }),
+  );
+
+  it.effect("releases Computer Use even when the provider session fails to stop", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-stop-computer-use-failure");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({ threadId, input: "use the computer", attachments: [] });
+      fanout.codex.stopSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "stopSession",
+            detail: "simulated stop failure",
+          }),
+        ),
+      );
+
+      const result = yield* provider.stopSession({ threadId }).pipe(Effect.exit);
+
+      assert.equal(Exit.isFailure(result), true);
+      assert.deepEqual(releasedComputerUseThreads.at(-1), {
+        threadId,
+        reason: "interrupted",
+      });
+    }),
+  );
+
+  it.effect("releases Computer Use even when the provider session cannot be routed", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-unroutable-computer-use");
+
+      const result = yield* provider.stopSession({ threadId }).pipe(Effect.exit);
+
+      assert.equal(Exit.isFailure(result), true);
+      assert.deepEqual(releasedComputerUseThreads.at(-1), {
+        threadId,
+        reason: "interrupted",
+      });
+    }),
+  );
+
   it.effect("fans out adapter turn completion events", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

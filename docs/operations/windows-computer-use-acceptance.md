@@ -107,6 +107,14 @@ The deterministic local model used in that provider test selected a fixed tool s
 real Pi executable, T3 Pi extension, MCP transport, policy, UI, broker, signed helper, UI Automation,
 capture, and native input paths all ran normally.
 
+The review-hardening rerun rebuilt the helper from the branch after expanding the terminal deny
+list. .NET formatting, build, all eight native tests, ARM64 publication, package probes, and helper
+attachment passed. The disposable development-signed helper had SHA-256
+`639EB6EFAF24B948ECB244E10E836371FF2FE92D074116A9A7FEEFFB86D95F38`; a clean interactive Notepad
+run completed five actions, returned distinct pre/post observation IDs, exposed 44 accessibility
+elements, and captured a 26,092-byte PNG. This hash documents only that UTM run and is not a release
+identity.
+
 ## Remaining release gates
 
 UTM is required development evidence, not the complete Windows release gate. Before declaring the

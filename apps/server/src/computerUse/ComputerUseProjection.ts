@@ -58,14 +58,30 @@ export const historyEntryToActivityCommand = (
   };
 };
 
+export const projectComputerUseHistoryChanges = <E>(
+  changes: Stream.Stream<ComputerUseHistoryEntry>,
+  dispatch: (command: OrchestrationCommand) => Effect.Effect<unknown, E>,
+): Effect.Effect<void> =>
+  changes.pipe(
+    Stream.runForEach((entry) => {
+      const command = historyEntryToActivityCommand(entry);
+      if (command === null) return Effect.void;
+      return dispatch(command).pipe(
+        Effect.asVoid,
+        Effect.catchCause((cause) =>
+          Effect.logError("Could not project a Computer Use history entry.", {
+            historyEntryId: entry.entryId,
+            cause,
+          }),
+        ),
+      );
+    }),
+  );
+
 const run = Effect.gen(function* ComputerUseProjectionRun() {
   const history = yield* ComputerUseHistory;
   const orchestration = yield* OrchestrationEngineService;
-  yield* history.changes.pipe(
-    Stream.runForEach((entry) => {
-      const command = historyEntryToActivityCommand(entry);
-      return command === null ? Effect.void : orchestration.dispatch(command).pipe(Effect.asVoid);
-    }),
+  yield* projectComputerUseHistoryChanges(history.changes, orchestration.dispatch).pipe(
     Effect.catchCause((cause) =>
       Effect.logError("Computer Use activity projection stopped.", { cause }),
     ),

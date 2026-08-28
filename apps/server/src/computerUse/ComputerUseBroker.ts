@@ -67,6 +67,11 @@ export interface ComputerUseStopTurnInput {
   readonly reason: ComputerUseStopReason;
 }
 
+export interface ComputerUseStopThreadInput {
+  readonly threadId: ThreadId;
+  readonly reason: ComputerUseStopReason;
+}
+
 export class ComputerUseBroker extends Context.Service<
   ComputerUseBroker,
   {
@@ -83,6 +88,7 @@ export class ComputerUseBroker extends Context.Service<
     ) => Effect.Effect<A, ComputerUseBrokerError>;
     readonly stop: (input: ComputerUseStopInput) => Effect.Effect<void>;
     readonly stopTurn: (input: ComputerUseStopTurnInput) => Effect.Effect<void>;
+    readonly stopThread: (input: ComputerUseStopThreadInput) => Effect.Effect<void>;
     readonly activeControlFor: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<ComputerUseActiveControl | undefined>;
@@ -555,6 +561,12 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     ).pipe(Effect.asVoid),
   );
 
+  const stopThread: ComputerUseBroker["Service"]["stopThread"] = Effect.fn(
+    "ComputerUseBroker.stopThread",
+  )(({ threadId, reason }) =>
+    stopMatching((lease) => lease.scope.threadId === threadId, reason).pipe(Effect.asVoid),
+  );
+
   const activeControlFor: ComputerUseBroker["Service"]["activeControlFor"] = Effect.fn(
     "ComputerUseBroker.activeControlFor",
   )((environmentId) =>
@@ -585,6 +597,7 @@ export const make = Effect.gen(function* ComputerUseBrokerMake() {
     invoke,
     stop,
     stopTurn,
+    stopThread,
     activeControlFor,
     stopEnvironment,
   });
@@ -612,5 +625,10 @@ export const stopActiveComputerUseTurn = (
   reason: ComputerUseStopReason,
 ): Effect.Effect<void> =>
   activeComputerUseBroker?.stopTurn({ threadId, turnId, reason }) ?? Effect.void;
+
+export const stopActiveComputerUseThread = (
+  threadId: ThreadId,
+  reason: ComputerUseStopReason,
+): Effect.Effect<void> => activeComputerUseBroker?.stopThread({ threadId, reason }) ?? Effect.void;
 
 export const layer = Layer.effect(ComputerUseBroker, makeActive);

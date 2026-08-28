@@ -84,6 +84,7 @@ export interface ProviderServiceLiveOptions {
   readonly startMcpTurn?: typeof McpSessionRegistry.startActiveMcpTurn;
   readonly finishMcpTurn?: typeof McpSessionRegistry.finishActiveMcpTurn;
   readonly finishComputerUseTurn?: typeof ComputerUseBroker.stopActiveComputerUseTurn;
+  readonly finishComputerUseThread?: typeof ComputerUseBroker.stopActiveComputerUseThread;
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
@@ -247,6 +248,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ComputerUseBroker.stopActiveComputerUseTurn(threadId, turnId, reason),
         PreviewAutomationBroker.stopActivePreviewAutomationTurn(threadId, turnId),
       ]).pipe(Effect.asVoid));
+  const finishComputerUseThread =
+    options?.finishComputerUseThread ??
+    ((threadId, reason) =>
+      Effect.all([
+        ComputerUseBroker.stopActiveComputerUseThread(threadId, reason),
+        PreviewAutomationBroker.stopActivePreviewAutomationThread(threadId),
+      ]).pipe(Effect.asVoid));
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   /**
@@ -310,8 +318,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       return credential;
     });
   const clearMcpSession = (threadId: ThreadId) =>
-    McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
-      Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+    revokeMcpCredential(threadId).pipe(
+      Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+    );
+  const releaseProviderThreadResources = (threadId: ThreadId) =>
+    clearMcpSession(threadId).pipe(
+      Effect.ensuring(finishComputerUseThread(threadId, "interrupted")),
     );
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -702,6 +714,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        if (persistedBinding !== undefined) {
+          // A session restart can replace the adapter process without a
+          // terminal runtime event. Release any old native/browser lease
+          // before minting credentials for the replacement session.
+          yield* finishComputerUseThread(threadId, "interrupted");
+        }
         yield* prepareMcpSession(threadId, resolvedInstanceId, input.runtimeMode);
         const session = yield* adapter
           .startSession({
@@ -1009,10 +1027,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.kind": routed.adapter.provider,
           "provider.thread_id": input.threadId,
         });
-        if (routed.isActive) {
-          yield* routed.adapter.stopSession(routed.threadId);
-        }
-        yield* clearMcpSession(input.threadId);
+        if (routed.isActive) yield* routed.adapter.stopSession(routed.threadId);
         yield* directory.upsert({
           threadId: input.threadId,
           provider: routed.adapter.provider,
@@ -1026,6 +1041,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: routed.adapter.provider,
         });
       }).pipe(
+        Effect.ensuring(releaseProviderThreadResources(input.threadId)),
         withMetrics({
           counter: providerSessionsTotal,
           outcomeAttributes: () =>

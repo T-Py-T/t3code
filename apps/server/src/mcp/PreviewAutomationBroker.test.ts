@@ -328,6 +328,32 @@ it.effect("cancels in-flight browser work and releases its control lease", () =>
   ),
 );
 
+it.effect("releases browser control when its provider thread stops", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const events = yield* broker.connect(makeHost());
+      yield* Stream.runForEach(events, (event) =>
+        event.type !== "request"
+          ? Effect.void
+          : broker.respond({
+              clientId: "client-1",
+              connectionId: event.connectionId,
+              requestId: event.request.requestId,
+              ok: true,
+              result: "ready",
+            }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("ready");
+      yield* broker.stopThread(scope.threadId);
+
+      expect(yield* broker.activeControlFor(scope.environmentId)).toBeUndefined();
+    }),
+  ),
+);
+
 it.effect("preserves bounded request and remote selector diagnostics", () => {
   const locator = "role=button[name='request-secret']";
   const remoteMessage = "Unexpected token near remote-secret.";

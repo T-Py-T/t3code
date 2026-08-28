@@ -69,6 +69,9 @@ it("registers governed native and semantic browser tools in bare Pi and forwards
   };
   const tools: Array<{
     readonly name: string;
+    readonly parameters: {
+      readonly properties?: Record<string, unknown>;
+    };
     readonly execute: (...args: Array<unknown>) => Promise<unknown>;
   }> = [];
   extension.default({ registerTool: (tool) => tools.push(tool as (typeof tools)[number]) });
@@ -94,6 +97,18 @@ it("registers governed native and semantic browser tools in bare Pi and forwards
     "preview_recording_start",
     "preview_recording_stop",
   ]);
+  expect(tools.find((tool) => tool.name === "computer_act")?.parameters.properties).toMatchObject({
+    risk: {
+      enum: [
+        "inspect",
+        "reversible-local",
+        "external-side-effect",
+        "sensitive-data",
+        "destructive-or-privileged",
+        "forbidden",
+      ],
+    },
+  });
   const status = tools[0];
   expect(status).toBeDefined();
   await expect(status!.execute("call-1", {}, new AbortController().signal)).resolves.toMatchObject({

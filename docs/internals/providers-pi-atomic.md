@@ -142,7 +142,14 @@ trust switch.
 The extension registers the same `preview_*` and `computer_*` tools for Pi and Atomic that Codex
 receives from T3's local MCP server. Disabled capability families are not registered. Tool calls use
 the streamable HTTP MCP endpoint; interruption and session cleanup revoke the credential and stop
-active Computer Use and browser work for the turn.
+active Computer Use and browser work for the turn. Session stop and restart additionally revoke the
+thread credential and release both native and browser leases even when the CLI exits without a
+terminal event.
+
+For `computer_act`, the extension can declare the intended semantic risk when it is more serious
+than the primitive action suggests. The server retains a conservative action-based floor and uses
+the higher classification, so Pi or Atomic can trigger sensitive-data confirmation, takeover, or a
+forbidden-action denial but cannot reduce protection.
 
 Pi's UI callback is also the approval transport for this toolkit. The extension renders a policy
 boundary with `ctx.ui.select`; the shared adapter recognizes its bounded T3 approval marker, projects

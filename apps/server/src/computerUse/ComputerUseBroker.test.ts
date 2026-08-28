@@ -201,6 +201,33 @@ it.effect("releases a completed turn so the next provider can acquire control", 
   ),
 );
 
+it.effect("releases every native control lease owned by a stopped thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(host));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          hostId: host.hostId,
+          connectionId: request.connectionId,
+          leaseId: request.leaseId,
+          requestId: request.requestId,
+          ok: true,
+          result: "observed",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke({ scope, operation: "observe", targetId, input: {} })).toBe(
+        "observed",
+      );
+      yield* broker.stopThread({ threadId: scope.threadId, reason: "interrupted" });
+
+      expect(yield* broker.activeControlFor(environmentId)).toBeUndefined();
+    }),
+  ),
+);
+
 it.effect("reports and stops the active controller for an environment", () =>
   Effect.scoped(
     Effect.gen(function* () {

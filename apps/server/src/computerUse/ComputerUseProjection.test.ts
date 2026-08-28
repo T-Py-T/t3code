@@ -8,8 +8,13 @@ import {
   TurnId,
   type ComputerUseHistoryEntry,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
 
-import { historyEntryToActivityCommand } from "./ComputerUseProjection.ts";
+import {
+  historyEntryToActivityCommand,
+  projectComputerUseHistoryChanges,
+} from "./ComputerUseProjection.ts";
 
 const entry: ComputerUseHistoryEntry = {
   entryId: ComputerUseHistoryEntryId.make("history-1"),
@@ -55,3 +60,26 @@ it("does not project environment-only audit rows into an unrelated thread", () =
     null,
   );
 });
+
+it.effect("continues projecting after one history entry fails to dispatch", () =>
+  Effect.gen(function* () {
+    const attempted: string[] = [];
+    yield* projectComputerUseHistoryChanges(
+      Stream.fromIterable([
+        entry,
+        { ...entry, entryId: ComputerUseHistoryEntryId.make("history-2"), summary: "Recovered." },
+      ]),
+      (command) => {
+        if (command.type !== "thread.activity.append") {
+          return Effect.die(new Error(`Unexpected command: ${command.type}`));
+        }
+        attempted.push(command.activity.summary);
+        return attempted.length === 1
+          ? Effect.fail("simulated dispatch failure" as const)
+          : Effect.void;
+      },
+    );
+
+    expect(attempted).toEqual(["Acting in TextEdit.", "Recovered."]);
+  }),
+);

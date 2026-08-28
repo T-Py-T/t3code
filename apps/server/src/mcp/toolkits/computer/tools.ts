@@ -56,6 +56,7 @@ const ComputerUseActInput = Schema.Struct({
   targetId: ComputerUseTargetId,
   observationId: ComputerUseObservationId,
   actions: ComputerUseActionBatch.fields.actions,
+  risk: Schema.optional(ComputerUseActionRisk),
 });
 
 const EmptyInput = Schema.Struct({});
@@ -110,7 +111,7 @@ export const ComputerObserveTool = nativeComputerTool(
 export const ComputerActTool = nativeComputerTool(
   Tool.make("computer_act", {
     description:
-      "Perform a bounded action batch against one exact target and observation. The server classifies risk; app grants and point-of-risk confirmations cannot be bypassed by tool input. Returns a fresh observation.",
+      "Perform a bounded action batch against one exact target and observation. Set risk to the intended semantic consequence when it is sensitive, destructive, privileged, or forbidden. The server enforces its own risk floor, so tool input can raise but never lower protection. Returns a fresh observation.",
     parameters: ComputerUseActInput,
     success: Schema.Union([ComputerUseActResult, ComputerUsePolicyBoundaryResult]),
     failure: ComputerUseFailure,

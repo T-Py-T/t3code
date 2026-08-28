@@ -129,6 +129,10 @@ name the observation they were derived from so stale actions can be rejected.
 
 An ordered list of UI actions applied to one target and one observation. The host stops at the first
 failure or policy boundary, reports completed actions, and returns a fresh observation.
+Primitive pointer and keyboard actions establish a server-owned minimum risk. A provider may also
+declare the intended semantic risk of the operation so sensitive, destructive, privileged, or
+forbidden intent receives stronger protection, but that declaration can never lower the server
+minimum.
 
 ### App grant
 
@@ -395,6 +399,11 @@ the same environment label.
 
 T3 must classify the intended effect before execution.
 
+The native tool accepts an optional semantic risk declaration because coordinates alone cannot
+distinguish, for example, a harmless click from confirming a financial transaction. T3 compares the
+declaration with its own primitive-action floor and enforces the higher class. Omitting or
+understating the declaration never weakens the floor.
+
 | Class                     | Examples                                                                                       | Required behavior                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | Inspect                   | Read visible UI, take a screenshot, inspect accessibility state                                | App grant only                                                |
@@ -450,6 +459,10 @@ Computer Use approval scope can answer it.
 Stop interrupts the action batch and ends the lease. Takeover additionally releases all synthetic
 input, foregrounds the target when possible, and prevents the agent from resuming until the user
 explicitly starts a new lease.
+
+Provider session stop and restart are also hard lease boundaries. T3 revokes the thread-scoped MCP
+credential and releases native and browser control even if an adapter fails to emit a terminal turn
+event or its stop request fails.
 
 On a remote client, **Take over** revokes the agent lease and makes the target human-only; it does
 not create an implicit remote-desktop input channel. The UI must say when physical interaction is

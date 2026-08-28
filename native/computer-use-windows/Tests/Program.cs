@@ -70,6 +70,8 @@ static void ProtectedTargets()
     Assert(TargetPolicy.IsForbidden(@"C:\Windows\System32\cmd.exe", "Command Prompt"));
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\PowerShell\7\pwsh.exe", "PowerShell"));
     Assert(TargetPolicy.IsForbidden(@"C:\Program Files\T3 Code\T3Code.exe", "T3 Code"));
+    Assert(TargetPolicy.IsForbidden(@"C:\Program Files\WezTerm\wezterm-gui.exe", "wezterm-gui.exe"));
+    Assert(TargetPolicy.IsForbidden(@"C:\Program Files\Alacritty\alacritty.exe", "alacritty.exe"));
     Assert(!TargetPolicy.IsForbidden(@"C:\Windows\System32\notepad.exe", "Notepad"));
 }
 

@@ -15,10 +15,14 @@ import { ComputerToolkit } from "./tools.ts";
 
 /**
  * Primitive UI actions cannot prove the semantic effect of the control they
- * touch. The server therefore assigns the conservative floor; provider input
- * never supplies or lowers its own risk classification.
+ * touch. The server therefore assigns the conservative floor. Provider input
+ * may disclose a higher semantic risk, but it can never lower that floor.
  */
-export function classifyComputerUseBatch(batch: ComputerUseActionBatch): ComputerUseActionRisk {
+export function classifyComputerUseBatch(
+  batch: ComputerUseActionBatch,
+  declaredRisk?: ComputerUseActionRisk,
+): ComputerUseActionRisk {
+  let serverFloor: ComputerUseActionRisk = "reversible-local";
   for (const action of batch.actions) {
     switch (action._tag) {
       case "move":
@@ -36,10 +40,21 @@ export function classifyComputerUseBatch(batch: ComputerUseActionBatch): Compute
       case "keypress":
       case "direct-value":
       case "accessibility-action":
-        return "external-side-effect";
+        serverFloor = "external-side-effect";
+        break;
     }
   }
-  return "reversible-local";
+
+  if (declaredRisk === undefined) return serverFloor;
+  const riskRank: Record<ComputerUseActionRisk, number> = {
+    inspect: 0,
+    "reversible-local": 1,
+    "external-side-effect": 2,
+    "sensitive-data": 3,
+    "destructive-or-privileged": 4,
+    forbidden: 5,
+  };
+  return riskRank[declaredRisk] > riskRank[serverFloor] ? declaredRisk : serverFloor;
 }
 
 type ComputerUseMcpScope = ComputerUseInvocationScope & {
@@ -183,7 +198,7 @@ const handlers = {
           target,
           observationId: input.observationId,
           batch,
-          risk: classifyComputerUseBatch(batch),
+          risk: classifyComputerUseBatch(batch, input.risk),
           runtimeMode: scope.runtimeMode,
         }),
       );

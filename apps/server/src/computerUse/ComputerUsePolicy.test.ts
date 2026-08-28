@@ -36,6 +36,13 @@ const terminalTarget: ComputerUseTarget = {
   applicationId: "com.apple.Terminal",
   stableIdentity: "macos:com.apple.Terminal:APPLE",
 };
+const thirdPartyTerminalTarget: ComputerUseTarget = {
+  targetId: ComputerUseTargetId.make("target-third-party-terminal"),
+  kind: "application",
+  displayName: "Ghostty",
+  applicationId: "com.mitchellh.ghostty",
+  stableIdentity: "macos:com.mitchellh.ghostty:TEAM",
+};
 const developmentT3Target: ComputerUseTarget = {
   targetId: ComputerUseTargetId.make("target-t3-development"),
   kind: "application",
@@ -122,6 +129,22 @@ it.effect("denies terminal targets even when the caller understates the action r
     });
 
     expect(decision).toEqual({ _tag: "deny", reason: "forbidden-target" });
+  }),
+);
+
+it.effect("denies third-party terminal targets", () =>
+  Effect.gen(function* () {
+    const policy = yield* ComputerUsePolicy.make;
+
+    expect(
+      yield* policy.evaluate({
+        scope,
+        target: thirdPartyTerminalTarget,
+        access: "operate",
+        risk: "reversible-local",
+        runtimeMode: "full-access",
+      }),
+    ).toEqual({ _tag: "deny", reason: "forbidden-target" });
   }),
 );
 

@@ -121,6 +121,47 @@ describe("readWorkflowScript containment", () => {
     }),
   );
 
+  effectIt.effect("returns only appended Oh My Pi transcript content for a matching cursor", () =>
+    Effect.gen(function* () {
+      const original = NodeFS.readFileSync(ompTranscriptPath, "utf8");
+      const initial = yield* readWorkflowScript({
+        scriptPath: ompTranscriptPath,
+        allowedArtifactPaths: [ompTranscriptPath],
+      });
+      const appended = `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "APPENDED" }] } })}\n`;
+      NodeFS.appendFileSync(ompTranscriptPath, appended);
+
+      const update = yield* readWorkflowScript({
+        scriptPath: ompTranscriptPath,
+        allowedArtifactPaths: [ompTranscriptPath],
+        cursor: initial.cursor,
+      });
+      assert.equal(update.contents, appended);
+      assert.equal(update.reset, false);
+
+      NodeFS.writeFileSync(
+        ompTranscriptPath,
+        `${original}${appended}`.replace("OMP_TRANSCRIPT_OK", "OMP_TRANSCRIPT_NO"),
+      );
+      const replacement = yield* readWorkflowScript({
+        scriptPath: ompTranscriptPath,
+        allowedArtifactPaths: [ompTranscriptPath],
+        cursor: update.cursor,
+      });
+      assert.equal(replacement.reset, true);
+      assert.include(replacement.contents, "OMP_TRANSCRIPT_NO");
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.writeFileSync(
+            ompTranscriptPath,
+            `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "OMP_TRANSCRIPT_OK" }] } })}\n`,
+          );
+        }),
+      ),
+    ),
+  );
+
   effectIt.effect("serves a generated OMP workflow command from the thread workspace", () =>
     Effect.gen(function* () {
       const result = yield* readWorkflowScript({

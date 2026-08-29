@@ -1,8 +1,30 @@
-import { ORCHESTRATION_WS_METHODS } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_WS_METHODS,
+  type OrchestrationGetWorkflowScriptInput,
+  type OrchestrationGetWorkflowScriptResult,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import { Atom } from "effect/unstable/reactivity";
 
-import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import { request } from "../rpc/client.ts";
+import {
+  createEnvironmentQueryAtomFamily,
+  createEnvironmentRpcQueryAtomFamily,
+} from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+
+export function mergeAgentTranscriptResult(
+  previous: OrchestrationGetWorkflowScriptResult | undefined,
+  update: OrchestrationGetWorkflowScriptResult,
+): OrchestrationGetWorkflowScriptResult {
+  if (previous?.cursor === undefined || update.cursor === undefined || update.reset !== false) {
+    return update;
+  }
+  return {
+    ...update,
+    contents: previous.contents + update.contents,
+  };
+}
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -19,9 +41,16 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       staleTimeMs: 300_000,
       idleTtlMs: 300_000,
     }),
-    agentTranscript: createEnvironmentRpcQueryAtomFamily(runtime, {
+    agentTranscript: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:agent-transcript",
-      tag: ORCHESTRATION_WS_METHODS.getWorkflowScript,
+      execute: (
+        input: OrchestrationGetWorkflowScriptInput,
+        previous: OrchestrationGetWorkflowScriptResult | undefined,
+      ) =>
+        request(ORCHESTRATION_WS_METHODS.getWorkflowScript, {
+          ...input,
+          ...(previous?.cursor === undefined ? {} : { cursor: previous.cursor }),
+        }).pipe(Effect.map((update) => mergeAgentTranscriptResult(previous, update))),
       staleTimeMs: 1_000,
       idleTtlMs: 30_000,
       refreshIntervalMs: 2_000,

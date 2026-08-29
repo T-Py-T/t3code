@@ -29,6 +29,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -232,7 +233,7 @@ interface AtomicSessionContext {
   ompTodoRootState: "idle" | "running" | "completed";
   ompWorkflowScriptPath: string | undefined;
   ompPublishedWorkflowScriptPath: string | undefined;
-  mappedEventSequence: number;
+  readonly mappedEventSequence: SubscriptionRef.SubscriptionRef<number>;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   stopped: boolean;
 }
@@ -543,18 +544,12 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
   const publish = (event: ProviderRuntimeEvent) =>
     PubSub.publish(runtimeEvents, event).pipe(Effect.asVoid);
 
-  const awaitMappedEvents = (context: AtomicSessionContext, target: number) => {
-    const wait = (): Effect.Effect<void> =>
-      context.mappedEventSequence >= target
-        ? Effect.void
-        : Effect.sleep(Duration.millis(1)).pipe(Effect.flatMap(wait));
-    return wait().pipe(
-      Effect.timeout(Duration.seconds(5)),
-      Effect.catch(() =>
-        Effect.logWarning(`Timed out draining ${definition.displayName} events through ${target}.`),
-      ),
+  const awaitMappedEvents = (context: AtomicSessionContext, target: number) =>
+    SubscriptionRef.changes(context.mappedEventSequence).pipe(
+      Stream.filter((sequence) => sequence >= target),
+      Stream.runHead,
+      Effect.asVoid,
     );
-  };
 
   const getLock = (
     lockStore: SynchronizedRef.SynchronizedRef<Map<string, Semaphore.Semaphore>>,
@@ -2754,6 +2749,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             createdAt: now,
             updatedAt: now,
           };
+          const mappedEventSequence = yield* SubscriptionRef.make(
+            stateResponse.precedingEventSequence,
+          );
           const context: AtomicSessionContext = {
             threadId: input.threadId,
             cwd,
@@ -2789,7 +2787,7 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
             // The event consumer is attached after the initialization RPCs.
             // Treat everything observed before get_state's response as the
             // baseline; those startup frames cannot belong to a T3 turn.
-            mappedEventSequence: stateResponse.precedingEventSequence,
+            mappedEventSequence,
             turns: [],
             stopped: false,
           };
@@ -2803,9 +2801,9 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
                   }),
                 ),
                 Effect.tap(() =>
-                  Effect.sync(() => {
-                    if (sequence !== undefined) context.mappedEventSequence = sequence;
-                  }),
+                  sequence === undefined
+                    ? Effect.void
+                    : SubscriptionRef.set(context.mappedEventSequence, sequence),
                 ),
               );
             }),

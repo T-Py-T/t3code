@@ -16,13 +16,16 @@
  */
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { OrchestrationGetWorkflowScriptError } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_AGENT_ARTIFACT_MAX_BYTES,
+  OrchestrationGetWorkflowScriptError,
+  type OrchestrationAgentArtifactCursor,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-
-const SCRIPT_BYTE_CAP = 256 * 1024;
 
 function claudeScriptsRoot(): string {
   return NodePath.join(NodeOS.homedir(), ".claude", "projects");
@@ -56,10 +59,36 @@ export function referencedAgentArtifactPaths(
   return Array.from(paths);
 }
 
+function artifactCursorVersion(buffer: Buffer): string {
+  return NodeCrypto.createHash("sha256").update(buffer).digest("base64url");
+}
+
+function utf8SafeByteLength(buffer: Buffer): number {
+  if (buffer.length === 0) return 0;
+  let sequenceStart = buffer.length - 1;
+  while (sequenceStart >= 0 && (buffer[sequenceStart]! & 0xc0) === 0x80) {
+    sequenceStart -= 1;
+  }
+  if (sequenceStart < 0) return 0;
+  const first = buffer[sequenceStart]!;
+  const expectedLength =
+    first < 0x80
+      ? 1
+      : (first & 0xe0) === 0xc0
+        ? 2
+        : (first & 0xf0) === 0xe0
+          ? 3
+          : (first & 0xf8) === 0xf0
+            ? 4
+            : 1;
+  return buffer.length - sequenceStart < expectedLength ? sequenceStart : buffer.length;
+}
+
 export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(function* (input: {
   readonly scriptPath: string;
   readonly workspaceRoot?: string;
   readonly allowedArtifactPaths: ReadonlyArray<string>;
+  readonly cursor?: OrchestrationAgentArtifactCursor;
 }) {
   const requested = input.scriptPath;
   const requestedExtension = NodePath.extname(requested);
@@ -233,12 +262,34 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
         if (pathStat.isSymbolicLink() || stat.ino !== pathStat.ino || stat.dev !== pathStat.dev) {
           return { failure: "changed-during-read" as const };
         }
-        const truncated = stat.size > SCRIPT_BYTE_CAP;
-        const buffer = Buffer.alloc(Math.min(stat.size, SCRIPT_BYTE_CAP));
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        const truncated = stat.size > ORCHESTRATION_AGENT_ARTIFACT_MAX_BYTES;
+        const buffer = Buffer.alloc(Math.min(stat.size, ORCHESTRATION_AGENT_ARTIFACT_MAX_BYTES));
+        let bytesRead = 0;
+        while (bytesRead < buffer.length) {
+          const read = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+          if (read.bytesRead === 0) break;
+          bytesRead += read.bytesRead;
+        }
+        const boundedContents = buffer.subarray(
+          0,
+          utf8SafeByteLength(buffer.subarray(0, bytesRead)),
+        );
+        const canContinue =
+          input.cursor !== undefined &&
+          input.cursor.offset <= boundedContents.length &&
+          utf8SafeByteLength(boundedContents.subarray(0, input.cursor.offset)) ===
+            input.cursor.offset &&
+          artifactCursorVersion(boundedContents.subarray(0, input.cursor.offset)) ===
+            input.cursor.version;
+        const offset = canContinue ? input.cursor!.offset : 0;
         return {
-          contents: buffer.subarray(0, bytesRead).toString("utf8"),
+          contents: boundedContents.subarray(offset).toString("utf8"),
           truncated,
+          cursor: {
+            offset: boundedContents.length,
+            version: artifactCursorVersion(boundedContents),
+          },
+          reset: !canContinue,
         };
       } finally {
         await handle?.close();
@@ -263,5 +314,7 @@ export const readWorkflowScript = Effect.fn("orchestration.readWorkflowScript")(
     scriptPath: resolved,
     contents: read.contents,
     truncated: read.truncated,
+    cursor: read.cursor,
+    reset: read.reset,
   };
 });

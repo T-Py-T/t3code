@@ -44,12 +44,11 @@ interface EnvironmentCommandAtomOptions<Input, A, E, R> extends Omit<
   ) => Effect.Effect<A, E, R>;
 }
 
-interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOptions<
-  Input,
-  A,
-  E,
-  R
+interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
+  EnvironmentAtomOptions<Input, A, E, R>,
+  "execute"
 > {
+  readonly execute: (input: Input, previousResult: A | undefined) => Effect.Effect<A, E, R>;
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
@@ -505,6 +504,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
     const idleTtlMs = options.idleTtlMs ?? 5 * 60_000;
+    let previousResult: A | undefined;
     const queryAtom = runtime
       .atom<
         A,
@@ -520,7 +520,16 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         switch (connectionState.phase) {
           case "connected":
             return Option.isSome(session)
-              ? runInEnvironment(target.environmentId, options.execute(target.input))
+              ? runInEnvironment(
+                  target.environmentId,
+                  options.execute(target.input, previousResult).pipe(
+                    Effect.tap((result) =>
+                      Effect.sync(() => {
+                        previousResult = result;
+                      }),
+                    ),
+                  ),
+                )
               : Effect.never;
           case "connecting":
           case "backoff":

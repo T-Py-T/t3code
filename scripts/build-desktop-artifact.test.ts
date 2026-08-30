@@ -63,6 +63,7 @@ import {
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   validateWindowsPackagedPayload,
+  verifyPackagedBundleIsSelfContained,
   WindowsPrimaryNativeProbeError,
   WindowsPackagedPayloadValidationError,
   WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
@@ -879,7 +880,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it.effect("skips the primary native probe for cross-architecture Windows payloads", () => {
+  it.effect("defers executable probes for cross-architecture Windows payloads", () => {
     const commands: Array<{
       readonly command: string;
       readonly options: {
@@ -906,7 +907,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.isFalse(
           commands.some((command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1"),
         );
-        assert.isTrue(
+        assert.isFalse(
           commands.some(
             (command) =>
               command.command === process.execPath && command.options.env?.NODE_PATH === "",
@@ -1056,24 +1057,17 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("rejects a sidecar whose extracted server bundle cannot resolve", () =>
+  it.effect("rejects an extracted server bundle whose imports cannot resolve", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeWindowsPayloadFixture({
           copyUnpackedNatives: true,
           serverEntrySource: 'import "t3code-deliberately-missing-package";\n',
         });
-        const error = yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "x64",
-        }).pipe(
-          Effect.provideService(HostProcessPlatform, "win32"),
-          // Keep the unrelated primary native-load probe cross-architecture so
-          // this test reaches the server bundle self-check on every host.
-          Effect.provideService(HostProcessArchitecture, "arm64"),
-          Effect.flip,
-        );
+        const error = yield* verifyPackagedBundleIsSelfContained({
+          asarPath: fixture.generatedAsarPath,
+          verbose: false,
+        }).pipe(Effect.flip);
 
         assert.instanceOf(error, BundleNotSelfContainedError);
         assert.include(error.output, "t3code-deliberately-missing-package");
@@ -1464,10 +1458,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
   });
-  it("runs the executable sidecar self-check only on the target operating system", () => {
-    assert.equal(shouldRunPackagedServerSelfCheck("win32", "win"), true);
-    assert.equal(shouldRunPackagedServerSelfCheck("darwin", "win"), false);
-    assert.equal(shouldRunPackagedServerSelfCheck("linux", "win"), false);
+  it("runs the executable sidecar self-check only on the target operating system and architecture", () => {
+    assert.equal(shouldRunPackagedServerSelfCheck("win32", "arm64", "win", "arm64"), true);
+    assert.equal(shouldRunPackagedServerSelfCheck("win32", "x64", "win", "arm64"), false);
+    assert.equal(shouldRunPackagedServerSelfCheck("darwin", "arm64", "win", "arm64"), false);
+    assert.equal(shouldRunPackagedServerSelfCheck("linux", "arm64", "win", "arm64"), false);
   });
   it("stages the macOS Computer Use helper as an external executable resource", () => {
     assert.deepStrictEqual(MAC_COMPUTER_USE_EXTRA_RESOURCES, [

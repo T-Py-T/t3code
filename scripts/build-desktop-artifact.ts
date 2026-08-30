@@ -1613,7 +1613,7 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
-const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
+export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1711,14 +1711,20 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
 
 /**
  * The extracted sidecar can only execute against native dependencies for the
- * host OS. Cross-builds still receive the structural/native payload checks and
- * must execute this check later on the target platform acceptance runner.
+ * host OS and architecture. Cross-builds still receive the structural/native
+ * payload checks and must execute this check later on a matching target
+ * acceptance runner.
  */
 export function shouldRunPackagedServerSelfCheck(
   hostPlatform: NodeJS.Platform,
+  hostArchitecture: NodeJS.Architecture,
   targetPlatform: typeof BuildPlatform.Type,
+  targetArchitecture: typeof BuildArch.Type,
 ): boolean {
-  return detectHostBuildPlatform(hostPlatform) === targetPlatform;
+  return (
+    detectHostBuildPlatform(hostPlatform) === targetPlatform &&
+    hostArchitecture === targetArchitecture
+  );
 }
 
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
@@ -2789,6 +2795,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const hostPlatform = yield* HostProcessPlatform;
+  const hostArchitecture = yield* HostProcessArchitecture;
   const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
@@ -2936,14 +2943,14 @@ export const validateWindowsPackagedPayload = Effect.fn(
     verbose: input.verbose ?? false,
   });
 
-  if (shouldRunPackagedServerSelfCheck(hostPlatform, "win")) {
+  if (shouldRunPackagedServerSelfCheck(hostPlatform, hostArchitecture, "win", input.targetArch)) {
     yield* verifyPackagedBundleIsSelfContained({
       asarPath,
       verbose: input.verbose ?? false,
     });
   } else {
     yield* Effect.logWarning(
-      `[desktop-artifact] Deferred the executable server sidecar self-check to the Windows acceptance run because the package was built on ${hostPlatform}.`,
+      `[desktop-artifact] Deferred the executable server sidecar self-check to the Windows ${input.targetArch} acceptance run because the package was built on ${hostPlatform}/${hostArchitecture}.`,
     );
   }
 

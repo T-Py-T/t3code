@@ -1680,12 +1680,21 @@ export const OrchestrationSearchThreadsResult = Schema.Struct({
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
+export const ORCHESTRATION_AGENT_ARTIFACT_MAX_BYTES = 256 * 1024;
+
+export const OrchestrationAgentArtifactCursor = Schema.Struct({
+  offset: NonNegativeInt.check(Schema.isLessThanOrEqualTo(ORCHESTRATION_AGENT_ARTIFACT_MAX_BYTES)),
+  version: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export type OrchestrationAgentArtifactCursor = typeof OrchestrationAgentArtifactCursor.Type;
+
 export const OrchestrationGetWorkflowScriptInput = Schema.Struct({
   threadId: ThreadId,
   /** Absolute path from workflow runHandles.scriptPath or a provider task's
    * outputFile. The server re-derives containment; the client value is a
    * hint, never trusted. */
   scriptPath: TrimmedNonEmptyString,
+  cursor: Schema.optionalKey(OrchestrationAgentArtifactCursor),
 });
 export type OrchestrationGetWorkflowScriptInput = typeof OrchestrationGetWorkflowScriptInput.Type;
 
@@ -1693,6 +1702,8 @@ export const OrchestrationGetWorkflowScriptResult = Schema.Struct({
   scriptPath: TrimmedNonEmptyString,
   contents: Schema.String,
   truncated: Schema.Boolean,
+  cursor: Schema.optionalKey(OrchestrationAgentArtifactCursor),
+  reset: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationGetWorkflowScriptResult = typeof OrchestrationGetWorkflowScriptResult.Type;
 

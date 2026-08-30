@@ -9,10 +9,10 @@ const UUID_REPAIR = `${MARKER}
     existing_uuids = pods_project.objects.map(&:uuid)
     uuid_prefix = pods_project.instance_variable_get(:@uuid_prefix)[0, 6]
     sequential_uuid = /\\A#{Regexp.escape(uuid_prefix)}([0-9A-F]{7})0\\z/
-    highest_index = existing_uuids.filter_map do |uuid|
+    highest_index = existing_uuids.map do |uuid|
       match = sequential_uuid.match(uuid)
       match && match[1].to_i(16)
-    end.max || -1
+    end.compact.max || -1
 
     # Pod::Project generates sequential UUIDs without collision checks because CocoaPods
     # normally creates the project in this process. EAS can restore Pods.xcodeproj from

@@ -1,4 +1,5 @@
-import { Path, Rect, Svg } from "react-native-svg";
+import { useId } from "react";
+import { Defs, LinearGradient, Path, Rect, Stop, Svg } from "react-native-svg";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
 type ProviderIconProps = {
@@ -11,6 +12,7 @@ export function ProviderIcon(props: ProviderIconProps) {
   const isDarkMode = themeAppearance === "dark";
   const size = props.size ?? 16;
   const mono = isDarkMode ? "#e5e5e5" : "#171717";
+  const ompGradientId = `${useId().replaceAll(":", "")}-omp-gradient`;
 
   if (props.provider === "atomic") {
     return (
@@ -41,14 +43,26 @@ export function ProviderIcon(props: ProviderIconProps) {
   if (props.provider === "omp") {
     return (
       <Svg width={size} height={size} viewBox="0 0 800 800" fill="none">
+        <Defs>
+          <LinearGradient
+            id={ompGradientId}
+            x1="140"
+            y1="640"
+            x2="660"
+            y2="160"
+            gradientUnits="userSpaceOnUse"
+          >
+            <Stop stopColor="#F84FCC" />
+            <Stop offset="0.5" stopColor="#9362F4" />
+            <Stop offset="1" stopColor="#00DBE4" />
+          </LinearGradient>
+        </Defs>
         <Rect width="800" height="800" rx="160" fill="#09090B" />
         <Path
-          fill="#FAFAFA"
-          fillRule="evenodd"
-          d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z"
+          fill={`url(#${ompGradientId})`}
+          d="M160 160H640C651 160 660 169 660 180V240C660 251 651 260 640 260H530V620C530 631 521 640 510 640H450C439 640 430 631 430 620V260H370V440H270V260H160C149 260 140 251 140 240V180C140 169 149 160 160 160Z"
         />
-        <Path fill="#22D3EE" d="M517.36 400H634.72V634.72H517.36Z" />
-        <Path fill="#22D3EE" d="M535 175h48v42h42v48h-42v42h-48v-42h-42v-48h42Z" />
+        <Path fill={`url(#${ompGradientId})`} fillOpacity={0.5} d="M270 440H370V520H270Z" />
       </Svg>
     );
   }

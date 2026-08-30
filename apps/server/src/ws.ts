@@ -1389,6 +1389,7 @@ const makeWsRpcLayer = (
                 scriptPath: input.scriptPath,
                 workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
                 allowedArtifactPaths: referencedAgentArtifactPaths(thread.value.activities),
+                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
               });
             }),
             { "rpc.aggregate": "orchestration" },

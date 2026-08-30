@@ -8,6 +8,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $marker = "T3 Code Windows Computer Use integration passed."
+$testFileName = "t3-computer-use-integration-$([guid]::NewGuid().ToString('N')).txt"
+$testFilePath = Join-Path $env:TEMP $testFileName
 $responses = [System.Collections.Generic.List[string]]::new()
 $progressPath = "$OutputPath.progress"
 "starting" | Set-Content -Encoding utf8 $progressPath
@@ -64,7 +66,8 @@ function Invoke-HostRequest {
 }
 
 try {
-    Start-Process "$env:WINDIR\System32\notepad.exe"
+    Set-Content -LiteralPath $testFilePath -Value "" -Encoding utf8 -NoNewline
+    Start-Process "$env:WINDIR\System32\notepad.exe" -ArgumentList $testFilePath
     Start-Sleep -Seconds 3
     Assert-Condition ($helper.Start()) "The Windows Computer Use helper did not start."
     $helperStarted = $true
@@ -75,9 +78,10 @@ try {
 
     $targets = Invoke-HostRequest -Operation "listTargets" -Payload @{}
     $target = $targets.result.targets | Where-Object {
-        $_.applicationId -like "Microsoft.WindowsNotepad_*"
+        $_.applicationId -like "Microsoft.WindowsNotepad_*" -and
+        $_.displayName -like "*$testFileName*"
     } | Select-Object -First 1
-    Assert-Condition ($null -ne $target) "Notepad was not discovered as a Computer Use target."
+    Assert-Condition ($null -ne $target) "The fresh Notepad test document was not discovered as a Computer Use target."
 
     $screenshotObservation = Invoke-HostRequest -Operation "observe" -TargetId $target.targetId -Payload @{
         includeScreenshot = $true
@@ -154,4 +158,5 @@ finally {
         if ($stderr) { Write-Error $stderr }
     }
     $helper.Dispose()
+    Remove-Item -LiteralPath $testFilePath -Force -ErrorAction SilentlyContinue
 }

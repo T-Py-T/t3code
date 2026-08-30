@@ -63,9 +63,10 @@ $output = "C:\Users\Public\t3-windows-interactive-acceptance.json"
 ```
 
 A passing result records the stable target identity, initial and post-action observation IDs,
-completed action count, accessibility element count, screenshot size, and the Notepad marker. Keep
-the JSON and release logs as bounded evidence; do not copy screenshot bytes or raw accessibility
-trees into product events.
+completed action count, accessibility element count, screenshot size, and the Notepad marker. The
+script opens a uniquely named temporary document and selects that exact target so an older dirty
+Notepad window cannot contaminate the result. Keep the JSON and release logs as bounded evidence;
+do not copy screenshot bytes or raw accessibility trees into product events.
 
 ## Provider and client checklist
 
@@ -139,6 +140,20 @@ completed all five actions, exposed 44 accessibility elements, captured a 38,345
 returned distinct pre/post observation IDs. This rerun validates the current native helper changes;
 the installed outer application remains the development package recorded above rather than a new
 production-signed release artifact.
+
+The 2026-08-30 fork release run installed T3 Code Alpha `0.0.35-devnext.5eb5a68` from fork
+`dev/next-release` commit `5eb5a6838` in Windows 11 Pro ARM64 build 26200. Cold Authenticode chain
+validation of the valid helper exceeded the former 10-second process limit, so the server rejected
+the helper before startup. The bounded signature probe was raised to 30 seconds; publisher matching
+and failure behavior were unchanged. The installed server archive used to verify the fix had
+SHA-256 `0C13C992B10E83F44B565D159C6D778AEC56BA2F7E37526E7CA39094132A81ED`. Package acceptance then
+passed with app version `0.0.35-devnext.5eb5a68`, the server-sidecar and native file-finder probes,
+and an attached same-session helper signed by the disposable publisher
+`CN=T3 Code Fork UTM Acceptance 5eb5a68`; its SHA-256 was
+`B64294BED517AB7F1D11B508F1E883FBE5DCF86C4F6656393A94850D8AC16BAD`. The hardened interactive
+test addressed a unique Notepad document, completed click, Ctrl+A, text entry, clipboard paste, and
+wait, exposed 46 accessibility elements, and captured a 28,207-byte PNG. These signatures and hashes
+are development evidence only and make no production-signing claim.
 
 ## Remaining release gates
 

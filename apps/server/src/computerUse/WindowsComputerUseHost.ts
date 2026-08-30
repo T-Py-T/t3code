@@ -30,6 +30,9 @@ const decodeWindowsAuthenticodeIdentity = Schema.decodeUnknownOption(
 );
 
 const WINDOWS_COMPUTER_USE_HELPER_PATH_ENV = "T3CODE_COMPUTER_USE_HELPER_PATH";
+// Cold certificate-chain validation on Windows ARM can exceed ten seconds.
+// Keep the production signature check bounded without rejecting a valid helper during app startup.
+const WINDOWS_AUTHENTICODE_PROBE_TIMEOUT = "30 seconds";
 
 export function windowsAuthenticodeProbeInput(path: string): ProcessRunner.ProcessRunInput {
   return {
@@ -46,7 +49,7 @@ export function windowsAuthenticodeProbeInput(path: string): ProcessRunner.Proce
       ].join("; "),
     ],
     env: { [WINDOWS_COMPUTER_USE_HELPER_PATH_ENV]: path },
-    timeout: "10 seconds",
+    timeout: WINDOWS_AUTHENTICODE_PROBE_TIMEOUT,
     maxOutputBytes: 64 * 1_024,
   };
 }

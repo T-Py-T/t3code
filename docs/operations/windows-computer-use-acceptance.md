@@ -155,6 +155,22 @@ test addressed a unique Notepad document, completed click, Ctrl+A, text entry, c
 wait, exposed 46 accessibility elements, and captured a 28,207-byte PNG. These signatures and hashes
 are development evidence only and make no production-signing claim.
 
+The 2026-08-30 packaged fork rerun installed T3 Code Alpha `0.0.36` from fork
+`dev/next-release` commit `fe35f4c82` in the same Windows 11 Pro ARM64 build 26200 guest. GitHub
+Actions run `33332683481` produced the Windows ARM64 installer with SHA-256
+`F6BA6753FEA29A9A3FB2505D0ED4AD3ACC77CC9253118FA39E57A47021F4E4DE`. The installed app and
+Computer Use helper were signed together with the disposable UTM publisher
+`CN=T3 Code Fork UTM Acceptance fe35f4c`; the development-signed helper had SHA-256
+`1CE8042D68A6F4D64B85D9630A8F1A6BA542A3ADCEBBAC71FAB94592B9AFE980`. Package acceptance passed
+the server-sidecar and native file-finder probes and verified that the valid helper was attached to
+the running app in interactive user session 1. A fresh Notepad run completed all five click,
+Ctrl+A, text-entry, clipboard-paste, and wait actions, exposed 46 accessibility elements, captured
+a 35,420-byte PNG, and returned distinct pre- and post-action observation IDs. The installed UI also
+showed the default **Sign in to T3 Connect** entry point, enabled environment/project/thread grouping
+controls, and distinct Atomic, Pi, and Oh My Pi provider entries. The installer remains unsigned and
+the local certificate is development evidence only; production publishing still requires the normal
+Windows signing gate.
+
 ## Remaining release gates
 
 UTM is required development evidence, not the complete Windows release gate. Before general

@@ -116,7 +116,7 @@ describe("windowsAuthenticodeProbeInput", () => {
         ].join("; "),
       ],
       env: { T3CODE_COMPUTER_USE_HELPER_PATH: helperPath },
-      timeout: "10 seconds",
+      timeout: "30 seconds",
       maxOutputBytes: 64 * 1_024,
     });
   });

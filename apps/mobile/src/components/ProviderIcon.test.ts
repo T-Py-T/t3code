@@ -47,9 +47,9 @@ describe("ProviderIcon", () => {
 
     expect(omp.type).toBe("svg");
     expect(omp.props).toMatchObject({ width: 24, height: 24, viewBox: "0 0 800 800" });
-    expect(ompNodes.filter((node) => node.type === "stop").map((node) => node.props.stopColor)).toEqual(
-      ["#F84FCC", "#9362F4", "#00DBE4"],
-    );
+    expect(
+      ompNodes.filter((node) => node.type === "stop").map((node) => node.props.stopColor),
+    ).toEqual(["#F84FCC", "#9362F4", "#00DBE4"]);
     expect(ompNodes.filter((node) => node.type === "path").map((node) => node.props.fill)).toEqual([
       "url(#provider-icon-test-omp-gradient)",
       "url(#provider-icon-test-omp-gradient)",
@@ -60,9 +60,8 @@ describe("ProviderIcon", () => {
       "#fff",
     ]);
     expect(atomic.props.viewBox).toBe("0 0 32 32");
-    expect(atomicNodes.filter((node) => node.type === "path").map((node) => node.props.fill)).toEqual([
-      "#45475A",
-      "#89B4FA",
-    ]);
+    expect(
+      atomicNodes.filter((node) => node.type === "path").map((node) => node.props.fill),
+    ).toEqual(["#45475A", "#89B4FA"]);
   });
 });

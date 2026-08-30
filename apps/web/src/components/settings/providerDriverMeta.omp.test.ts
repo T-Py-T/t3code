@@ -25,9 +25,7 @@ describe("Oh My Pi provider presentation", () => {
         createElement(OmpIcon, { "aria-label": "Oh My Pi secondary" }),
       ),
     );
-    const gradientIds = [...markup.matchAll(/id="([^"]+-omp-gradient)"/g)].map(
-      (match) => match[1],
-    );
+    const gradientIds = [...markup.matchAll(/id="([^"]+-omp-gradient)"/g)].map((match) => match[1]);
 
     expect(markup).toContain('stop-color="#F84FCC"');
     expect(markup).toContain('stop-color="#9362F4"');

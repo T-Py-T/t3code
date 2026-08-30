@@ -4,8 +4,13 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { afterAll, assert, describe } from "vite-plus/test";
 import { readWorkflowScript, referencedAgentArtifactPaths } from "./workflowScriptQuery.ts";
+
+const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const ompTranscriptMessage = (text: string) =>
+  `${encodeJson({ type: "message", message: { role: "assistant", content: [{ type: "text", text }] } })}\n`;
 
 const root = NodePath.join(NodeOS.homedir(), ".claude", "projects", "__wf_script_test__");
 NodeFS.mkdirSync(root, { recursive: true });
@@ -33,10 +38,7 @@ const ompTranscriptRoot = NodeFS.mkdtempSync(
 );
 const ompTranscriptPath = NodePath.join(ompTranscriptRoot, "child.jsonl");
 const unrelatedOmpTranscriptPath = NodePath.join(ompTranscriptRoot, "unrelated.jsonl");
-NodeFS.writeFileSync(
-  ompTranscriptPath,
-  `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "OMP_TRANSCRIPT_OK" }] } })}\n`,
-);
+NodeFS.writeFileSync(ompTranscriptPath, ompTranscriptMessage("OMP_TRANSCRIPT_OK"));
 NodeFS.writeFileSync(unrelatedOmpTranscriptPath, '{"secret":"OTHER_THREAD"}\n');
 const escapedAtomicWorkspace = NodeFS.mkdtempSync(
   NodePath.join(NodeOS.tmpdir(), "atomic-workflow-escaped-view-"),
@@ -128,7 +130,7 @@ describe("readWorkflowScript containment", () => {
         scriptPath: ompTranscriptPath,
         allowedArtifactPaths: [ompTranscriptPath],
       });
-      const appended = `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "APPENDED" }] } })}\n`;
+      const appended = ompTranscriptMessage("APPENDED");
       NodeFS.appendFileSync(ompTranscriptPath, appended);
 
       const update = yield* readWorkflowScript({
@@ -153,10 +155,7 @@ describe("readWorkflowScript containment", () => {
     }).pipe(
       Effect.ensuring(
         Effect.sync(() => {
-          NodeFS.writeFileSync(
-            ompTranscriptPath,
-            `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "OMP_TRANSCRIPT_OK" }] } })}\n`,
-          );
+          NodeFS.writeFileSync(ompTranscriptPath, ompTranscriptMessage("OMP_TRANSCRIPT_OK"));
         }),
       ),
     ),

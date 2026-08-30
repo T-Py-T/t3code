@@ -549,6 +549,10 @@ export const makePiCompatibleAdapter = Effect.fn("makePiCompatibleAdapter")(func
       Stream.filter((sequence) => sequence >= target),
       Stream.runHead,
       Effect.asVoid,
+      Effect.timeout(Duration.seconds(5)),
+      Effect.catch(() =>
+        Effect.logWarning(`Timed out draining ${definition.displayName} events through ${target}.`),
+      ),
     );
 
   const getLock = (

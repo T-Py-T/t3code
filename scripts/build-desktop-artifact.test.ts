@@ -1067,7 +1067,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
-        }).pipe(Effect.provideService(HostProcessPlatform, "win32"), Effect.flip);
+        }).pipe(
+          Effect.provideService(HostProcessPlatform, "win32"),
+          // Keep the unrelated primary native-load probe cross-architecture so
+          // this test reaches the server bundle self-check on every host.
+          Effect.provideService(HostProcessArchitecture, "arm64"),
+          Effect.flip,
+        );
 
         assert.instanceOf(error, BundleNotSelfContainedError);
         assert.include(error.output, "t3code-deliberately-missing-package");

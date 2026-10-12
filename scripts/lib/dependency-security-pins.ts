@@ -9,6 +9,8 @@ export interface DependencySecurityPin {
   readonly advisory: string;
   /** When set, only lockfile versions whose major segment matches are checked. */
   readonly major?: number;
+  /** When set, only lockfile versions starting with this prefix are checked (e.g. `0.8.`). */
+  readonly versionPrefix?: string;
 }
 
 /**
@@ -50,13 +52,13 @@ export const DEPENDENCY_SECURITY_PINS: readonly DependencySecurityPin[] = [
   },
   {
     package: "undici",
-    minimum: "7.29.1",
+    minimum: "7.30.0",
     major: 7,
     advisory: "GHSA-8436-99hf-9mmv",
   },
   {
     package: "undici",
-    minimum: "8.10.2",
+    minimum: "8.11.2",
     major: 8,
     advisory: "GHSA-8436-99hf-9mmv",
   },
@@ -64,6 +66,51 @@ export const DEPENDENCY_SECURITY_PINS: readonly DependencySecurityPin[] = [
     package: "@vitest/browser",
     minimum: "4.1.10",
     advisory: "GHSA-p63j-vcc4-9vmv",
+  },
+  {
+    package: "electron",
+    minimum: "41.10.7",
+    advisory: "GHSA-r4w5-6pfg-jxp5",
+  },
+  {
+    package: "hono",
+    minimum: "4.13.7",
+    advisory: "GHSA-9r54-4xrw-9vwh",
+  },
+  {
+    package: "fast-uri",
+    minimum: "3.1.8",
+    advisory: "GHSA-7qff-7r8w-3jxr",
+  },
+  {
+    package: "@xmldom/xmldom",
+    minimum: "0.8.15",
+    versionPrefix: "0.8.",
+    advisory: "GHSA-6fg7-h29m-hq8p",
+  },
+  {
+    package: "@xmldom/xmldom",
+    minimum: "0.9.12",
+    versionPrefix: "0.9.",
+    advisory: "GHSA-6fg7-h29m-hq8p",
+  },
+  {
+    package: "brace-expansion",
+    minimum: "1.1.21",
+    major: 1,
+    advisory: "GHSA-2m24-5m98-8p9f",
+  },
+  {
+    package: "brace-expansion",
+    minimum: "2.1.7",
+    major: 2,
+    advisory: "GHSA-2m24-5m98-8p9f",
+  },
+  {
+    package: "brace-expansion",
+    minimum: "5.0.12",
+    major: 5,
+    advisory: "GHSA-2m24-5m98-8p9f",
   },
 ];
 
@@ -127,6 +174,10 @@ export function findDependencySecurityPinViolations(
       if (pin.major !== undefined) {
         const major = Number.parseInt(resolved.split(".")[0] ?? "", 10);
         if (major !== pin.major) continue;
+      }
+
+      if (pin.versionPrefix !== undefined && !resolved.startsWith(pin.versionPrefix)) {
+        continue;
       }
 
       if (compareSemver(resolved, pin.minimum) < 0) {

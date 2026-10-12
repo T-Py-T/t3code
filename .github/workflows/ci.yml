@@ -329,8 +329,8 @@ jobs:
       - name: Lint mobile native sources
         run: vp run lint:mobile
 
-  dependency_security_pins:
-    name: Dependency security pins
+  scripts_unit:
+    name: Scripts unit tests
     runs-on: ${{ github.repository_owner == 'pingdotgg' && 'blacksmith-2vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
@@ -351,8 +351,8 @@ jobs:
             args:
               - --filter=@t3tools/scripts...
 
-      - name: Verify CVE mitigation pins
-        run: vp run --filter @t3tools/scripts test dependency-security-pins
+      - name: Run scripts unit tests
+        run: vp run --filter @t3tools/scripts test
 
   release_smoke:
     name: Release Smoke

@@ -93,8 +93,8 @@ export function readLockedPackageVersions(
 ): readonly string[] {
   const versions = new Set<string>();
   const escaped = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const quoted = new RegExp(`^  '${escaped.replace("/", "\\/")}@([^:(]+)`, "gm");
-  const bare = new RegExp(`^  ${escaped}@([^:(]+)`, "gm");
+  const quoted = new RegExp(`^  '${escaped.replace("/", "\\/")}@([^:'(]+)`, "gm");
+  const bare = new RegExp(`^  ${escaped}@([^:'(]+)`, "gm");
 
   for (const pattern of [quoted, bare]) {
     for (const match of lockfileContents.matchAll(pattern)) {
